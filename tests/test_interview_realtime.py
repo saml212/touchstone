@@ -271,3 +271,24 @@ def test_realtime_available_needs_mode_and_key(monkeypatch):
     assert realtime.realtime_available(Settings(speech_mode="local")) is False
     monkeypatch.setattr(realtime, "secret", lambda *a: None)
     assert realtime.realtime_available(Settings(speech_mode="realtime")) is False
+
+
+async def test_second_ptt_holder_is_told_to_wait_first_holder_keeps_floor(tmp_path):
+    # Two stakeholders share one session. If a second presses push-to-talk while the
+    # first is holding, the first keeps the floor and the second gets a room message —
+    # otherwise their mic audio mixes into one buffer under a single attribution.
+    settings, room_id = _project(tmp_path)
+    async with FakeRealtime([]) as fake:
+        bridge = RealtimeBridge(settings, room_id, Hub(), url=fake.url, server_vad=False)
+        await bridge.start()
+        await bridge.ptt("down", "sam")   # sam takes the floor
+        await bridge.ptt("down", "alex")  # collision while sam holds
+        # alex releasing must NOT commit the buffer — alex never held the floor
+        await bridge.ptt("up", "alex")
+        await asyncio.sleep(0.1)
+        await bridge.close()
+    conn = store.connect(settings.db_path)
+    texts = [m.text for m in store.list_room_messages(conn, room_id)]
+    conn.close()
+    assert any("sam" in t and "alex" in t for t in texts)
+    assert "input_audio_buffer.commit" not in _kinds(fake)

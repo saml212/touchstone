@@ -90,6 +90,7 @@ class RealtimeBridge:
         self._task: asyncio.Task | None = None
         self._ready = asyncio.Event()  # set once the session is configured (or the bridge is done)
         self._ptt_speaker = "guest"
+        self._ptt_holder: str | None = None  # who currently holds the shared mic (first-wins)
         self.closed = False
         self.failed = False
 
@@ -138,8 +139,21 @@ class RealtimeBridge:
         await self._send({"type": "input_audio_buffer.append", "audio": b64})
 
     async def ptt(self, state: str, speaker: str) -> None:
-        self._ptt_speaker = speaker or self._ptt_speaker
-        if state == "up" and not self.server_vad:
+        """One shared session, so push-to-talk is a floor: the first holder wins and a second
+        holder is told to wait. A release only counts from whoever holds the floor."""
+        speaker = speaker or "guest"
+        if state == "down":
+            if self._ptt_holder is not None and self._ptt_holder != speaker:
+                self._post("Interviewer", "assistant",
+                           f"{self._ptt_holder} has the mic — {speaker}, hold on, you're next.")
+                return
+            self._ptt_holder = speaker
+            self._ptt_speaker = speaker
+            return
+        if speaker != self._ptt_holder:  # a release from someone who never held the floor
+            return
+        self._ptt_holder = None
+        if not self.server_vad:
             await self._send({"type": "input_audio_buffer.commit"})
             await self._send({"type": "response.create"})
 
