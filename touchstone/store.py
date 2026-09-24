@@ -77,7 +77,9 @@ CREATE TABLE IF NOT EXISTS room_checks (
 def connect(path: str | Path) -> sqlite3.Connection:
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
+    # check_same_thread=False: a web request's connection is created, used, and closed across
+    # different threadpool threads (in sequence, never concurrently), and each caller holds its own.
+    conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     _ensure_wal(conn)
     conn.execute("PRAGMA synchronous=NORMAL")
