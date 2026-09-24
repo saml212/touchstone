@@ -130,10 +130,7 @@ class RealtimeBridge:
     def _headers(self) -> dict:
         service = self.settings.keychain_service(self.settings.keychain_openai)
         key = secret("OPENAI_API_KEY", service)
-        headers = {"OpenAI-Beta": "realtime=v1"}
-        if key:
-            headers["Authorization"] = f"Bearer {key}"
-        return headers
+        return {"Authorization": f"Bearer {key}"} if key else {}
 
     # -- inbound from browsers ----------------------------------------------
 
@@ -169,9 +166,9 @@ class RealtimeBridge:
 
     async def _handle(self, event: dict) -> None:
         kind = event.get("type")
-        if kind == "response.audio.delta":
+        if kind == "response.output_audio.delta":
             self.hub.publish(self.room_id, Event("audio", {"b64": event.get("delta", "")}))
-        elif kind == "response.audio_transcript.done":
+        elif kind == "response.output_audio_transcript.done":
             self._post("Interviewer", "assistant", event.get("transcript", ""))
         elif kind == "conversation.item.input_audio_transcription.completed":
             self._post(self._ptt_speaker, "user", event.get("transcript", ""))
@@ -246,15 +243,15 @@ class RealtimeBridge:
         return _REALTIME_GUIDANCE + summary
 
     def _session_update(self) -> dict:
-        vad = {"type": "server_vad", "interrupt_response": True} if self.server_vad else None
+        pcm = {"type": "audio/pcm", "rate": 24000}
+        audio_in = {"format": pcm, "transcription": {"model": "gpt-4o-mini-transcribe"},
+                    "turn_detection": {"type": "server_vad"} if self.server_vad else None}
         return {"type": "session.update", "session": {
+            "type": "realtime",
             "instructions": self._instructions(),
-            "voice": self.settings.realtime_voice,
-            "modalities": ["audio", "text"],
-            "input_audio_format": "pcm16",
-            "output_audio_format": "pcm16",
-            "input_audio_transcription": {"model": "gpt-4o-mini-transcribe"},
-            "turn_detection": vad,
+            "output_modalities": ["audio"],
+            "audio": {"input": audio_in,
+                      "output": {"format": pcm, "voice": self.settings.realtime_voice}},
             "tools": TOOLS,
             "tool_choice": "auto"}}
 

@@ -118,7 +118,9 @@ async def test_session_update_carries_tools_and_pcm16(tmp_path):
     async with FakeRealtime([]) as fake:
         await _run_bridge(settings, room_id, Hub(), fake)
     session = fake.received[0]["session"]
-    assert session["input_audio_format"] == "pcm16"
+    assert session["type"] == "realtime"
+    assert session["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24000}
+    assert session["audio"]["output"]["format"] == {"type": "audio/pcm", "rate": 24000}
     assert {t["name"] for t in session["tools"]} == {
         "draft_check", "commit_check", "show_task", "next_task"}
     assert "t1" in session["instructions"]  # the task summary is in the prompt
@@ -129,7 +131,8 @@ async def test_transcripts_become_room_messages(tmp_path):
     script = [
         {"type": "conversation.item.input_audio_transcription.completed",
          "transcript": "it must mention the order id"},
-        {"type": "response.audio_transcript.done", "transcript": "So, the reply must mention it?"},
+        {"type": "response.output_audio_transcript.done",
+         "transcript": "So, the reply must mention it?"},
     ]
     async with FakeRealtime(script) as fake:
         bridge = RealtimeBridge(settings, room_id, Hub(), url=fake.url)
@@ -147,7 +150,7 @@ async def test_audio_deltas_broadcast_to_two_clients(tmp_path):
     settings, room_id = _project(tmp_path)
     hub = Hub()
     a, b = hub.subscribe(room_id), hub.subscribe(room_id)
-    async with FakeRealtime([{"type": "response.audio.delta", "delta": "AAAA"}]) as fake:
+    async with FakeRealtime([{"type": "response.output_audio.delta", "delta": "AAAA"}]) as fake:
         await _run_bridge(settings, room_id, hub, fake)
     ea, eb = a.get_nowait(), b.get_nowait()
     assert ea.type == "audio" and ea.data["b64"] == "AAAA"

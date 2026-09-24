@@ -340,11 +340,25 @@ Two buttons (`touchstone/loop/`, CLI `sample`/`distill`, `POST /api/sample|disti
 ## Voice: realtime mode
 
 `[speech] mode = "local" | "realtime"`. `realtime` opens one OpenAI Realtime session per room,
-server-side, with tools `draft_check`, `commit_check`, `show_task`, `next_task` that call the same
-functions as the text interviewer. Browsers stream push-to-talk audio over the room WebSocket and
-receive the agent's audio and panel updates; several stakeholders share one session. `local` is the
-zero-key fallback and never goes away. The agent always reads a check back in plain words before
-committing.
+server-side (`interview/realtime.py`, `RealtimeBridge`), with tools `draft_check`, `commit_check`,
+`show_task`, `next_task` that are the same `Interviewer` methods the text interviewer calls — one
+policy, two front doors. `draft_check` returns the read-back sentence the model must say before
+`commit_check`; committed checks and transcripts land in the store, so text stays the source of
+truth. Browsers stream push-to-talk 24 kHz PCM16 over the room WebSocket (`{type:audio|ptt,…}`) and
+receive the agent's audio (`{type:audio,b64}`) plus the usual draft/committed panel deltas; several
+stakeholders share one session, so cost is per room. `realtime_model` defaults to
+`gpt-realtime-2.1-mini`, `realtime_voice` to `marin`. On any OpenAI error the bridge posts one room
+message and falls back to `local` for that session (never a 500); a dropped socket reconnects once.
+The bridge is created lazily on first audio and idle-closes 60s after the last client leaves.
+
+The GA Realtime wire shape (not the retired beta): connect to
+`wss://api.openai.com/v1/realtime?model=…` with a bearer token (no `OpenAI-Beta` header),
+`session.update` carries `type:"realtime"`, `output_modalities`, and a nested `audio.{input,output}`
+block (`format {type:"audio/pcm", rate:24000}`, `transcription`, `server_vad` turn detection).
+Agent audio arrives as `response.output_audio.delta`, its words as
+`response.output_audio_transcript.done`, the participant's words as
+`conversation.item.input_audio_transcription.completed`, and tool calls as
+`response.function_call_arguments.done`. `local` is the zero-key fallback and never goes away.
 
 ## Distribution
 
