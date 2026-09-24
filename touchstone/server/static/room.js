@@ -52,13 +52,16 @@ function renderChecks(draft, committed) {
 
 let draftState = [];
 let committedState = [];
+let messagesState = [];
+let pollTimer = null;
 
 function applyState(s) {
   $("topic").textContent = s.room.topic;
   $("closed").classList.toggle("hidden", !s.room.closed_at);
   draftState = s.draft;
   committedState = s.committed;
-  renderMessages(s.messages);
+  messagesState = s.messages;
+  renderMessages(messagesState);
   renderChecks(draftState, committedState);
 }
 
@@ -67,18 +70,27 @@ async function refresh() {
   if (r.ok) applyState(await r.json());
 }
 
+// The WebSocket is the live channel; only fall back to HTTP polling while it is down.
+function startPolling() {
+  if (!pollTimer) pollTimer = setInterval(refresh, 1000);
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws/rooms/${ROOM_ID}`);
+  ws.onopen = stopPolling;
   ws.onmessage = (ev) => {
     const { type, data } = JSON.parse(ev.data);
     if (type === "state") applyState(data);
     else if (type === "draft") { draftState = data.checks; renderChecks(draftState, committedState); }
-    else if (type === "committed") refresh();
+    else if (type === "committed") { committedState = committedState.concat(data.checks); renderChecks(draftState, committedState); }
     else if (type === "closed") { $("closed").classList.remove("hidden"); }
-    else if (type === "message") refresh();
+    else if (type === "message") { messagesState = messagesState.concat(data); renderMessages(messagesState); }
   };
-  ws.onclose = () => setTimeout(connect, 1500);
+  ws.onclose = () => { startPolling(); setTimeout(connect, 1500); };
 }
 
 async function send(text) {
