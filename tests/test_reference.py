@@ -1,8 +1,10 @@
 """The `reference` provider: replays each task's recorded reply as the incumbent baseline."""
 
+import pytest
+
 from touchstone import store, tasks
 from touchstone.bench import benchmark, runner
-from touchstone.llm import ReferenceProvider, provider_from_spec
+from touchstone.llm import NopProvider, ReferenceProvider, provider_from_spec
 
 
 def test_reference_provider_returns_the_task_reference():
@@ -18,6 +20,19 @@ def test_reference_provider_returns_the_task_reference():
 def test_reference_provider_empty_without_task():
     reply = provider_from_spec("reference").chat([{"role": "user", "content": "hi"}])
     assert reply.content == "" and reply.tool_calls == []
+
+
+def test_nop_provider_is_the_empty_reply():
+    prov = provider_from_spec("nop")
+    assert isinstance(prov, NopProvider)
+    reply = prov.chat([{"role": "user", "content": "hi"}])
+    assert reply.content == "" and reply.tool_calls == []
+
+
+@pytest.mark.parametrize("spec", ["nop:x", "reference:x"])
+def test_baseline_providers_take_no_argument(spec):
+    with pytest.raises(ValueError):
+        provider_from_spec(spec)
 
 
 def test_reference_passes_every_active_task(project):

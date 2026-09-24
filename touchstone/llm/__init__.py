@@ -1,5 +1,6 @@
 from ._http import ProviderError
 from .base import Provider, Reply
+from .nop import NopProvider
 from .reference import ReferenceProvider
 from .registry import ProviderStatus, provider_from_spec, provider_statuses
 from .scripted import Rule, ScriptedProvider
@@ -13,5 +14,6 @@ __all__ = [
     "ProviderStatus",
     "ScriptedProvider",
     "ReferenceProvider",
+    "NopProvider",
     "Rule",
 ]

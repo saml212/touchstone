@@ -90,6 +90,20 @@ def test_gate_active_when_reference_passes_and_nop_fails(tmp_path):
     assert tasks.read_task(tmp_path / "tasks" / "ok-01").status == "active"
 
 
+def test_validate_returns_all_three_statuses():
+    tool = Check(kind="tool_called", params={"name": "refund"}, name="calls refund")
+    active = tasks.Task(name="a", reference={"content": "", "tool_calls": [{"name": "refund"}]},
+                        checks=[tool])
+    assert tasks.validate(active)[0] == "active"
+    needs_solution = tasks.Task(name="b", reference={"content": "", "tool_calls": []},
+                                checks=[tool])
+    assert tasks.validate(needs_solution)[0] == "needs_solution"
+    safety = Check(kind="no_pii", params={}, name="no pii")
+    needs_checks = tasks.Task(name="c", reference={"content": "hi", "tool_calls": []},
+                              checks=[safety])
+    assert tasks.validate(needs_checks)[0] == "needs_checks"
+
+
 def test_gate_needs_checks_when_empty_reply_passes(tmp_path):
     # only a safety check: an empty reply satisfies it, so the task measures nothing yet.
     safety = Check(kind="no_pii", params={"kinds": ["email"]}, name="no email", source="policy")

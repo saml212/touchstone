@@ -84,6 +84,13 @@ def _reference(arg: str | None, spec: str, settings: Settings) -> Provider:
     return ReferenceProvider()
 
 
+def _nop(arg: str | None, spec: str, settings: Settings) -> Provider:
+    if arg is not None:  # "nop" takes no argument
+        raise _unknown(spec)
+    from .nop import NopProvider
+    return NopProvider()
+
+
 def _claude_cli(arg: str | None, spec: str, settings: Settings) -> Provider:
     from .claude_cli import ClaudeCLIProvider
     return ClaudeCLIProvider(arg or None)
@@ -97,6 +104,7 @@ def _codex_cli(arg: str | None, spec: str, settings: Settings) -> Provider:
 _BUILDERS = {
     "scripted": _scripted,
     "reference": _reference,
+    "nop": _nop,
     "openai": _openai,
     "openai-compatible": _openai_compatible,
     "anthropic": _anthropic,
@@ -130,6 +138,7 @@ def provider_statuses(settings: Settings | None = None) -> list[ProviderStatus]:
     statuses = [
         ProviderStatus("scripted", True, "always available"),
         ProviderStatus("reference", True, "always available (replays recorded references)"),
+        ProviderStatus("nop", True, "always available (empty reply — the nop gate)"),
     ]
 
     openai_key = bool(secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai)))
