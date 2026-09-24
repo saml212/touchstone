@@ -50,17 +50,11 @@ def main(ctx: typer.Context) -> None:
         typer.echo(f"  {i}. {label:9} {cmd}")
     typer.echo(f"\nNext: {_next_step()}")
 
-TOML_TEMPLATE = f"""# Touchstone config. Keys above [speech] are top-level; keys below a header belong to it.
+TOML_TEMPLATE = f"""# Touchstone config. Keys above a [table] header are top-level.
 db_path = "{DEFAULT_DB}"
 provider = "scripted"
-agent_provider = "claude-cli"   # mines, interviews, teaches: claude-cli | codex-cli | openai:<model>
-# keychain_prefix = "touchstone-"   # Keychain items <prefix>openai-api-key, <prefix>anthropic-api-key
-{{keychain_prefix}}
-[speech]; anything below a table header belongs to it.
-db_path = "{DEFAULT_DB}"
-provider = "scripted"
-agent_provider = "claude-cli"   # who mines, interviews and teaches: claude-cli | codex-cli | openai:<model> | anthropic:<model>
-# keychain_prefix = "touchstone-"   # Keychain items: <prefix>openai-api-key, <prefix>anthropic-api-key
+agent_provider = "claude-cli"   # mines, interviews, teaches: claude-cli | codex-cli | openai:<m>
+# keychain_prefix = "touchstone-"   # Keychain items <prefix>openai-api-key / anthropic-api-key
 {{keychain_prefix}}
 [speech]
 mode = "local"                 # local | realtime (OpenAI Realtime, needs OPENAI_API_KEY)
