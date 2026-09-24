@@ -59,8 +59,10 @@ touchstone serve                        # 2. local UI: episodes, checks, tasks, 
 touchstone mine                         # 3. agent reads traces + code, writes task dirs + proposals
 touchstone interview <task>             # 4. voice/text room; stakeholders turn opinions into checks
 touchstone bench run BENCH -m <spec>    # 5. prove a candidate against the incumbent
-touchstone train prepare BENCH          # 6. SFT / preference / RL datasets, ready for GPU infra
-harbor run -p tasks/                    # 7. the tasks are already Harbor tasks (on a Docker host)
+touchstone sample BENCH --student <spec> --teacher <spec>   # 6. find where the candidate fails
+touchstone distill BENCH --student <spec>                   # 7. package those failures to train on
+touchstone train prepare BENCH          # 8. SFT / preference / RL datasets, ready for GPU infra
+harbor run -p tasks/                    # 9. the tasks are already Harbor tasks (on a Docker host)
 ```
 
 Real output from the built-in zero-key demo (`touchstone demo` runs a scripted support agent):
@@ -77,9 +79,16 @@ contains         soft    7  'there anything else i can help' appears in 88% of g
 proposed 6 check(s) (6 stats, 0 llm), cut 24 task(s)
 ```
 
-`mine` writes a task directory for every recorded assistant turn and appends the proposals to
-`checks.toml` **disabled**. Enable them, `tasks sync` to re-materialise each task with the checks its
-reference passes (the reference gate), freeze a benchmark, and run:
+`mine` reads tool calls and their results from the model spans' canonical messages (so it works for
+the common app that only calls `touchstone.trace()` and never decorates its tools), proposes checks
+**verifiable-first** — tool-call correctness, state assertions on tool arguments, schema validity,
+safety — and stamps a `confidence` on each. Those programmatic ranks and the safety invariants are
+written **enabled**; the statistical ranks (phrases, length) stay disabled pending review. `mine`
+also writes a task directory for every recorded assistant turn. Each task is a **work queue** entry:
+`active` (its reference is a valid oracle and an empty reply fails), `needs_checks` (an empty reply
+already passes — add a check that measures the work), or `needs_solution` (the recorded reply fails
+its own checks — a teacher or a human must supply one). Only `active` tasks enter a benchmark. Enable
+the rest of the checks, `tasks sync` to re-materialise, freeze a benchmark, and run:
 
 ```
 $ touchstone checks enable --all-mined
@@ -100,6 +109,40 @@ reference  8      8     100.0  0       -
 active task by construction (a check attaches only when the reference already passes it, and a task
 counts only if its reference scores 1 and an empty reply scores 0). Prove a candidate against it
 task-by-task with `touchstone bench proof <candidate-run> <incumbent-run>`.
+
+## Sample and Distill
+
+Two buttons close the loop between finding a gap and fixing it.
+
+**Sample** runs a candidate (the *student*) on the benchmark, records its difficulty per task, and for
+each active task it fails asks a *teacher* model for up to N perturbed variants — a paraphrased user
+turn, a renamed tool, a tightened constraint. Each variant is a new task directory carrying
+`parent_task` / `generated_by` provenance and a `generation.json` (the teacher, the method, the
+SHA-256 of the parent context — hashes only, never contents — and the two validation rewards); a
+variant is kept only if it passes the same oracle/nop gate. The student is re-run on the survivors,
+and Sample reports the **frontier**: every task with `0 < pass_rate < 1` (the learnability band) plus
+the ones only the incumbent passes.
+
+```
+touchstone sample demo --student openai:gpt-4o-mini --teacher claude-cli --variants 1
+```
+
+**Distill** packages exactly that frontier into training data: `train prepare` restricted to the
+frontier, with teacher-verified demonstrations as the SFT targets and the *chosen* side of preference
+pairs (over the student's failing replies), and the frontier tasks with their checks as the RL
+verifier. For a `needs_solution` task the teacher's verified reply becomes the task's oracle. Sample →
+Distill → Sample until the frontier empties or the pass rate stalls; the loop's stopping criteria are
+an empty frontier, a below-threshold pass-rate delta, a teacher that fails the gate everywhere (which
+opens interview rooms on the contested tasks), or a per-round cost cap.
+
+```
+touchstone distill demo --student openai:gpt-4o-mini
+```
+
+Difficulty is measured, not requested: the running pass rate per `(task, model)` lives in the SQLite
+`difficulty` table and is cached into each `task.toml` for display. Judge checks are sampled N times
+(default 3) and report an `agreement`; a judge criterion the model is unsure about (agreement below
+`min_agreement`, default 0.67) never gates on its own.
 
 The same tasks run under Harbor directly — `harbor run -p tasks -a oracle` replays each reference and
 scores it against the checks in `task.toml`, with no export step.

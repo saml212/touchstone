@@ -47,7 +47,8 @@ touchstone/
                     atif.py (Harbor ATIF export of an episode)
   llm/              Provider protocol `chat(messages, tools=None, json=False) -> Reply`;
                     scripted.py (deterministic, for tests/demo), reference.py (replays a task's
-                    recorded reply — the incumbent baseline), claude_cli.py (`claude -p`, subscription),
+                    recorded reply — the incumbent baseline), nop.py (empty reply — the nop gate),
+                    claude_cli.py (`claude -p`, subscription),
                     codex_cli.py (`codex exec`), openai_compat.py (OpenAI + any /v1 endpoint), anthropic.py
                     spec strings: "scripted", "reference", "claude-cli:sonnet", "openai:gpt-4o-mini",
                     "anthropic:claude-sonnet-4-5", "openai-compatible:<base_url>:<model>", "codex-cli:gpt-5.6-sol".
@@ -62,8 +63,11 @@ touchstone/
   interview/        rooms.py (state), agent.py (question policy -> checks written to files), speech.py
   bench/            benchmark.py (resolve benchmarks/<name>.toml to task dirs), runner.py (replay tasks,
                     async, retries), report.py (scoreboard, proof table), harbor_run.py
-  train/            trainer.py (Protocol + NullTrainer), datasets.py (sft/preference/rl exports),
-                    art.py, trl.py (adapters that write configs + commands; raise clearly when no infra)
+  train/            trainer.py (Protocol + NullTrainer), datasets.py (sft/preference/rl exports;
+                    `only` restricts to a frontier), art.py, trl.py (adapters that write configs +
+                    commands; raise clearly when no infra)
+  loop/             the Sample/Distill flywheel: frontier.py (difficulty + frontier + stopping),
+                    sample.py (student run + teacher variants), teach.py (gated demos), distill.py
   server/           app.py (FastAPI), routes/*.py (files for tasks/checks/benchmarks), static/
   cli/              Typer: init, doctor, demo, serve, mine, checks, tasks, interview, bench, export, train
 ```
@@ -108,9 +112,12 @@ concurrently — so the threadpool and the instrumented app never collide on one
 Kinds, programmatic first:
 `contains`, `not_contains` (list, case-insensitive, any|all), `regex`, `not_regex`, `json_schema`,
 `tool_called` (name, optional `arguments_match` dict of exact/regex), `tool_not_called`, `tool_order` (list),
-`max_length`, `min_length`, `no_pii` (email/phone/card patterns), `expr` (safe expression via `simpleeval`
-over `output`, `tools`, `reference`), `judge` (LLM rubric; soft by default; needs a provider; skipped and
-reported as `skipped` when none).
+`max_length`, `min_length`, `no_pii` (email/phone/card patterns), `expr` (a sandboxed expression via
+`simpleeval`'s `EvalWithCompoundTypes` over `output`, `tools`, `reference`, with `len`/`any`/`all`
+whitelisted so a state assertion can iterate the tool calls; the dunder/import sandbox is unchanged),
+`judge` (LLM rubric; soft by default; needs a provider; skipped when none; sampled `samples` times —
+default 3 — combining by majority with a reported `agreement`, and demoted to `passed=None` below
+`min_agreement`, default 0.67).
 Result: `CheckResult(check_id, passed: bool|None, evidence: str)`. A task passes when every enabled hard
 check passes and no hard check errored. Soft checks are reported, never gate.
 `regex`/`not_regex`/`tool_called.arguments_match` patterns are guarded against catastrophic
@@ -210,8 +217,10 @@ providers, speech, `harbor`/`docker`/`ffmpeg` on PATH, and the `art`/`trl` train
 never installs, never a network call, always exits 0), `demo` (runs the built-in scripted support
 agent: 30 episodes, mixed outcomes), `serve`,
 `mine [--code PATH] [--provider SPEC]`, `checks list|add|enable|disable|show|eval` (over `checks.toml`),
-`tasks list|show|sync`, `interview <task>` (prints room URL, opens browser),
-`bench create|run|report|proof|runs|harbor-run`, `export harbor|atif`, `train prepare|submit`. Exit
+`tasks list|show|sync` (`list` groups by work queue), `interview <task>` (prints room URL, opens
+browser), `bench create|run|report|proof|runs|harbor-run`,
+`sample BENCH --student SPEC [--teacher SPEC] [--variants N]`, `distill BENCH --student SPEC`,
+`export harbor|atif`, `train prepare|submit`. Exit
 codes non-zero on failure; errors are one clear sentence.
 
 ## Quality bar
@@ -284,8 +293,11 @@ failure tasks (bad outcome) carry safety checks only. Unchanged from v1, now app
   the provider returns them), `refusal`; usage carries `cached_tokens`; canonical message `content` is
   a string or a list of parts (`text`, `image`, `file`, `audio`) — never flattened.
 - `runs` (`target` = benchmark name or tasks path, `model_spec`, timings), `results` (`task` = task
-  dir name, `reward REAL`, `passed`, `check_results` keyed by check name, `output`, `latency_ms`,
-  `cost_usd`, `error`).
+  dir name, `reward REAL`, `passed`, `check_results` keyed by check name — carrying a per-check
+  `agreement` for sampled judge checks, `output`, `latency_ms`, `cost_usd`, `error`).
+- `difficulty` (`task`, `model_spec`, `attempts`, `passes`, `pass_rate REAL`, `updated_at`) — the
+  empirical difficulty per (task, student), upserted by Sample. The DB is the source; the value is
+  cached into each `task.toml` for display. This is the founder's "difficulty measured, not requested".
 - `rooms`, `room_messages` — interview session state. Committed checks are written to the task's
   `task.toml` (or to `checks.toml` when the stakeholder says "always"); `git diff` is the audit trail.
 - Deleted: `tasks`, `checks`, `benchmarks`, `room_checks` tables and their CRUD.
@@ -298,19 +310,32 @@ Ranked sources of verifiable checks, mined in this order and marked with `confid
 6. judge rubrics (last, soft, sampled N times with agreement reported).
 
 Every task must pass the two gates from the Harbor task-generation RFC before it counts:
-**oracle scores 1** (`reference` replay passes) and **nop scores 0** (an empty reply fails). Tasks
-that fail either gate are kept with `status = "rejected"` and the reason; they never enter a benchmark.
+**oracle scores 1** (`reference` replay passes) and **nop scores 0** (an empty reply fails). A task's
+`status` is a work queue, not a pass/fail flag (`tasks.validate` sets it at write time): `active`
+(both gates pass), `needs_checks` (an empty reply already passes every hard check — the task measures
+nothing yet), or `needs_solution` (the recorded reply fails its own hard checks — a failure with no
+oracle). `status_reason` records why. Only `active` tasks enter a benchmark; `needs_checks` invites an
+interview, `needs_solution` invites a teacher demonstration. The empirical pass rate per
+`(task, model_spec)` lives in the SQLite `difficulty` table and is cached into `[metadata.touchstone]
+difficulty` in `task.toml` for display.
 
-Two buttons:
-- **Sample** — run the student (candidate model) on the benchmark and on perturbed variants the
-  teacher generates from failing tasks; the frontier is every task with `0 < pass_rate < 1` plus the
-  proof table's "only incumbent passes". Writes new task directories with `[metadata.touchstone]
-  parent_task`, `difficulty` (empirical pass rate), and `generation.json` provenance (teacher model,
-  source hashes).
-- **Distill** — `train prepare` restricted to the frontier: teacher-verified demonstrations and
-  preference pairs from exactly those failures. Sample → Distill → Sample until the frontier empties
-  or pass rate stalls. Interview rooms open on contested frontier tasks so a human ruling enters as a
-  check.
+Two buttons (`touchstone/loop/`, CLI `sample`/`distill`, `POST /api/sample|distill`):
+- **Sample** (`loop/sample.py`) — run the student on the benchmark, record difficulty, and for each
+  active task it fails ask the teacher for up to N perturbed variants (paraphrase, rename a tool,
+  tighten a constraint). Each variant is a new task directory with `[metadata.touchstone] parent_task`
+  / `generated_by` and a `generation.json` provenance file (teacher, method, the SHA-256 of the parent
+  context — hashes only, never contents — and the oracle/nop validation); a variant is kept only if it
+  passes the gate. The student is re-run on the survivors. The frontier is every task with
+  `0 < pass_rate < 1` plus the proof table's "only incumbent passes". Deterministic with the
+  `scripted` provider (a mechanical paraphrase when no teacher JSON parses).
+- **Distill** (`loop/distill.py`) — `train prepare` restricted to the frontier: teacher-verified
+  demonstrations (`loop/teach.py`, accepted only when they pass the task's hard checks and stored as
+  results under `model_spec = "teacher:<spec>"`) as SFT targets and the chosen side of preference
+  pairs, and the frontier tasks with their checks as the RL verifier. For a `needs_solution` task the
+  verified demo becomes the task's `reference.json` (`reference_from = "teacher:<spec>"`). The plan
+  file states the loop step. Sample → Distill → Sample until `loop/frontier.check_stop` fires: an
+  empty frontier, a below-threshold pass-rate delta, a teacher failing the gate everywhere (which
+  opens interview rooms on the contested tasks), or a per-round cost cap.
 
 ## Voice: realtime mode
 
