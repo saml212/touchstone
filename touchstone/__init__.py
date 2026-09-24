@@ -26,7 +26,7 @@ def trace(db: str | None = None, otel: bool = False) -> dict:
     """Idempotent. Point capture at `db` (or configured/default) and patch installed SDKs.
 
     With `otel=True`, also register the OpenInference OTel span exporter (needs the
-    `touchstone[otel]` extra) so spans from existing OpenInference instrumentation land in the store.
+    `touchstone[otel]` extra) so existing OpenInference spans land in the store.
     """
     global _traced
     settings = load_settings()
