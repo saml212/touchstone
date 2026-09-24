@@ -1,0 +1,53 @@
+"""The Sample / Distill loop over HTTP — the two buttons, calling the same functions the CLI does.
+
+Sample runs the student and generates teacher variants; it can be slow with a real model, so like
+a benchmark run it is a synchronous call the UI shows a spinner for (the `scripted` provider is
+instant). Both routes validate the model specs up front and return a one-clear-sentence 422.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from ...bench import benchmark as benchmark_mod
+from ._deps import get_conn, get_root
+
+router = APIRouter()
+
+
+def _require_target(root, target: str) -> None:
+    if not benchmark_mod.resolve(root, target):
+        raise HTTPException(404, f"no benchmark or active tasks for {target!r}")
+
+
+def _judge(settings, spec):
+    from ...llm import provider_from_spec
+
+    if not spec:
+        return None
+    try:
+        return provider_from_spec(spec, settings)
+    except Exception as exc:
+        raise HTTPException(422, f"cannot use judge {spec!r}: {exc}") from exc
+
+
+@router.post("/api/sample")
+def post_sample(body: dict, request: Request, conn=Depends(get_conn),
+                root=Depends(get_root)) -> dict:
+    from ...loop import sample as run_sample
+
+    target = (body.get("target") or body.get("benchmark") or "").strip()
+    student = (body.get("student") or "").strip()
+    if not target or not student:
+        raise HTTPException(422, "target and student are required")
+    _require_target(root, target)
+    settings = request.app.state.settings
+    try:
+        return run_sample(conn, root, target, student,
+                          teacher_spec=body.get("teacher") or None,
+                          variants=int(body.get("variants", 1)),
+                          settings=settings,
+                          judge_provider=_judge(settings, body.get("judge")),
+                          concurrency=int(body.get("concurrency", 4)))
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(422, f"sample failed: {exc}") from exc

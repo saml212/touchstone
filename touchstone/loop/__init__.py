@@ -15,6 +15,7 @@ from .frontier import (
     record_run,
     write_loop_state,
 )
+from .sample import sample
 
 __all__ = [
     "record_run",
@@ -24,4 +25,5 @@ __all__ = [
     "check_stop",
     "read_loop_state",
     "write_loop_state",
+    "sample",
 ]

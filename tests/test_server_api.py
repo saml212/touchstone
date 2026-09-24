@@ -282,3 +282,16 @@ def test_create_run_rejects_nonpositive_concurrency(db):
     r = c.post("/api/runs", json={"target": "demo", "model_spec": "scripted", "concurrency": 0})
     assert r.status_code == 422
     assert "concurrency" in r.json()["detail"]
+
+
+def test_sample_endpoint_returns_frontier(db):
+    _seed(db)
+    c = _client(db)
+    r = c.post("/api/sample", json={"target": "demo", "student": "scripted", "variants": 1})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["student"] == "scripted"
+    assert "frontier" in body and set(body["frontier_split"]) == {"learnability", "only_incumbent"}
+    # validation errors are one clear sentence
+    assert c.post("/api/sample", json={"target": "demo"}).status_code == 422
+    assert c.post("/api/sample", json={"target": "nope", "student": "scripted"}).status_code == 404

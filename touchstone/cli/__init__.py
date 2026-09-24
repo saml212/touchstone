@@ -135,7 +135,7 @@ def serve(
 
 # Register the sub-apps and remaining top-level commands. Imported last so `app` and
 # the shared helpers above already exist when each module binds onto them.
-from . import bench, checks, interview, mine, tasks, train  # noqa: E402,F401
+from . import bench, checks, interview, loop, mine, tasks, train  # noqa: E402,F401
 
 app.add_typer(checks.checks_app, name="checks")
 app.add_typer(tasks.tasks_app, name="tasks")
