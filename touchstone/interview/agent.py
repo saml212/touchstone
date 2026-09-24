@@ -266,9 +266,7 @@ class Interviewer:
         existing = self._find_room_check(dc.kind, dc.params)
         if existing is not None:
             if enabled and not existing.enabled:
-                store.set_check_enabled(self.conn, existing.id, True)
-                self._attach_to_task(existing.id)
-                return store.get_check(self.conn, existing.id)
+                return self._enable(existing.id)
             return existing
         check = store.insert_check(
             self.conn,
@@ -290,11 +288,14 @@ class Interviewer:
 
     def _commit(self, raw_or_check) -> dict:
         if isinstance(raw_or_check, store.Check):
-            store.set_check_enabled(self.conn, raw_or_check.id, True)
-            self._attach_to_task(raw_or_check.id)
-            return _check_to_dict(store.get_check(self.conn, raw_or_check.id))
+            return _check_to_dict(self._enable(raw_or_check.id))
         check = self._persist(raw_or_check, enabled=True)
         return _check_to_dict(check) if check else {}
+
+    def _enable(self, check_id: str) -> store.Check:
+        store.set_check_enabled(self.conn, check_id, True)
+        self._attach_to_task(check_id)
+        return store.get_check(self.conn, check_id)
 
     def _attach_to_task(self, check_id: str) -> None:
         if not self.room.task_id:
