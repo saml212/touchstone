@@ -67,3 +67,21 @@ def test_train_prepare_unknown_benchmark_fails(tmp_path, monkeypatch):
     result = runner.invoke(app, ["train", "prepare", "nope"])
     assert result.exit_code == 1
     assert "no benchmark" in result.output
+
+
+def test_train_prepare_unwritable_out_fails_cleanly(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    bid = _train_repo(tmp_path, monkeypatch)
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    os.chmod(ro, stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        result = runner.invoke(
+            app, ["train", "prepare", bid, "--out", str(ro / "sub")], catch_exceptions=False
+        )
+        assert result.exit_code == 1
+        assert "\n" not in result.output.strip()
+    finally:
+        os.chmod(ro, stat.S_IRWXU)

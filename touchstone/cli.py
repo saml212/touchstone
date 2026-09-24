@@ -607,6 +607,8 @@ def train_prepare(
     try:
         bench, out_dir = _resolve_out(conn, benchmark_id, out)
         bundle = prepare(conn, bench.id, out_dir)
+    except OSError as exc:
+        _fail(f"could not write datasets: {exc}")
     finally:
         conn.close()
     c = bundle.counts
@@ -642,6 +644,8 @@ def train_submit(
             typer.echo(f"prepared datasets in {bundle.out_dir}")
             typer.echo(str(exc))
             return
+    except OSError as exc:
+        _fail(f"could not write datasets: {exc}")
     finally:
         conn.close()
     typer.echo(f"prepared datasets in {bundle.out_dir}")
