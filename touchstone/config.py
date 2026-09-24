@@ -15,7 +15,7 @@ class Settings:
     db_path: str = DEFAULT_DB
     provider: str = "scripted"
     agent_provider: str = "codex-cli"
-    keychain_prefix: str = "rockie-"
+    keychain_prefix: str = "touchstone-"
     keychain_openai: str = "openai-api-key"
     keychain_anthropic: str = "anthropic-api-key"
     stt: str = "none"
@@ -27,7 +27,7 @@ class Settings:
         return Path(self.db_path).expanduser()
 
     def keychain_service(self, name: str) -> str:
-        """Full service for a bare name: 'openai-api-key' -> 'rockie-openai-api-key'."""
+        """Full service for a bare name: 'openai-api-key' -> 'touchstone-openai-api-key'."""
         return f"{self.keychain_prefix}{name}"
 
 

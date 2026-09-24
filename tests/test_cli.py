@@ -14,6 +14,20 @@ def test_init_writes_config_and_db(tmp_path, monkeypatch):
     assert (tmp_path / ".touchstone" / "touchstone.db").exists()
 
 
+def test_init_omits_keychain_prefix_by_default(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init"])
+    text = (tmp_path / "touchstone.toml").read_text()
+    assert "keychain_prefix" not in text
+
+
+def test_init_writes_keychain_prefix_when_passed(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "--keychain-prefix", "rockie-"])
+    text = (tmp_path / "touchstone.toml").read_text()
+    assert 'keychain_prefix = "rockie-"' in text
+
+
 def test_doctor_reports_providers(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["doctor"])

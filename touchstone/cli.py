@@ -21,8 +21,7 @@ app = typer.Typer(
 TOML_TEMPLATE = f"""# Touchstone config
 db_path = "{DEFAULT_DB}"
 provider = "scripted"
-keychain_prefix = "rockie-"
-
+{{keychain_prefix}}
 [speech]
 stt = "none"
 tts = "browser"
@@ -34,13 +33,20 @@ def _installed(name: str) -> bool:
 
 
 @app.command()
-def init(path: str = typer.Option("touchstone.toml", help="Config file to write.")) -> None:
+def init(
+    path: str = typer.Option("touchstone.toml", help="Config file to write."),
+    keychain_prefix: str = typer.Option(
+        None, "--keychain-prefix",
+        help="Pin the macOS Keychain service prefix (default: touchstone-).",
+    ),
+) -> None:
     """Write touchstone.toml and create the .touchstone/ db directory."""
     cfg = Path(path)
     if cfg.exists():
         typer.echo(f"{cfg} already exists; leaving it untouched.")
     else:
-        cfg.write_text(TOML_TEMPLATE, encoding="utf-8")
+        prefix_line = f'keychain_prefix = "{keychain_prefix}"\n' if keychain_prefix else ""
+        cfg.write_text(TOML_TEMPLATE.format(keychain_prefix=prefix_line), encoding="utf-8")
         typer.echo(f"wrote {cfg}")
     settings = load_settings(cfg)
     store.connect(settings.db_path).close()
