@@ -11,7 +11,7 @@ def test_episode_records_spans_under_it(traced):
         touchstone.record_llm_call("m", [{"role": "user", "content": "hi"}], "hello")
         ep.outcome(1.0, "resolved")
     spans = store.list_spans(conn, ep.id)
-    assert len(spans) == 1 and spans[0].kind == "llm"
+    assert len(spans) == 1 and spans[0].kind == "model"
     assert store.get_episode(conn, ep.id).outcome_label == "resolved"
 
 

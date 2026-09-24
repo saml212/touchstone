@@ -11,7 +11,7 @@ def test_roundtrip_and_json_columns(conn):
     assert got.name == "e1" and got.meta == {"k": "v", "n": 3}
 
     span = store.insert_span(
-        conn, store.Span(episode_id=ep.id, kind="llm", name="m", input={"messages": [1, 2]})
+        conn, store.Span(episode_id=ep.id, kind="model", name="m", input={"messages": [1, 2]})
     )
     assert store.get_span(conn, span.id).input == {"messages": [1, 2]}
     assert [s.id for s in store.list_spans(conn, ep.id)] == [span.id]
@@ -47,7 +47,7 @@ def test_unicode_and_one_megabyte_output(conn):
     ep = store.insert_episode(conn, store.Episode(name="ünïçōdé 🗿 日本語"))
     big = "x" * (1024 * 1024)
     span = store.insert_span(
-        conn, store.Span(episode_id=ep.id, kind="llm", name="big", output={"blob": big})
+        conn, store.Span(episode_id=ep.id, kind="model", name="big", output={"blob": big})
     )
     assert store.get_episode(conn, ep.id).name == "ünïçōdé 🗿 日本語"
     assert len(store.get_span(conn, span.id).output["blob"]) == 1024 * 1024
@@ -117,5 +117,37 @@ def test_v1_db_migrates_cleanly(db):
         assert "target" in run_cols and "benchmark_id" not in run_cols
         result_cols = {r[1] for r in conn.execute("PRAGMA table_info(results)")}
         assert {"task", "reward"} <= result_cols and "task_id" not in result_cols
+    finally:
+        conn.close()
+
+
+def _v2_spans_table(path):
+    """A minimal v2-schema DB: spans without tool_call_id, a span with the old 'llm' kind."""
+    c = sqlite3.connect(str(path))
+    c.executescript(
+        "CREATE TABLE episodes (id TEXT PRIMARY KEY, name TEXT, source TEXT, started_at TEXT,"
+        " ended_at TEXT, outcome_score REAL, outcome_label TEXT, meta TEXT);"
+        "CREATE TABLE spans (id TEXT PRIMARY KEY, episode_id TEXT, parent_id TEXT, kind TEXT,"
+        " name TEXT, model TEXT, started_at TEXT, ended_at TEXT, input TEXT, output TEXT,"
+        " tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, error TEXT);"
+    )
+    c.execute("INSERT INTO episodes (id, name) VALUES ('e1', 'ep')")
+    c.execute("INSERT INTO spans (id, episode_id, kind, name) VALUES ('s1', 'e1', 'llm', 'm')")
+    c.execute("PRAGMA user_version=2")
+    c.commit()
+    c.close()
+
+
+def test_v2_llm_spans_migrate_to_model(tmp_path):
+    path = tmp_path / "old.db"
+    _v2_spans_table(path)
+    conn = store.connect(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
+        span = store.get_span(conn, "s1")
+        assert span.kind == "model"  # llm -> model
+        assert span.tool_call_id is None  # new column present, defaults null
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(spans)")}
+        assert "tool_call_id" in cols
     finally:
         conn.close()

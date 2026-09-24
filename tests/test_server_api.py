@@ -18,14 +18,14 @@ def _seed(db):
     try:
         ep1 = store.insert_episode(conn, store.Episode(name="resolve refund", outcome_label="ok"))
         store.insert_span(conn, store.Span(
-            episode_id=ep1.id, kind="llm", name="chat",
+            episode_id=ep1.id, kind="model", name="chat",
             input={"messages": [{"role": "system", "content": "you are support"},
                                 {"role": "user", "content": "I want a refund"}], "tools": []},
             output={"message": {"role": "assistant", "content": "our refund policy allows it",
                                 "tool_calls": []}},
         ))
         ep2 = store.insert_episode(conn, store.Episode(name="angry user", outcome_label="fail"))
-        store.insert_span(conn, store.Span(episode_id=ep2.id, kind="llm", name="chat",
+        store.insert_span(conn, store.Span(episode_id=ep2.id, kind="model", name="chat",
             input={"messages": [{"role": "user", "content": "help"}]},
             output={"message": {"role": "assistant", "content": "no"}}))
     finally:

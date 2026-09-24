@@ -33,7 +33,7 @@ def build_tasks(conn, episodes: list[store.Episode]) -> list[Task]:
             + tool_names
             + (["failure"] if failure else [])
         )
-        for span in (s for s in spans if s.kind == "llm"):
+        for span in (s for s in spans if s.kind == "model"):
             ctx = span.input or {}
             tasks.append(Task(
                 name=task_name(ep, span),

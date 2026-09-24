@@ -120,7 +120,7 @@ def to_atif(conn, episode_id: str) -> dict:
     if ep is None:
         raise ValueError(f"no episode {episode_id!r}")
     spans = store.list_spans(conn, episode_id)
-    llm_spans = [s for s in spans if s.kind == "llm"]
+    llm_spans = [s for s in spans if s.kind == "model"]
     model = llm_spans[0].model if llm_spans else None
 
     steps: list[dict] = []

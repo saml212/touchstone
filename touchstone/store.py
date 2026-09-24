@@ -32,9 +32,11 @@ def _loads(text):
 # v2 (2026-09): authored artifacts (tasks, checks, benchmarks) moved to files; the DB keeps only
 # captured traces and the machine run record. A v1 DB opens fine — the old authored tables and the
 # stale run record are dropped, and `mine` rebuilds tasks/checks from the preserved episodes.
-SCHEMA_VERSION = 2
+# v3 (2026-09): span `kind` 'llm' renamed to 'model'; `spans.tool_call_id` links a tool span to
+# the model call that requested it. A v1/v2 DB migrates in place, preserving its spans.
+SCHEMA_VERSION = 3
 
-# Tables an earlier schema created that no longer exist; dropped on migration.
+# Tables the v1 schema created that no longer exist; dropped only on the v1 -> v2 migration.
 _DROPPED = ("checks", "tasks", "benchmarks", "room_checks", "runs", "results")
 
 SCHEMA = """
@@ -45,7 +47,7 @@ CREATE TABLE IF NOT EXISTS episodes (
 CREATE TABLE IF NOT EXISTS spans (
   id TEXT PRIMARY KEY, episode_id TEXT, parent_id TEXT, kind TEXT, name TEXT, model TEXT,
   started_at TEXT, ended_at TEXT, input TEXT, output TEXT,
-  tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, error TEXT
+  tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, error TEXT, tool_call_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spans_episode ON spans(episode_id);
 CREATE TABLE IF NOT EXISTS runs (
@@ -80,14 +82,24 @@ def connect(path: str | Path) -> sqlite3.Connection:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < SCHEMA_VERSION:
         with write(conn):
-            if version >= 1:  # v1 -> v2: authored artifacts left the DB; the run record is stale
+            if version == 1:  # v1 -> v2: authored artifacts left the DB; the run record is stale
                 for table in _DROPPED:
                     conn.execute(f"DROP TABLE IF EXISTS {table}")
             for statement in SCHEMA.split(";"):
                 if statement.strip():
                     conn.execute(statement)
+            if version >= 1:  # existing spans predate v3
+                _migrate_spans_v3(conn)
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     return conn
+
+
+def _migrate_spans_v3(conn: sqlite3.Connection) -> None:
+    """v3: rename span kind 'llm' -> 'model' and add the tool_call_id column if missing."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(spans)")}
+    if "tool_call_id" not in cols:
+        conn.execute("ALTER TABLE spans ADD COLUMN tool_call_id TEXT")
+    conn.execute("UPDATE spans SET kind='model' WHERE kind='llm'")
 
 
 def _ensure_wal(conn: sqlite3.Connection) -> None:
@@ -134,7 +146,7 @@ class Episode:
 @dataclass
 class Span:
     episode_id: str
-    kind: str  # 'llm' | 'tool'
+    kind: str  # 'model' | 'tool'
     name: str
     parent_id: str | None = None
     model: str | None = None
@@ -146,6 +158,7 @@ class Span:
     tokens_out: int | None = None
     cost_usd: float | None = None
     error: str | None = None
+    tool_call_id: str | None = None
     id: str = field(default_factory=new_id)
 
 

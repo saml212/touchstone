@@ -72,8 +72,8 @@ def record_llm_call(model, messages, reply, tools=None, usage=None) -> None:
         list(messages) + [{"role": "assistant", "content": content, "tool_calls": tool_calls}]
     )
     capture.add_span(
-        "llm",
-        model or "llm",
+        "model",
+        model or "model",
         model=model,
         input={"messages": convo[:-1], "tools": tools or [], "params": {}},
         output={"message": convo[-1]},

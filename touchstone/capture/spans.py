@@ -46,7 +46,7 @@ def record(default_name, model, messages, tools, params,
            content, tool_calls, usage, error, started):
     reply = canonical([{"role": "assistant", "content": content, "tool_calls": tool_calls}])[0]
     context.add_span(
-        "llm",
+        "model",
         model or default_name,
         model=model,
         input={

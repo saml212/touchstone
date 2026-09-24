@@ -12,7 +12,7 @@ def demo_conn(demo_db):
 def test_build_one_task_per_assistant_turn(demo_conn):
     eps = store.list_episodes(demo_conn)
     tasks = build_tasks(demo_conn, eps)
-    llm_spans = sum(1 for ep in eps for s in store.list_spans(demo_conn, ep.id) if s.kind == "llm")
+    llm_spans = sum(1 for ep in eps for s in store.list_spans(demo_conn, ep.id) if s.kind == "model")
     assert len(tasks) == llm_spans > len(eps)
     assert all(t.kind == "replay" for t in tasks)
     assert all("messages" in t.context and "tools" in t.context for t in tasks)

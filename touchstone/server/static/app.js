@@ -133,7 +133,7 @@ async function episodeDetail(id) {
 }
 
 function conversation(spans) {
-  const llm = spans.filter((s) => s.kind === "llm");
+  const llm = spans.filter((s) => s.kind === "model");
   if (!llm.length) return [];
   const last = llm[llm.length - 1];
   const msgs = ((last.input && last.input.messages) || []).slice();

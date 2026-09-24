@@ -90,7 +90,7 @@ def _is_good(ep: store.Episode) -> bool | None:
 
 def _final_output(spans: list[store.Span]) -> str:
     for span in reversed(spans):
-        if span.kind == "llm":
+        if span.kind == "model":
             msg = (span.output or {}).get("message") or {}
             content = msg.get("content")
             return content if isinstance(content, str) else ""
@@ -316,7 +316,7 @@ def _user_texts(span: store.Span) -> list[str]:
 def _last_user_message(spans: list[store.Span]) -> str:
     user = ""
     for span in spans:
-        if span.kind != "llm":
+        if span.kind != "model":
             continue
         for text in _user_texts(span):
             user = text

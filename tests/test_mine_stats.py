@@ -57,7 +57,7 @@ def test_unlabeled_episodes_produce_no_tool_or_phrase_stats(conn):
     # Episodes with no outcome are unlabeled: no good/bad split, so no correlation checks.
     ep = store.insert_episode(conn, store.Episode(name="e"))
     store.insert_span(conn, store.Span(
-        episode_id=ep.id, kind="llm", name="m",
+        episode_id=ep.id, kind="model", name="m",
         input={"messages": [{"role": "user", "content": "hi"}], "tools": []},
         output={"message": {"role": "assistant", "content": "plain text", "tool_calls": []}},
     ))
@@ -72,7 +72,7 @@ def test_json_schema_proposed_when_good_outputs_are_json(conn):
             conn, store.Episode(name=f"e{i}", outcome_score=1.0, outcome_label="good")
         )
         store.insert_span(conn, store.Span(
-            episode_id=ep.id, kind="llm", name="m",
+            episode_id=ep.id, kind="model", name="m",
             input={"messages": [], "tools": []},
             output={"message": {"role": "assistant",
                                 "content": '{"status": "ok", "id": 1}', "tool_calls": []}},

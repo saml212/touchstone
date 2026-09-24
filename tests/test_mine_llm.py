@@ -23,7 +23,7 @@ def _episode(conn):
         conn, store.Episode(name="e", outcome_label="good", outcome_score=1.0)
     )
     store.insert_span(conn, store.Span(
-        episode_id=ep.id, kind="llm", name="m",
+        episode_id=ep.id, kind="model", name="m",
         input={"messages": [{"role": "user", "content": "help"}], "tools": []},
         output={"message": {"role": "assistant", "content": "sure", "tool_calls": []}},
     ))

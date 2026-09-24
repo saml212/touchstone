@@ -39,7 +39,7 @@ class TouchstoneLogger(_base()):
         err = error or (repr(kwargs["exception"]) if kwargs.get("exception") else None)
         reply = canonical([{"role": "assistant", "content": content, "tool_calls": tool_calls}])[0]
         context.add_span(
-            "llm",
+            "model",
             model or "litellm",
             model=model,
             input={"messages": canonical(messages), "tools": tools or [], "params": {}},
