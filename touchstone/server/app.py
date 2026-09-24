@@ -96,8 +96,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/rooms/{room_id}/audio")
     async def post_audio(
-        room_id: str, speaker: str = Form("guest"), file: UploadFile = File(...)
+        room_id: str, speaker: str = Form("guest"), file: UploadFile = File(...),
+        conn=Depends(get_conn),
     ) -> dict:
+        room = store.get_room(conn, room_id)
+        if room is None:
+            raise HTTPException(404, f"no room with id {room_id}")
+        if room.closed_at is not None:
+            raise HTTPException(409, "this room is closed")
         data = await file.read()
         try:
             mime = validate_audio(data)
@@ -200,8 +206,11 @@ async def _ingest(app: FastAPI, room_id: str, speaker: str, text: str) -> dict:
 
     conn = store.connect(settings.db_path)
     try:
-        if store.get_room(conn, room_id) is None:
+        room = store.get_room(conn, room_id)
+        if room is None:
             raise HTTPException(404, f"no room with id {room_id}")
+        if room.closed_at is not None:
+            raise HTTPException(409, "this room is closed")
         user_msg = rooms.post(conn, room_id, speaker, "user", text)
         history = [_msg_view(m) for m in store.list_room_messages(conn, room_id)]
         user_view = _msg_view(user_msg)

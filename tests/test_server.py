@@ -187,3 +187,29 @@ def test_websocket_on_missing_room_closes(db):
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect("/ws/rooms/does-not-exist") as ws:
             ws.receive_json()
+
+
+async def test_post_to_closed_room_is_rejected(db):
+    task_id = _seed_task(db)
+    app = _app(db)
+    async with _client(app) as c:
+        room_id = (await c.post("/api/rooms", json={"task_id": task_id})).json()["room"]["id"]
+        await c.post(f"/api/rooms/{room_id}/close")
+        r = await c.post(f"/api/rooms/{room_id}/messages", json={"speaker": "s", "text": "hi"})
+        assert r.status_code == 409
+        # audio ingest path is guarded too
+        ra = await c.post(f"/api/rooms/{room_id}/audio",
+                          files={"file": ("c.webm", b"x", "audio/webm")})
+        assert ra.status_code == 409
+
+
+async def test_done_twice_second_is_rejected(db):
+    task_id = _seed_task(db)
+    app = _app(db)
+    async with _client(app) as c:
+        room_id = (await c.post("/api/rooms", json={"task_id": task_id})).json()["room"]["id"]
+        done = {"speaker": "s", "text": "/done"}
+        first = await c.post(f"/api/rooms/{room_id}/messages", json=done)
+        assert first.status_code == 200
+        second = await c.post(f"/api/rooms/{room_id}/messages", json=done)
+        assert second.status_code == 409
