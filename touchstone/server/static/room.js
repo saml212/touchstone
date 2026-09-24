@@ -11,6 +11,25 @@ function esc(s) {
   return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
 
+let noticeTimer = null;
+function notice(text) {
+  const el = $("notice");
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle("hidden", !text);
+  clearTimeout(noticeTimer);
+  if (text) noticeTimer = setTimeout(() => notice(""), 6000);
+}
+
+function talkLabel() {
+  return mode === "realtime" ? "● hold to talk" : "● talk";
+}
+
+// While the mic is held, the button shows who has the floor.
+function setTalking(holding) {
+  $("talk").textContent = holding ? `● ${speaker} holding` : talkLabel();
+}
+
 function renderMessages(messages) {
   const box = $("messages");
   box.innerHTML = messages
@@ -60,7 +79,7 @@ let pollTimer = null;
 function applyState(s) {
   $("topic").textContent = s.room.topic;
   $("closed").classList.toggle("hidden", !s.room.closed_at);
-  if (s.mode) { mode = s.mode; $("talk").textContent = mode === "realtime" ? "● hold to talk" : "● talk"; }
+  if (s.mode) { mode = s.mode; setTalking(false); }
   draftState = s.draft;
   committedState = s.committed;
   messagesState = s.messages;
@@ -85,7 +104,7 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws/rooms/${ROOM_ID}`);
   socket = ws;
-  ws.onopen = stopPolling;
+  ws.onopen = () => { stopPolling(); if (!realtimeTalking) setVoiceState(""); };
   ws.onmessage = (ev) => {
     const { type, data } = JSON.parse(ev.data);
     if (type === "state") applyState(data);
@@ -94,8 +113,14 @@ function connect() {
     else if (type === "closed") { $("closed").classList.remove("hidden"); }
     else if (type === "audio") { playPCM(base64ToInt16(data.b64)); }
     else if (type === "message") { messagesState = messagesState.concat(data); renderMessages(messagesState); }
+    else if (type === "fallback") { mode = "local"; setTalking(false); setVoiceState("● fell back to local voice"); }
   };
-  ws.onclose = () => { socket = null; startPolling(); setTimeout(connect, 1500); };
+  ws.onclose = () => {
+    socket = null;
+    startPolling();
+    if (mode === "realtime") setVoiceState("● reconnecting…");
+    setTimeout(connect, 1500);
+  };
 }
 
 function wsSend(obj) {
@@ -154,7 +179,7 @@ async function startRealtimeTalk() {
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
-    alert("Microphone not available.");
+    notice("Microphone not available — check your browser's mic permission.");
     return false;
   }
   captureCtx = new AudioContext({ sampleRate: 24000 });
@@ -209,8 +234,8 @@ let realtimeTalking = false;
 async function toggleTalk() {
   if (mode === "realtime") {
     const btn = $("talk");
-    if (realtimeTalking) { realtimeTalking = false; btn.classList.remove("recording"); stopRealtimeTalk(); }
-    else if (await startRealtimeTalk()) { realtimeTalking = true; btn.classList.add("recording"); }
+    if (realtimeTalking) { realtimeTalking = false; btn.classList.remove("recording"); setTalking(false); stopRealtimeTalk(); }
+    else if (await startRealtimeTalk()) { realtimeTalking = true; btn.classList.add("recording"); setTalking(true); }
     return;
   }
   const btn = $("talk");
@@ -222,7 +247,7 @@ async function toggleTalk() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
-    alert("Microphone not available.");
+    notice("Microphone not available — check your browser's mic permission.");
     return;
   }
   recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
@@ -231,15 +256,17 @@ async function toggleTalk() {
   recorder.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop());
     btn.classList.remove("recording");
+    setTalking(false);
     const blob = new Blob(chunks, { type: "audio/webm" });
     const form = new FormData();
     form.append("speaker", speaker);
     form.append("file", blob, "clip.webm");
     const r = await fetch(`/api/rooms/${ROOM_ID}/audio`, { method: "POST", body: form });
-    if (!r.ok) alert((await r.json().catch(() => ({}))).detail || "Audio failed.");
+    if (!r.ok) notice((await r.json().catch(() => ({}))).detail || "Audio failed.");
   };
   recorder.start();
   btn.classList.add("recording");
+  setTalking(true);
 }
 
 // -- boot -------------------------------------------------------------------

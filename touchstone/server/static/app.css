@@ -111,6 +111,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 #talk.recording { background: #b23a26; animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: 0.6; } }
 .voiceState { align-self: center; font: 500 12px var(--mono, monospace); color: var(--brick); animation: pulse 1s infinite; }
+.notice { margin: 0 16px 8px; padding: 8px 12px; font-size: 13px; color: var(--brick); background: #fff; border: 1px solid var(--brick); border-radius: 8px; }
 
 #drafts {
   border-left: 1px solid var(--hair);

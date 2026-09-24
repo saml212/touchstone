@@ -243,6 +243,7 @@ class RealtimeBridge:
         self._ready.set()
         self._post("Interviewer", "assistant",
                    f"{message} Switching this room to local voice mode.")
+        self.hub.publish(self.room_id, Event("fallback", {"reason": message}))
         if self._ws is not None:
             with contextlib.suppress(Exception):
                 await self._ws.close()

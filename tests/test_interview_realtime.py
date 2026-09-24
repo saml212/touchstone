@@ -168,6 +168,20 @@ async def test_openai_error_falls_back_to_local_with_a_room_message(tmp_path):
     assert any("local voice mode" in t for t in texts)
 
 
+async def test_fallback_publishes_an_event_so_the_room_switches_to_local(tmp_path):
+    # The browser needs to know the session fell back, so the bridge broadcasts one
+    # `fallback` event (the room UI flips to local voice on it) alongside the message.
+    settings, room_id = _project(tmp_path)
+    hub = Hub()
+    sub = hub.subscribe(room_id)
+    async with FakeRealtime([{"type": "error", "error": {"message": "boom"}}]) as fake:
+        await _run_bridge(settings, room_id, hub, fake)
+    events = []
+    while not sub.empty():
+        events.append(sub.get_nowait())
+    assert any(e.type == "fallback" for e in events)
+
+
 async def test_reconnects_once_after_a_dropped_socket(tmp_path):
     settings, room_id = _project(tmp_path)
     async with FakeRealtime([_fc("commit_check", "c1", CHECK)], drop_first=True) as fake:
