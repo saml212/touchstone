@@ -78,6 +78,26 @@ def _turn(messages: list[dict], content: str = "", tool_calls: list[dict] | None
         messages.append({"role": "tool", "name": call["name"], "content": json.dumps(result)})
 
 
+def _resolved_episode(rng, messages: list[dict], oid: str, scenario: str, i: int) -> None:
+    calls = [{"name": "order_status", "arguments": {"order_id": oid}}]
+    if "refund" in scenario or "twice" in scenario:
+        amount = round(rng.uniform(10, 200), 2)
+        calls.append({"name": "refund", "arguments": {"order_id": oid, "amount": amount}})
+    _turn(messages, tool_calls=calls)
+    if i % 7 == 0:
+        final = f"All sorted. Confirmation emailed to customer{i}@example.com."
+    else:
+        final = "All sorted — is there anything else I can help with?"
+    _turn(messages, content=final)
+    touchstone.outcome(1.0, "resolved")
+
+
+def _escalated_episode(rng, messages: list[dict], scenario: str) -> None:
+    _turn(messages, tool_calls=[{"name": "escalate", "arguments": {"reason": scenario}}])
+    _turn(messages, content="Escalating to a human.")
+    touchstone.outcome(0.0, "escalated" if rng.random() < 0.6 else "failed")
+
+
 def run_demo(n: int = 30, seed: int = 1729) -> int:
     rng = random.Random(seed)
     for i in range(n):
@@ -89,23 +109,7 @@ def run_demo(n: int = 30, seed: int = 1729) -> int:
                 {"role": "user", "content": scenario},
             ]
             if rng.random() < 0.70:
-                calls = [{"name": "order_status", "arguments": {"order_id": oid}}]
-                if "refund" in scenario or "twice" in scenario:
-                    amount = round(rng.uniform(10, 200), 2)
-                    calls.append(
-                        {"name": "refund", "arguments": {"order_id": oid, "amount": amount}}
-                    )
-                _turn(messages, tool_calls=calls)
-                if i % 7 == 0:
-                    final = f"All sorted. Confirmation emailed to customer{i}@example.com."
-                else:
-                    final = "All sorted — is there anything else I can help with?"
-                _turn(messages, content=final)
-                touchstone.outcome(1.0, "resolved")
+                _resolved_episode(rng, messages, oid, scenario, i)
             else:
-                _turn(
-                    messages, tool_calls=[{"name": "escalate", "arguments": {"reason": scenario}}]
-                )
-                _turn(messages, content="Escalating to a human.")
-                touchstone.outcome(0.0, "escalated" if rng.random() < 0.6 else "failed")
+                _escalated_episode(rng, messages, scenario)
     return n
