@@ -15,6 +15,7 @@ from pathlib import Path
 import tomli_w
 
 from .checks import SAFETY_KINDS, Check, Target, evaluate
+from .messages import text_of
 
 
 def policies_path(root: str | Path) -> Path:
@@ -56,7 +57,7 @@ def gate_check(check: Check, reference: dict, messages: list[dict], failure: boo
         return check.kind in SAFETY_KINDS
     if check.kind in SAFETY_KINDS:
         return True
-    target = Target(output_text=reference.get("content") or "",
+    target = Target(output_text=text_of(reference),
                     tool_calls=reference.get("tool_calls") or [], messages=messages,
                     reference=reference)
     result = evaluate([check], target)[0]

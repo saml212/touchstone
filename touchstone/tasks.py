@@ -24,6 +24,7 @@ from pathlib import Path
 import tomli_w
 
 from .checks import Check, Target, evaluate, passes
+from .messages import text_of
 
 _CHECKS_SRC = Path(__file__).resolve().parent / "checks"
 PRESERVE_SOURCES = frozenset({"interview", "manual"})
@@ -91,7 +92,7 @@ def _reward(checks: list[Check], output_text: str, tool_calls: list[dict], refer
 def gate(task: Task) -> tuple[str, str]:
     """(status, reason): a task counts only if its reference scores 1 and an empty reply 0."""
     ref = task.reference or {"content": "", "tool_calls": []}
-    content = ref.get("content") or ""
+    content = text_of(ref)
     calls = ref.get("tool_calls") or []
     if _reward(task.checks, content, calls, ref) < 1.0:
         return "rejected", "oracle: the reference does not satisfy its own hard checks"
@@ -146,20 +147,16 @@ def _task_toml(task: Task) -> str:
     return tomli_w.dumps(doc)
 
 
-def _content(value) -> str:
-    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-
-
 def _instruction_md(task: Task) -> str:
     messages = (task.context or {}).get("messages", [])
     tools = (task.context or {}).get("tools") or []
     lines = [f"# {task.name}", ""]
     systems = [m for m in messages if m.get("role") == "system"]
     if systems:
-        lines += ["## System", *(_content(m.get("content")) for m in systems), ""]
+        lines += ["## System", *(text_of(m) for m in systems), ""]
     convo = [m for m in messages if m.get("role") != "system"]
     if convo:
-        turns = [f"**{m.get('role', 'user')}:** {_content(m.get('content'))}" for m in convo]
+        turns = [f"**{m.get('role', 'user')}:** {text_of(m)}" for m in convo]
         lines += ["## Conversation so far", *turns, ""]
     if tools:
         lines += ["## Tools available (JSON schemas)", "```json",

@@ -152,3 +152,22 @@ def test_verify_subprocess_scores_reference_and_nop(tmp_path):
     ref = json.loads((d / "reference.json").read_text())
     assert _run_verify(d, ref, tmp_path / "a") == "1.0"
     assert _run_verify(d, {"content": "", "tool_calls": []}, tmp_path / "b") == "0.0"
+
+
+def test_instruction_renders_multimodal_parts_as_markers(tmp_path):
+    task = _task(
+        context={"messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "what is in this"},
+                {"type": "image", "image_url": "http://x/p.png"}]}],
+                 "tools": []},
+        reference={"content": "a cat", "tool_calls": []},
+        checks=[Check(kind="contains", params={"values": ["cat"], "mode": "any"},
+                      name="mentions cat", rule="says cat", severity="hard", source="policy",
+                      because="ref does")],
+    )
+    d = tasks.write_task(tmp_path, task)
+    instruction = (d / "instruction.md").read_text()
+    assert "what is in this" in instruction and "[image]" in instruction
+    # the text-based check still passes the reference gate through text_of
+    assert tasks.read_task(d).status == "active"

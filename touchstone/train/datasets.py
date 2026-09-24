@@ -28,6 +28,7 @@ from .. import store
 from .. import tasks as tasks_mod
 from ..bench import benchmark
 from ..checks import Check, Target, evaluate, passes
+from ..messages import text_of
 
 
 @dataclass
@@ -77,7 +78,7 @@ def _reference_passes(task: tasks_mod.Task) -> bool:
     if not checks:
         return True
     ref = task.reference or {}
-    target = Target(output_text=ref.get("content") or "",
+    target = Target(output_text=text_of(ref),
                     tool_calls=ref.get("tool_calls") or [], reference=ref)
     return passes(evaluate(checks, target), checks)
 
