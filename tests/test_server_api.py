@@ -59,6 +59,7 @@ def test_overview_counts_match_files(db):
     assert o["spans"] == 2
     assert o["checks"] == {"total": 1, "enabled": 1, "by_source": {"manual": 1}}
     assert o["tasks"]["total"] == 2 and o["benchmarks"] == 1 and o["runs"] == 0
+    assert set(o["tasks"]["by_status"]) == {"active", "needs_checks", "needs_solution"}
     assert o["rooms"] == {"total": 0, "open": 0}
     assert ids
 
@@ -306,3 +307,11 @@ def test_distill_endpoint_packages_frontier(db):
     body = r.json()
     assert "frontier" in body and "plan" in body and body["backend"] == "null"
     assert c.get("/api/loop/demo").json()["student"] == "scripted"
+
+
+def test_teach_task_endpoint(db):
+    _seed(db)
+    c = _client(db)
+    r = c.post("/api/tasks/t1/teach", json={})
+    assert r.status_code == 200 and "status" in r.json() and "teacher" in r.json()
+    assert c.post("/api/tasks/nope/teach", json={}).status_code == 404

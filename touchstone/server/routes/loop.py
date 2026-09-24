@@ -80,3 +80,18 @@ def get_loop_state(benchmark: str, root=Depends(get_root)) -> dict:
     from ...loop import read_loop_state
 
     return read_loop_state(root, benchmark)
+
+
+@router.post("/api/tasks/{name}/teach")
+def teach_task(name: str, request: Request, conn=Depends(get_conn),
+               root=Depends(get_root)) -> dict:
+    """Ask the teacher for a verified reply to one task (adopts it as the oracle if needed)."""
+    from ... import tasks as tasks_mod
+    from ...loop import teach
+
+    if tasks_mod.get_task(root, name) is None:
+        raise HTTPException(404, f"no task {name!r}")
+    result = teach(conn, root, [name], settings=request.app.state.settings)
+    task = tasks_mod.get_task(root, name)
+    return {"accepted": name in result["accepted"], "status": task.status,
+            "teacher": result["teacher"]}

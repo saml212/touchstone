@@ -99,11 +99,19 @@ function nextStep(o) {
     return `You have episodes but no checks. ${link("/checks", "Mine or add checks")} to describe what good looks like.`;
   if (!o.checks.enabled)
     return `Checks exist but none are enabled. ${link("/checks", "Enable a check")} so it gates the benchmark.`;
+  const queues = (o.tasks && o.tasks.by_status) || {};
+  if (queues.needs_solution || queues.needs_checks) {
+    const biggest = (queues.needs_solution || 0) >= (queues.needs_checks || 0) ? "needs_solution" : "needs_checks";
+    const hint = biggest === "needs_solution"
+      ? `${queues.needs_solution} task(s) need a solution — open ${link("/tasks", "Tasks")} and ask a teacher, or record one.`
+      : `${queues.needs_checks} task(s) need a check — open ${link("/tasks", "Tasks")} and interview to say what good looks like.`;
+    return hint;
+  }
   if (!o.benchmarks)
-    return `Ready to prove a model. ${link("/benchmarks", "Create a benchmark")} from your tasks.`;
+    return `Ready to prove a model. ${link("/benchmarks", "Create a benchmark")} from your active tasks.`;
   if (!o.runs)
-    return `Benchmark ready. ${link("/benchmarks", "Run a model")} against it.`;
-  return `You're set. Compare runs on the ${link("/benchmarks", "Benchmarks")} page.`;
+    return `Benchmark ready. ${link("/benchmarks", "Sample a candidate model")} against it.`;
+  return `You're set. Sample and Distill on the ${link("/benchmarks", "Benchmarks")} page.`;
 }
 
 // ---- episodes --------------------------------------------------------------
@@ -245,17 +253,55 @@ function tryDrawer(id) {
 
 // ---- tasks -----------------------------------------------------------------
 
+const TASK_QUEUES = [
+  ["active", "ready for benchmarks", ""],
+  ["needs_checks", "an empty reply already passes — add a check that measures the work", "Interview"],
+  ["needs_solution", "the recorded reply fails its own checks — supply a passing one", "Ask teacher"],
+];
+
 async function tasksPage(args) {
   if (args[0]) return taskDetail(args[0]);
-  const { tasks, total } = await api("/api/tasks?limit=200");
-  const rows = tasks.map((t) => [
-    link(`/tasks/${t.name}`, t.name),
-    (t.tags || []).map((x) => badge(x)).join(" "),
-    esc(t.check_count),
-    t.status === "active" ? badge("active", "outcome") : badge("rejected"),
-  ]);
-  view.innerHTML = `<h2>Tasks <span class="count">${total}</span></h2>` +
-    (rows.length ? table(["name", "tags", "checks", "status"], rows) : `<p class="muted">No tasks yet — run mine to cut replay tasks.</p>`);
+  const { tasks, total } = await api("/api/tasks?limit=500");
+  if (!total) {
+    view.innerHTML = `<h2>Tasks</h2><p class="muted">No tasks yet — run mine to cut replay tasks.</p>`;
+    return;
+  }
+  const sections = TASK_QUEUES.map(([status, hint, action]) => {
+    const group = tasks.filter((t) => t.status === status);
+    const rows = group.map((t) => [
+      link(`/tasks/${t.name}`, t.name),
+      (t.tags || []).map((x) => badge(x)).join(" "),
+      esc(t.check_count),
+      action ? `<button class="ghost" data-${status}="${esc(t.name)}">${action}</button>` : "",
+    ]);
+    return `<h3>${status} <span class="count">${group.length}</span></h3>
+      <p class="muted">${hint}</p>` +
+      (rows.length ? table(["name", "tags", "checks", ""], rows) : `<p class="muted">none</p>`);
+  }).join("");
+  view.innerHTML = `<h2>Tasks <span class="count">${total}</span></h2>${sections}`;
+  wireTaskActions();
+}
+
+function wireTaskActions() {
+  view.querySelectorAll("[data-needs_checks]").forEach((b) => {
+    b.onclick = () => startInterview(b.dataset.needs_checks);
+  });
+  view.querySelectorAll("[data-needs_solution]").forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true;
+      b.textContent = "asking…";
+      try {
+        const r = await api(`/api/tasks/${encodeURIComponent(b.dataset.needs_solution)}/teach`, "POST", {});
+        if (r.accepted && r.status === "active") render();
+        else { b.disabled = false; b.textContent = "Ask teacher"; alert(`Teacher (${r.teacher}) could not produce a passing reply.`); }
+      } catch (e) { b.disabled = false; b.textContent = "Ask teacher"; alert(e.message); }
+    };
+  });
+}
+
+async function startInterview(taskName) {
+  const room = await api("/api/rooms", "POST", { task_id: taskName, topic: `review of ${taskName}` });
+  location.href = `/rooms/${room.room.id}`;
 }
 
 async function taskDetail(id) {
@@ -300,7 +346,7 @@ async function benchmarksPage() {
     api("/api/benchmarks"), api("/api/runs"), api("/api/tasks?limit=1"),
   ]);
   const benchRows = benchmarks.map((b) => [
-    esc(b.name), esc(b.task_count), runForm(b),
+    esc(b.name), esc(b.task_count), loopForm(b),
   ]);
   const runRows = runs.map((r) => [
     `<code>${esc(r.id.slice(-8))}</code>`, esc(r.model_spec),
@@ -313,22 +359,72 @@ async function benchmarksPage() {
         <label>tags (comma-sep, blank = all) <input id="bm-tags" placeholder="failure"></label>
         <button id="bm-save">Create</button><span id="bm-msg" class="msg-inline"></span>
       </div></details>
-    ${benchmarks.length ? table(["benchmark", "tasks", "run a model"], benchRows) : `<p class="muted">No benchmarks — create one${tasks.total ? "" : " after mining tasks"}.</p>`}
+    ${benchmarks.length ? table(["benchmark", "tasks", "run / sample / distill"], benchRows) : `<p class="muted">No benchmarks — create one${tasks.total ? "" : " after mining tasks"}.</p>`}
+    <div id="loop-out"></div>
     <h3>Runs</h3>
     ${runs.length ? table(["run", "model", "progress"], runRows) : `<p class="muted">No runs yet.</p>`}
     ${proofPanel(runs)}`;
 
   document.getElementById("bm-save").onclick = createBenchmark;
-  view.querySelectorAll("[data-runbm]").forEach((f) => { f.onsubmit = startRun; });
+  wireLoopForms();
   document.getElementById("proof-go").onclick = showProof;
   pollRuns(runs);
 }
 
-function runForm(b) {
-  return `<form data-runbm="${esc(b.name)}" class="runform">
-    <input name="model" placeholder="scripted" required>
-    <input name="conc" type="number" min="1" value="4" title="concurrency">
-    <button>Run</button></form>`;
+function loopForm(b) {
+  return `<form data-bench="${esc(b.name)}" class="runform">
+    <input name="model" placeholder="scripted" required title="student / candidate model">
+    <input name="teacher" placeholder="teacher (optional)" title="teacher spec">
+    <input name="variants" type="number" min="1" value="1" title="variants per failing task">
+    <button data-act="run">Run</button>
+    <button data-act="sample">Sample</button>
+    <button data-act="distill">Distill</button>
+  </form>`;
+}
+
+function wireLoopForms() {
+  view.querySelectorAll("form[data-bench]").forEach((form) => {
+    form.querySelectorAll("button[data-act]").forEach((btn) => {
+      btn.onclick = (ev) => { ev.preventDefault(); loopAction(form, btn.dataset.act); };
+    });
+  });
+}
+
+async function loopAction(form, act) {
+  const bench = form.dataset.bench;
+  const model = form.model.value.trim();
+  if (!model) { alert("enter a student / model spec"); return; }
+  if (act === "run") return startRun2(bench, model);
+  const out = document.getElementById("loop-out");
+  out.innerHTML = `<div class="loading">${act === "sample" ? "Sampling" : "Distilling"}…</div>`;
+  const body = { target: bench, student: model, teacher: form.teacher.value.trim() || undefined };
+  if (act === "sample") body.variants = Number(form.variants.value) || 1;
+  try {
+    const r = await api(`/api/${act}`, "POST", body);
+    out.innerHTML = act === "sample" ? sampleResult(r) : distillResult(r);
+  } catch (e) { out.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+
+async function startRun2(bench, model) {
+  try { await api("/api/runs", "POST", { target: bench, model_spec: model }); render(); }
+  catch (e) { alert(e.message); }
+}
+
+function sampleResult(r) {
+  const s = r.frontier_split;
+  const list = r.frontier.map((t) => `<li>${esc(t)}</li>`).join("");
+  return `<div class="panel"><strong>Sample — ${esc(r.student)} on ${esc(r.benchmark)}</strong>
+    <p class="muted">teacher ${esc(r.teacher)} · ${r.variants_created.length} variant(s) created ·
+      frontier ${r.frontier.length} (${s.learnability.length} learnable, ${s.only_incumbent.length} only-incumbent)</p>
+    <ul>${list || `<li class="muted">frontier is empty — the student matches the incumbent</li>`}</ul></div>`;
+}
+
+function distillResult(r) {
+  return `<div class="panel"><strong>Distill — ${esc(r.student)} on ${esc(r.benchmark)}</strong>
+    <p class="muted">frontier ${r.frontier.length} · teacher demos ${r.demos.length} · backend ${esc(r.backend)} (${esc(r.status)})</p>
+    ${r.out_dir ? `<p>datasets in <code>${esc(r.out_dir)}</code></p>` : ""}
+    ${r.escalated && r.escalated.length ? `<p class="muted">escalated to rooms: ${r.escalated.map(esc).join(", ")}</p>` : ""}
+    <p>${esc(r.plan)}</p></div>`;
 }
 
 async function createBenchmark() {
@@ -338,18 +434,6 @@ async function createBenchmark() {
   if (tags.length) body.tags = tags; else body.all = true;
   try { await api("/api/benchmarks", "POST", body); render(); }
   catch (e) { msg.textContent = e.message; }
-}
-
-async function startRun(ev) {
-  ev.preventDefault();
-  const form = ev.currentTarget;
-  const body = {
-    target: form.dataset.runbm,
-    model_spec: form.model.value.trim(),
-    concurrency: Number(form.conc.value) || 4,
-  };
-  try { await api("/api/runs", "POST", body); render(); }
-  catch (e) { alert(e.message); }
 }
 
 function pollRuns(runs) {
@@ -392,8 +476,28 @@ async function trainPage() {
       <label>benchmark <select id="tr-bench">${opts}</select></label>
       <button id="tr-prepare">Prepare datasets</button>
     </div>
+    <div id="tr-loop"></div>
     <div id="tr-out"></div>`;
   document.getElementById("tr-prepare").onclick = trainPrepare;
+  document.getElementById("tr-bench").onchange = showLoopState;
+  showLoopState();
+}
+
+async function showLoopState() {
+  const bench = document.getElementById("tr-bench").value;
+  const box = document.getElementById("tr-loop");
+  try {
+    const s = await api(`/api/loop/${encodeURIComponent(bench)}`);
+    if (!s || (s.last_sample === undefined && s.last_distill === undefined)) {
+      box.innerHTML = `<p class="muted">No Sample/Distill loop run yet for <code>${esc(bench)}</code> — start one on the Benchmarks page.</p>`;
+      return;
+    }
+    const stamp = (t) => (t ? esc(String(t).slice(0, 19).replace("T", " ")) : "—");
+    box.innerHTML = `<div class="panel">
+      <strong>Loop</strong>
+      <p class="muted">frontier ${esc(s.frontier_size ?? "—")} task(s) · student ${esc(s.student || "—")}</p>
+      <p class="muted">last Sample: ${stamp(s.last_sample)} · last Distill: ${stamp(s.last_distill)}</p></div>`;
+  } catch (e) { box.innerHTML = ""; }
 }
 
 async function trainPrepare() {
