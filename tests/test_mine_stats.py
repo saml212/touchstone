@@ -126,3 +126,12 @@ def test_json_schema_proposed_when_good_outputs_are_json(conn):
     props = mine_stats(conn, store.list_episodes(conn))
     schema = next(p for p in props if p.kind == "json_schema")
     assert set(schema.params["schema"]["required"]) == {"status", "id"}
+
+
+def test_state_assertions_name_argument_fields_not_the_call_wrapper(demo_db):
+    conn = demo_db()
+    proposals = [p for p in mine_stats(conn, store.list_episodes(conn)) if p.kind == "expr"]
+    assert proposals
+    for p in proposals:
+        assert "'name'" not in p.rationale and "'arguments'" not in p.rationale
+        assert "order_id" in p.params["expr"] or "amount" in p.params["expr"]

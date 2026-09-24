@@ -133,9 +133,10 @@ def _episode_tool_calls(spans: list[store.Span]) -> list[dict]:
                 messages.append(out)
             calls.update(_tool_calls_from_messages(messages))
         elif span.kind == "tool":  # an extra source when the app decorated its tools
-            calls.setdefault(span.id, {
+            args = (span.input or {}).get("arguments", {})
+            calls.setdefault(span.tool_call_id or span.id, {
                 "id": span.tool_call_id, "name": span.name,
-                "arguments": json.dumps(span.input or {}, ensure_ascii=False)})
+                "arguments": json.dumps(args, ensure_ascii=False)})
     return list(calls.values())
 
 
