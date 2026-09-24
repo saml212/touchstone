@@ -45,6 +45,10 @@ def _args_obj(value) -> dict:
     return parsed if isinstance(parsed, dict) else {"input": parsed}
 
 
+def _text_part(part) -> str:
+    return (part.get("text") or part.get("content") or "") if isinstance(part, dict) else str(part)
+
+
 def _text(content) -> str:
     """Flatten content (str, content-parts list, or blocks) into a single string."""
     if content is None:
@@ -52,13 +56,7 @@ def _text(content) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = []
-        for part in content:
-            if isinstance(part, dict):
-                parts.append(part.get("text") or part.get("content") or "")
-            else:
-                parts.append(str(part))
-        return "\n".join(p for p in parts if p)
+        return "\n".join(p for p in (_text_part(x) for x in content) if p)
     return json.dumps(content, ensure_ascii=False)
 
 
@@ -76,37 +74,46 @@ def _tool_message(tool_call_id, name, content) -> dict:
     return msg
 
 
+def _split_content_list(content: list) -> tuple[list[str], list[dict], list[dict]]:
+    """A content-parts / block list -> (texts, Anthropic tool_use calls, tool_result messages)."""
+    texts: list[str] = []
+    tool_calls: list[dict] = []
+    tool_results: list[dict] = []
+    for part in content:
+        if not isinstance(part, dict):
+            texts.append(str(part))
+        elif part.get("type") == "tool_use":  # Anthropic assistant tool call
+            tool_calls.append({"id": part.get("id"), "name": part.get("name"),
+                               "arguments": _args_str(part.get("input"))})
+        elif part.get("type") == "tool_result":  # Anthropic tool result (inside a user turn)
+            tool_results.append(_tool_message(part.get("tool_use_id"), None, part.get("content")))
+        else:
+            texts.append(part.get("text") or part.get("content") or "")
+    return texts, tool_calls, tool_results
+
+
 def _canonical_one(msg: dict) -> list[dict]:
     role = msg.get("role", "user")
     content = msg.get("content")
     if role == "tool":
         return [_tool_message(msg.get("tool_call_id"), msg.get("name"), content)]
 
-    texts: list[str] = []
-    tool_calls: list[dict] = []
-    tool_results: list[dict] = []
     if isinstance(content, list):
-        for part in content:
-            if not isinstance(part, dict):
-                texts.append(str(part))
-                continue
-            btype = part.get("type")
-            if btype == "tool_use":  # Anthropic assistant tool call
-                tool_calls.append({"id": part.get("id"), "name": part.get("name"),
-                                   "arguments": _args_str(part.get("input"))})
-            elif btype == "tool_result":  # Anthropic tool result (inside a user turn)
-                tool_results.append(_tool_message(part.get("tool_use_id"), None,
-                                                  part.get("content")))
-            else:
-                texts.append(part.get("text") or part.get("content") or "")
+        texts, tool_calls, tool_results = _split_content_list(content)
     elif isinstance(content, str):
-        texts.append(content)
+        texts, tool_calls, tool_results = [content], [], []
     elif content is not None:
-        texts.append(json.dumps(content, ensure_ascii=False))
+        texts, tool_calls, tool_results = [json.dumps(content, ensure_ascii=False)], [], []
+    else:
+        texts, tool_calls, tool_results = [], [], []
 
     for tc in msg.get("tool_calls") or []:
         tool_calls.append(_norm_tool_call(tc))
+    return _assemble(role, texts, tool_calls, tool_results)
 
+
+def _assemble(role: str, texts: list[str], tool_calls: list[dict],
+              tool_results: list[dict]) -> list[dict]:
     out = list(tool_results)
     joined = "\n".join(t for t in texts if t)
     if joined or tool_calls or not tool_results:
@@ -117,7 +124,7 @@ def _canonical_one(msg: dict) -> list[dict]:
     return out
 
 
-def _assign_ids(messages: list[dict]) -> None:
+def _fill_call_ids(messages: list[dict]) -> None:
     n = 0
     for msg in messages:
         for tc in msg.get("tool_calls") or []:
@@ -125,26 +132,41 @@ def _assign_ids(messages: list[dict]) -> None:
                 n += 1
                 tc["id"] = f"call_{n}"
 
+
+def _link_one(msg: dict, pending: list[list]) -> None:
+    idx = _match_pending(pending, msg.get("name"))
+    if idx is not None:
+        msg["tool_call_id"] = pending[idx][0]
+        pending[idx][2] = True
+
+
+def _link_tool_messages(messages: list[dict]) -> None:
     pending: list[list] = []  # [id, name, consumed]
     for msg in messages:
         if msg["role"] == "assistant" and msg.get("tool_calls"):
             pending = [[tc["id"], tc.get("name"), False] for tc in msg["tool_calls"]]
         elif msg["role"] == "tool" and not msg.get("tool_call_id"):
-            idx = _match_pending(pending, msg.get("name"))
-            if idx is not None:
-                msg["tool_call_id"] = pending[idx][0]
-                pending[idx][2] = True
+            _link_one(msg, pending)
+
+
+def _assign_ids(messages: list[dict]) -> None:
+    _fill_call_ids(messages)
+    _link_tool_messages(messages)
+
+
+def _first_unused(pending: list[list], predicate) -> int | None:
+    for i, entry in enumerate(pending):
+        if not entry[2] and predicate(entry):
+            return i
+    return None
 
 
 def _match_pending(pending: list[list], name) -> int | None:
     if name:
-        for i, (_id, cname, used) in enumerate(pending):
-            if not used and cname == name:
-                return i
-    for i, (_id, _cname, used) in enumerate(pending):
-        if not used:
-            return i
-    return None
+        idx = _first_unused(pending, lambda entry: entry[1] == name)
+        if idx is not None:
+            return idx
+    return _first_unused(pending, lambda entry: True)
 
 
 def canonical(messages: list[dict]) -> list[dict]:
@@ -179,30 +201,39 @@ def to_openai(messages: list[dict]) -> list[dict]:
     return out
 
 
+def _anthropic_blocks(msg: dict) -> list[dict]:
+    """The content + tool_use blocks for one non-system, non-tool canonical message."""
+    blocks: list[dict] = []
+    if msg.get("content"):
+        blocks.append({"type": "text", "text": msg["content"]})
+    for tc in msg.get("tool_calls") or []:
+        blocks.append({"type": "tool_use", "id": tc["id"], "name": tc["name"],
+                       "input": _args_obj(tc["arguments"])})
+    return blocks
+
+
+def _add_anthropic_message(msg: dict, systems: list[str], turns: list[dict]) -> None:
+    role = msg["role"]
+    if role == "system":
+        if msg.get("content"):
+            systems.append(msg["content"])
+    elif role == "tool":
+        block = {"type": "tool_result",
+                 "tool_use_id": msg.get("tool_call_id") or msg.get("name") or "",
+                 "content": msg.get("content", "")}
+        _append_turn(turns, "user", [block])
+    else:
+        blocks = _anthropic_blocks(msg)
+        if blocks:
+            _append_turn(turns, role, blocks)
+
+
 def to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
     """Canonical messages -> (system_text, Anthropic wire messages)."""
     systems: list[str] = []
     turns: list[dict] = []
     for msg in canonical(messages):
-        role = msg["role"]
-        if role == "system":
-            if msg.get("content"):
-                systems.append(msg["content"])
-            continue
-        if role == "tool":
-            block = {"type": "tool_result",
-                     "tool_use_id": msg.get("tool_call_id") or msg.get("name") or "",
-                     "content": msg.get("content", "")}
-            _append_turn(turns, "user", [block])
-            continue
-        blocks: list[dict] = []
-        if msg.get("content"):
-            blocks.append({"type": "text", "text": msg["content"]})
-        for tc in msg.get("tool_calls") or []:
-            blocks.append({"type": "tool_use", "id": tc["id"], "name": tc["name"],
-                           "input": _args_obj(tc["arguments"])})
-        if blocks:
-            _append_turn(turns, role, blocks)
+        _add_anthropic_message(msg, systems, turns)
     return "\n\n".join(systems), turns
 
 
