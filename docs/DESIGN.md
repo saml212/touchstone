@@ -102,6 +102,10 @@ over `output`, `tools`, `reference`), `judge` (LLM rubric; soft by default; need
 reported as `skipped` when none).
 Result: `CheckResult(check_id, passed: bool|None, evidence: str)`. A task passes when every enabled hard
 check passes and no hard check errored. Soft checks are reported, never gate.
+`regex`/`not_regex`/`tool_called.arguments_match` patterns are guarded against catastrophic
+backtracking: a quantified group whose body itself repeats unboundedly (e.g. `(a+)+`, `([a-z]+)*`) is
+rejected at validation and refused (errored result) at evaluation, so a pathological pattern can never
+hang the engine.
 
 ## Mining
 

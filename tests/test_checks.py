@@ -300,3 +300,45 @@ def test_validate_params_accepts_good():
 def test_check_result_shape():
     r = CheckResult(check_id="c", passed=None, evidence="e")
     assert (r.check_id, r.passed, r.evidence) == ("c", None, "e")
+
+
+# ---- catastrophic regex guard ----------------------------------------------
+
+
+def _eval_within(check, target, seconds=3.0):
+    import threading
+
+    out = []
+    t = threading.Thread(target=lambda: out.append(evaluate([check], target)), daemon=True)
+    t.start()
+    t.join(seconds)
+    if t.is_alive():
+        pytest.fail("regex evaluation did not terminate (catastrophic backtracking)")
+    return out[0][0]
+
+
+@pytest.mark.parametrize("pattern", ["(a+)+$", "(a*)*$", "([a-z]+)+$", r"(\w+)+$", "((a+))+$"])
+def test_validate_rejects_catastrophic_regex(pattern):
+    with pytest.raises(ValueError, match="catastrophic|nested quantifier"):
+        validate_params("regex", {"pattern": pattern})
+    with pytest.raises(ValueError):
+        validate_params("not_regex", {"pattern": pattern})
+
+
+def test_validate_allows_safe_repetition_patterns():
+    validate_params("regex", {"pattern": r"(\d{3})+"})
+    validate_params("regex", {"pattern": r"(ab){2,5}"})
+    validate_params("regex", {"pattern": r"[a-z]+@[a-z]+\.[a-z]+"})
+
+
+def test_catastrophic_regex_does_not_hang_at_eval():
+    check = Check(kind="regex", params={"pattern": "(a+)+$"}, id="x")
+    target = Target(output_text="a" * 60 + "!")
+    result = _eval_within(check, target)
+    assert result.passed is None
+    assert "regex" in result.evidence.lower()
+
+
+def test_validate_rejects_catastrophic_arguments_match_regex():
+    with pytest.raises(ValueError):
+        validate_params("tool_called", {"name": "t", "arguments_match": {"x": {"regex": "(a+)+$"}}})

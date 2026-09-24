@@ -32,6 +32,71 @@ APPLIES_TO = frozenset({"final", "any_turn", "tool_calls"})
 SEVERITIES = frozenset({"hard", "soft"})
 
 
+def is_catastrophic_regex(pattern: str) -> bool:
+    """True when `pattern` has a quantified group whose body itself repeats unboundedly
+    (e.g. `(a+)+`, `([a-z]+)*`), the signature of exponential backtracking that can hang the
+    engine. Only `*`, `+`, and open-ended `{m,}` count as unbounded; `{m,n}` and `{k}` do not."""
+    stack: list[bool] = []
+    i, n = 0, len(pattern)
+
+    def open_ended_brace(k: int) -> tuple[bool, int]:
+        j = k + 1
+        while j < n and pattern[j] != "}":
+            j += 1
+        parts = pattern[k + 1 : j].split(",")
+        return len(parts) == 2 and parts[1].strip() == "", j + 1
+
+    while i < n:
+        c = pattern[i]
+        if c == "\\":
+            i += 2
+        elif c == "[":
+            i += 1
+            i += 1 if i < n and pattern[i] == "^" else 0
+            i += 1 if i < n and pattern[i] == "]" else 0
+            while i < n and pattern[i] != "]":
+                i += 2 if pattern[i] == "\\" else 1
+            i += 1
+        elif c == "(":
+            stack.append(False)
+            i += 1
+        elif c == ")":
+            body_has = stack.pop() if stack else False
+            j = i + 1
+            quantified = j < n and (
+                pattern[j] in "*+" or (pattern[j] == "{" and open_ended_brace(j)[0])
+            )
+            if quantified and body_has:
+                return True
+            if stack and (body_has or quantified):
+                stack[-1] = True
+            i += 1
+        elif c in "*+":
+            if stack:
+                stack[-1] = True
+            i += 1
+        elif c == "{":
+            open_ended, after = open_ended_brace(i)
+            if open_ended and stack:
+                stack[-1] = True
+            i = after
+        else:
+            i += 1
+    return False
+
+
+def _require_safe_regex(pattern: str) -> None:
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"invalid regex: {exc}") from exc
+    if is_catastrophic_regex(pattern):
+        raise ValueError(
+            f"regex {pattern!r} has a nested quantifier prone to catastrophic backtracking; "
+            "rewrite without a repeated group that itself repeats (e.g. avoid '(a+)+')"
+        )
+
+
 @dataclass
 class Target:
     """What a check is evaluated against."""
@@ -128,18 +193,19 @@ def validate_params(kind: str, params: dict) -> None:
             raise ValueError("'mode' must be 'any' or 'all'")
     elif kind in ("regex", "not_regex"):
         _require_str(params, "pattern")
-        try:
-            re.compile(params["pattern"])
-        except re.error as exc:
-            raise ValueError(f"invalid regex: {exc}") from exc
+        _require_safe_regex(params["pattern"])
     elif kind == "json_schema":
         if not isinstance(params.get("schema"), dict):
             raise ValueError("'schema' must be a JSON object")
     elif kind == "tool_called":
         _require_str(params, "name")
         matcher = params.get("arguments_match")
-        if matcher is not None and not isinstance(matcher, dict):
-            raise ValueError("'arguments_match' must be an object of field matchers")
+        if matcher is not None:
+            if not isinstance(matcher, dict):
+                raise ValueError("'arguments_match' must be an object of field matchers")
+            for expected in matcher.values():
+                if isinstance(expected, dict) and "regex" in expected:
+                    _require_safe_regex(str(expected["regex"]))
     elif kind == "tool_not_called":
         _require_str(params, "name")
     elif kind == "tool_order":

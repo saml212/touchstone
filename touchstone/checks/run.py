@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import jsonschema
 from simpleeval import SimpleEval
 
-from .dsl import Target
+from .dsl import Target, is_catastrophic_regex
 
 
 @dataclass
@@ -72,11 +72,15 @@ def _not_contains(params, target):
 
 
 def _regex(params, target):
+    if is_catastrophic_regex(params["pattern"]):
+        return None, "regex rejected: nested quantifier risks catastrophic backtracking"
     m = re.search(params["pattern"], target.output_text)
     return bool(m), f"matched {m.group()!r}" if m else "pattern not found"
 
 
 def _not_regex(params, target):
+    if is_catastrophic_regex(params["pattern"]):
+        return None, "regex rejected: nested quantifier risks catastrophic backtracking"
     m = re.search(params["pattern"], target.output_text)
     return m is None, "clean" if m is None else f"matched {m.group()!r}"
 
@@ -110,6 +114,8 @@ def _arg_matches(raw, matcher) -> bool:
     raw_str = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
     for key, expected in matcher.items():
         is_regex = isinstance(expected, dict) and "regex" in expected
+        if is_regex and is_catastrophic_regex(str(expected["regex"])):
+            return False
         if parsed is not None and key in parsed:
             actual = parsed[key]
             if is_regex:
