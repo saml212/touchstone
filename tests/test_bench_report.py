@@ -84,4 +84,7 @@ def test_benchmark_from_tags_and_explicit_ids(traced):
     assert by_ids.task_ids == [tasks[0].id, tasks[1].id]  # bogus dropped
     tagged = benchmark.create(conn, "resolved", tags=["resolved"])
     assert all("resolved" in (store.get_task(conn, tid).tags or []) for tid in tagged.task_ids)
+
+    assert benchmark.get(conn, by_ids.id).name == "two"
+    assert {b.id for b in benchmark.list_benchmarks(conn)} == {by_ids.id, tagged.id}
     conn.close()
