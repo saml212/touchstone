@@ -1,6 +1,8 @@
 from .codebase import Snippet, scan_codebase
 from .cut import build_tasks
-from .miner import Proposal, dedupe, mine, mine_llm, mine_stats, sync
+from .llm import mine_llm
+from .miner import dedupe, mine, sync
+from .stats import Proposal, mine_stats
 
 __all__ = [
     "Snippet",

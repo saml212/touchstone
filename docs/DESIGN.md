@@ -56,8 +56,8 @@ touchstone/
   tasks.py          read/write task directories — the authored source of truth; the work-queue gate
   policies.py       checks.toml policies + materialize() with the reference gate
   _verify.py        vendored into each task's tests/verify.py (reads checks from task.toml)
-  mine/             miner.py (statistical + LLM proposals + orchestrate), cut.py (episode -> Task),
-                    codebase.py (find prompts / tool schemas in a repo)
+  mine/             stats.py (statistical proposals), llm.py (LLM proposals), miner.py (orchestrate),
+                    cut.py (episode -> Task), codebase.py (find prompts / tool schemas in a repo)
   interview/        rooms.py (state + Hub), agent.py (question policy -> checks in files),
                     speech.py (STT/TTS), realtime.py (OpenAI Realtime bridge)
   bench/            benchmark.py (resolve benchmarks/<name>.toml), runner.py, report.py, harbor_run.py,
@@ -177,10 +177,10 @@ pattern can never hang the engine.
 Input: episodes (optionally filtered/limited) + optional `--code <path>`. Ranked, verifiable-first,
 each proposal stamped with `confidence`: (1) tool-call correctness against recorded tool results;
 (2) state assertions from tool outputs; (3) schema validity; (4) recorded business outcome;
-(5) deterministic string rules; (6) judge rubrics (last, soft, sampled). The no-LLM ranks are pure
-statistics; the LLM pass prompts the `agent_provider` (default `claude-cli`) for DSL proposals with
-rationale and drops invalid ones with a logged reason; `cut.py` turns every recorded assistant turn
-into a replay task directory (`<episode-slug>-turn-<n>`).
+(5) deterministic string rules; (6) judge rubrics (last, soft, sampled). `mine/stats.py` does the
+no-LLM ranks; `mine/llm.py` prompts the `agent_provider` (default `claude-cli`) for DSL proposals
+with rationale and drops invalid ones with a logged reason; `mine/miner.py` orchestrates; `cut.py`
+turns every recorded assistant turn into a replay task directory (`<episode-slug>-turn-<n>`).
 Programmatic ranks and safety invariants are written **enabled**; statistical ranks stay disabled
 pending review. Idempotent: re-mining does not duplicate policies and task names are stable.
 
