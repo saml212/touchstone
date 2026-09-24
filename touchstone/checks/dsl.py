@@ -97,6 +97,23 @@ def _require_int(params: dict, key: str) -> None:
         raise ValueError(f"'{key}' must be an integer")
 
 
+PARAM_SPEC = {
+    "contains": '{"values": [str, ...], "mode": "any|all"}',
+    "not_contains": '{"values": [str, ...], "mode": "any|all"}',
+    "regex": '{"pattern": str}',
+    "not_regex": '{"pattern": str}',
+    "json_schema": '{"schema": {json schema object}}',
+    "tool_called": '{"name": str, "arguments_match": {field: value | {"regex": str}}?}',
+    "tool_not_called": '{"name": str}',
+    "tool_order": '{"order": [str, ...]}',
+    "max_length": '{"max": int}',
+    "min_length": '{"min": int}',
+    "no_pii": '{"kinds": ["email"|"phone"|"card", ...]?}',
+    "expr": '{"expr": str}  # simpleeval over output, tools, reference',
+    "judge": '{"rubric": str}',
+}
+
+
 def validate_params(kind: str, params: dict) -> None:
     """Raise ValueError with a clear message if `params` is wrong for `kind`."""
     if kind not in KINDS:

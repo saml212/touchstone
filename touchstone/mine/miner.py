@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from .. import store
 from ..checks import Check as DslCheck
 from ..checks import find_pii
+from ..checks.dsl import PARAM_SPEC
 from . import cut as cut_mod
 from .codebase import Snippet
 
@@ -48,8 +49,11 @@ class Proposal:
 
     def dsl(self) -> DslCheck:
         return DslCheck(
-            kind=self.kind, params=self.params, name=self.name,
-            applies_to=self.applies_to, severity=self.severity,
+            kind=self.kind,
+            params=self.params,
+            name=self.name,
+            applies_to=self.applies_to,
+            severity=self.severity,
         )
 
     def store_check(self) -> store.Check:
@@ -128,19 +132,37 @@ def _tool_proposals(good: list[_View], bad: list[_View]) -> list[Proposal]:
         g_frac = len(g_ids) / len(good) if good else 0.0
         b_frac = len(b_ids) / len(bad) if bad else 0.0
         if good and g_frac >= _TOOL_GOOD_FRAC and b_frac < _TOOL_BAD_FRAC:
-            out.append(Proposal(
-                kind="tool_called", params={"name": name}, applies_to="tool_calls",
-                name=f"calls {name}",
-                rationale=(f"{name} used in {g_frac:.0%} of good vs {b_frac:.0%} of bad episodes"),
-                support={"episode_ids": g_ids, "counts": {"good": len(g_ids), "bad": len(b_ids)}},
-            ))
+            out.append(
+                Proposal(
+                    kind="tool_called",
+                    params={"name": name},
+                    applies_to="tool_calls",
+                    name=f"calls {name}",
+                    rationale=(
+                        f"{name} used in {g_frac:.0%} of good vs {b_frac:.0%} of bad episodes"
+                    ),
+                    support={
+                        "episode_ids": g_ids,
+                        "counts": {"good": len(g_ids), "bad": len(b_ids)},
+                    },
+                )
+            )
         elif bad and b_frac >= _TOOL_GOOD_FRAC and g_frac < _TOOL_BAD_FRAC:
-            out.append(Proposal(
-                kind="tool_not_called", params={"name": name}, applies_to="tool_calls",
-                name=f"avoids {name}",
-                rationale=(f"{name} used in {b_frac:.0%} of bad vs {g_frac:.0%} of good episodes"),
-                support={"episode_ids": b_ids, "counts": {"good": len(g_ids), "bad": len(b_ids)}},
-            ))
+            out.append(
+                Proposal(
+                    kind="tool_not_called",
+                    params={"name": name},
+                    applies_to="tool_calls",
+                    name=f"avoids {name}",
+                    rationale=(
+                        f"{name} used in {b_frac:.0%} of bad vs {g_frac:.0%} of good episodes"
+                    ),
+                    support={
+                        "episode_ids": b_ids,
+                        "counts": {"good": len(g_ids), "bad": len(b_ids)},
+                    },
+                )
+            )
     return out
 
 
@@ -172,12 +194,18 @@ def _json_proposal(good: list[_View]) -> list[Proposal]:
     schema = {"type": "object", "properties": {k: {} for k in sorted(keys)}}
     if keys:
         schema["required"] = sorted(keys)
-    return [Proposal(
-        kind="json_schema", params={"schema": schema},
-        name="output is JSON",
-        rationale=f"{len(objs)}/{len(with_output)} good outputs parse as JSON objects",
-        support={"episode_ids": [v.episode.id for v in with_output], "counts": {"json": len(objs)}},
-    )]
+    return [
+        Proposal(
+            kind="json_schema",
+            params={"schema": schema},
+            name="output is JSON",
+            rationale=f"{len(objs)}/{len(with_output)} good outputs parse as JSON objects",
+            support={
+                "episode_ids": [v.episode.id for v in with_output],
+                "counts": {"json": len(objs)},
+            },
+        )
+    ]
 
 
 def _percentile(sorted_values: list[int], q: float) -> int:
@@ -194,13 +222,20 @@ def _length_proposal(good: list[_View]) -> list[Proposal]:
         return []
     p99 = _percentile(lengths, 0.99)
     limit = int(math.ceil(p99 * _LENGTH_SLACK)) or 1
-    return [Proposal(
-        kind="max_length", params={"max": limit}, severity="soft",
-        name="output length bound",
-        rationale=f"p99 good output length {p99} chars, +{int((_LENGTH_SLACK - 1) * 100)}% slack",
-        support={"episode_ids": [v.episode.id for v in good if v.final_output],
-                 "counts": {"p99": p99}},
-    )]
+    slack_pct = int((_LENGTH_SLACK - 1) * 100)
+    return [
+        Proposal(
+            kind="max_length",
+            params={"max": limit},
+            severity="soft",
+            name="output length bound",
+            rationale=f"p99 good output length {p99} chars, +{slack_pct}% slack",
+            support={
+                "episode_ids": [v.episode.id for v in good if v.final_output],
+                "counts": {"p99": p99},
+            },
+        )
+    ]
 
 
 def _pii_proposal(views: list[_View]) -> list[Proposal]:
@@ -213,12 +248,15 @@ def _pii_proposal(views: list[_View]) -> list[Proposal]:
             kinds |= set(found)
     if not hit_ids:
         return []
-    return [Proposal(
-        kind="no_pii", params={"kinds": sorted(kinds)},
-        name="no PII in output",
-        rationale=f"{', '.join(sorted(kinds))} leaked in {len(hit_ids)} output(s)",
-        support={"episode_ids": hit_ids, "counts": {"leaks": len(hit_ids)}},
-    )]
+    return [
+        Proposal(
+            kind="no_pii",
+            params={"kinds": sorted(kinds)},
+            name="no PII in output",
+            rationale=f"{', '.join(sorted(kinds))} leaked in {len(hit_ids)} output(s)",
+            support={"episode_ids": hit_ids, "counts": {"leaks": len(hit_ids)}},
+        )
+    ]
 
 
 def _joined(text: str) -> str:
@@ -272,12 +310,16 @@ def _phrase_proposals(good: list[_View], bad: list[_View]) -> list[Proposal]:
     out: list[Proposal] = []
     for gram, g_frac in chosen[:5]:
         hits = [v.episode.id for v in good if gram in _joined(v.final_output)]
-        out.append(Proposal(
-            kind="contains", params={"values": [gram], "mode": "any"}, severity="soft",
-            name=f"says '{gram}'",
-            rationale=f"'{gram}' appears in {g_frac:.0%} of good outputs, rare in bad",
-            support={"episode_ids": hits, "counts": {"good": len(hits)}},
-        ))
+        out.append(
+            Proposal(
+                kind="contains",
+                params={"values": [gram], "mode": "any"},
+                severity="soft",
+                name=f"says '{gram}'",
+                rationale=f"'{gram}' appears in {g_frac:.0%} of good outputs, rare in bad",
+                support={"episode_ids": hits, "counts": {"good": len(hits)}},
+            )
+        )
     return out
 
 
@@ -321,8 +363,9 @@ def _llm_prompt(conn, episodes: list[store.Episode], snippets: list[Snippet]) ->
         "Reply with ONLY a JSON array. Each element: "
         '{"kind": <dsl kind>, "params": {...}, "applies_to": "final|any_turn|tool_calls", '
         '"severity": "hard|soft", "rationale": <str>, "support": {"episode_ids": [...]}}. '
-        "Valid kinds: contains, not_contains, regex, not_regex, json_schema, tool_called, "
-        "tool_not_called, tool_order, max_length, min_length, no_pii, expr."
+        "Kinds and their exact params:\n"
+        + "\n".join(f"- {k}: {v}" for k, v in PARAM_SPEC.items() if k != "judge")
+        + "\nDo not invent other kinds or param names."
     )
 
 
@@ -382,9 +425,13 @@ def _proposal_from_item(item) -> Proposal | None:
         return None
     support = item.get("support")
     return Proposal(
-        kind=check.kind, params=check.params, applies_to=check.applies_to,
-        severity=check.severity, name=check.name or check.kind,
-        rationale=str(item.get("rationale", "")), origin="llm",
+        kind=check.kind,
+        params=check.params,
+        applies_to=check.applies_to,
+        severity=check.severity,
+        name=check.name or check.kind,
+        rationale=str(item.get("rationale", "")),
+        origin="llm",
         support=support if isinstance(support, dict) else {},
     )
 
