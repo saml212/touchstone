@@ -38,18 +38,21 @@ def _load_toml(path: Path) -> dict:
         return tomllib.load(fh)
 
 
-def load_settings(path: str | Path | None = None) -> Settings:
-    toml_path = Path(path) if path else Path("touchstone.toml")
-    data = _load_toml(toml_path)
-    s = Settings()
-    if "db_path" in data:
-        s.db_path = data["db_path"]
-    if "provider" in data:
-        s.provider = data["provider"]
-    if "agent_provider" in data:
-        s.agent_provider = data["agent_provider"]
-    if "keychain_prefix" in data:
-        s.keychain_prefix = data["keychain_prefix"]
+_TOML_KEYS = ("db_path", "provider", "agent_provider", "keychain_prefix")
+_ENV_KEYS = {
+    "TOUCHSTONE_DB": "db_path",
+    "TOUCHSTONE_PROVIDER": "provider",
+    "TOUCHSTONE_AGENT_PROVIDER": "agent_provider",
+    "TOUCHSTONE_KEYCHAIN_PREFIX": "keychain_prefix",
+    "TOUCHSTONE_STT": "stt",
+    "TOUCHSTONE_TTS": "tts",
+}
+
+
+def _apply_toml(s: Settings, data: dict) -> None:
+    for key in _TOML_KEYS:
+        if key in data:
+            setattr(s, key, data[key])
     keychain = data.get("keychain", {})
     s.keychain_openai = keychain.get("openai", s.keychain_openai)
     s.keychain_anthropic = keychain.get("anthropic", s.keychain_anthropic)
@@ -58,16 +61,16 @@ def load_settings(path: str | Path | None = None) -> Settings:
     s.tts = speech.get("tts", s.tts)
     s.extra = data
 
-    if v := os.environ.get("TOUCHSTONE_DB"):
-        s.db_path = v
-    if v := os.environ.get("TOUCHSTONE_PROVIDER"):
-        s.provider = v
-    if v := os.environ.get("TOUCHSTONE_AGENT_PROVIDER"):
-        s.agent_provider = v
-    if v := os.environ.get("TOUCHSTONE_KEYCHAIN_PREFIX"):
-        s.keychain_prefix = v
-    if v := os.environ.get("TOUCHSTONE_STT"):
-        s.stt = v
-    if v := os.environ.get("TOUCHSTONE_TTS"):
-        s.tts = v
+
+def _apply_env(s: Settings) -> None:
+    for env, attr in _ENV_KEYS.items():
+        if v := os.environ.get(env):
+            setattr(s, attr, v)
+
+
+def load_settings(path: str | Path | None = None) -> Settings:
+    toml_path = Path(path) if path else Path("touchstone.toml")
+    s = Settings()
+    _apply_toml(s, _load_toml(toml_path))
+    _apply_env(s)
     return s
