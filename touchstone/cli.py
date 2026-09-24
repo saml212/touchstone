@@ -154,8 +154,23 @@ def checks_add(
 
 
 @checks_app.command("enable")
-def checks_enable(check_id: str) -> None:
-    """Enable a check."""
+def checks_enable(
+    check_id: str = typer.Argument(None, help="Check id to enable."),
+    all_mined: bool = typer.Option(False, "--all-mined", help="Enable every mined check."),
+) -> None:
+    """Enable a check by id, or every mined check with --all-mined."""
+    if all_mined:
+        conn = _open_db()
+        try:
+            mined = [c for c in store.list_checks(conn) if c.source == "mined" and not c.enabled]
+            for c in mined:
+                store.set_check_enabled(conn, c.id, True)
+        finally:
+            conn.close()
+        typer.echo(f"enabled {len(mined)} mined check(s)")
+        return
+    if not check_id:
+        _fail("give a check id or --all-mined")
     _set_enabled(check_id, True)
 
 
@@ -239,6 +254,128 @@ def _judge_provider():
         return provider_from_spec(load_settings().provider)
     except Exception:  # a judge without a working provider degrades to 'skipped'
         return None
+
+
+@app.command()
+def mine(
+    code: str = typer.Option(None, "--code", help="Path to a code tree to scan for prompts/tools."),
+    provider: str = typer.Option(None, "--provider", help="Agent provider spec for LLM proposals."),
+    no_llm: bool = typer.Option(False, "--no-llm", help="Skip the LLM pass; statistics only."),
+    every_turn: bool = typer.Option(False, "--every-turn", help="Cut a task at every turn."),
+    limit: int = typer.Option(None, "--limit", help="Only mine the first N episodes."),
+) -> None:
+    """Propose checks from captured episodes and cut replay tasks."""
+    from .mine import mine as run_mine
+    from .mine import scan_codebase
+
+    settings = load_settings()
+    snippets = scan_codebase(code) if code else []
+    prov = None
+    if not no_llm:
+        prov = _agent_provider(provider or settings.agent_provider)
+    conn = _open_db()
+    try:
+        summary = run_mine(
+            conn, provider=prov, code_snippets=snippets,
+            no_llm=no_llm, every_turn=every_turn, limit=limit,
+        )
+    finally:
+        conn.close()
+
+    proposals = summary["proposals"]
+    if proposals:
+        typer.echo(f"{'KIND':16} {'SEV':4} {'SUP':>4}  RATIONALE")
+        for p in proposals:
+            head = (p.rationale or "")[:60]
+            typer.echo(f"{p.kind:16} {p.severity:4} {p.support_count:>4}  {head}")
+    typer.echo(
+        f"proposed {summary['inserted']} check(s) "
+        f"({summary['stats']} stats, {summary['llm']} llm), cut {summary['tasks_cut']} task(s)"
+    )
+
+
+def _agent_provider(spec: str):
+    from .llm import provider_from_spec
+
+    try:
+        return provider_from_spec(spec)
+    except Exception as exc:  # no key / binary: mine on statistics alone
+        typer.echo(f"note: provider {spec!r} unavailable ({exc}); mining stats only", err=True)
+        return None
+
+
+tasks_app = typer.Typer(help="Inspect and edit replay tasks.", no_args_is_help=True)
+app.add_typer(tasks_app, name="tasks")
+
+
+@tasks_app.command("list")
+def tasks_list(tag: str = typer.Option(None, "--tag", help="Filter by tag.")) -> None:
+    """List tasks with their tags and attached-check counts."""
+    conn = _open_db()
+    try:
+        for t in store.list_tasks(conn, tag):
+            tags = ",".join(t.tags or [])
+            typer.echo(f"{t.id}  [{len(t.check_ids or [])} checks]  {t.name}  ({tags})")
+    finally:
+        conn.close()
+
+
+@tasks_app.command("show")
+def tasks_show(task_id: str) -> None:
+    """Show one task: context turns, reference, and attached checks."""
+    conn = _open_db()
+    try:
+        task = store.get_task(conn, task_id)
+        if task is None:
+            _fail(f"no task with id {task_id}")
+        typer.echo(f"id:     {task.id}")
+        typer.echo(f"name:   {task.name}")
+        typer.echo(f"tags:   {', '.join(task.tags or [])}")
+        typer.echo("context:")
+        for m in (task.context or {}).get("messages", []):
+            content = m.get("content", "")
+            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+            typer.echo(f"  {m.get('role', '?'):9} {text[:100]}")
+        typer.echo(f"reference: {json.dumps(task.reference, ensure_ascii=False)}")
+        typer.echo("checks:")
+        for cid in task.check_ids or []:
+            c = store.get_check(conn, cid)
+            typer.echo(f"  {cid}  {c.kind if c else '(missing)'}")
+    finally:
+        conn.close()
+
+
+@tasks_app.command("attach")
+def tasks_attach(task_id: str, check_id: str) -> None:
+    """Attach a check to a task."""
+    _edit_task_checks(task_id, check_id, attach=True)
+
+
+@tasks_app.command("detach")
+def tasks_detach(task_id: str, check_id: str) -> None:
+    """Detach a check from a task."""
+    _edit_task_checks(task_id, check_id, attach=False)
+
+
+def _edit_task_checks(task_id: str, check_id: str, attach: bool) -> None:
+    conn = _open_db()
+    try:
+        task = store.get_task(conn, task_id)
+        if task is None:
+            _fail(f"no task with id {task_id}")
+        if attach and store.get_check(conn, check_id) is None:
+            _fail(f"no check with id {check_id}")
+        ids = list(task.check_ids or [])
+        if attach:
+            if check_id not in ids:
+                ids.append(check_id)
+        else:
+            ids = [c for c in ids if c != check_id]
+        store.update_task(conn, task_id, check_ids=ids)
+    finally:
+        conn.close()
+    verb, prep = ("attached", "to") if attach else ("detached", "from")
+    typer.echo(f"{verb} {check_id} {prep} {task_id}")
 
 
 if __name__ == "__main__":
