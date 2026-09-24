@@ -125,30 +125,35 @@ def _slug(text: str) -> str:
     return s or "task"
 
 
+def _system_lines(systems: list[dict]) -> list[str]:
+    if not systems:
+        return []
+    return ["## System", *(_content(m.get("content")) for m in systems), ""]
+
+
+def _convo_lines(convo: list[dict]) -> list[str]:
+    if not convo:
+        return []
+    turns = [f"**{m.get('role', 'user')}:** {_content(m.get('content'))}" for m in convo]
+    return ["## Conversation so far", *turns, ""]
+
+
+def _tools_lines(tools: list[dict]) -> list[str]:
+    if not tools:
+        return []
+    return ["## Tools available (JSON schemas)", "```json",
+            json.dumps(tools, ensure_ascii=False, indent=2), "```", ""]
+
+
 def _instruction_md(task: store.Task) -> str:
     ctx = task.context or {}
     messages = ctx.get("messages", [])
     tools = ctx.get("tools") or []
 
     lines = [f"# {task.name}", ""]
-    systems = [m for m in messages if m.get("role") == "system"]
-    convo = [m for m in messages if m.get("role") != "system"]
-    if systems:
-        lines.append("## System")
-        for m in systems:
-            lines.append(_content(m.get("content")))
-        lines.append("")
-    if convo:
-        lines.append("## Conversation so far")
-        for m in convo:
-            lines.append(f"**{m.get('role', 'user')}:** {_content(m.get('content'))}")
-        lines.append("")
-    if tools:
-        lines.append("## Tools available (JSON schemas)")
-        lines.append("```json")
-        lines.append(json.dumps(tools, ensure_ascii=False, indent=2))
-        lines.append("```")
-        lines.append("")
+    lines += _system_lines([m for m in messages if m.get("role") == "system"])
+    lines += _convo_lines([m for m in messages if m.get("role") != "system"])
+    lines += _tools_lines(tools)
     lines += [
         "## Your task",
         "Produce the assistant's next reply for the conversation above.",
@@ -224,6 +229,21 @@ def _export_task(conn, task: store.Task, task_dir: Path) -> None:
         shutil.copyfile(_CHECKS_SRC / name, vendor / name)
 
 
+def _unique_slug(task: store.Task, used: set[str]) -> str:
+    slug = f"{_slug(task.name)}-{task.id[-6:].lower()}"
+    while slug in used:  # ids are unique, but guard the suffix collision anyway
+        slug += "x"
+    used.add(slug)
+    return slug
+
+
+def _prune_stale(out: Path, keep: set[Path]) -> None:
+    """Remove previously-exported task dirs (marked with _MARKER) no longer in the benchmark."""
+    for child in out.iterdir():
+        if child.is_dir() and (child / _MARKER).exists() and child.resolve() not in keep:
+            shutil.rmtree(child)
+
+
 def export(conn, benchmark_id: str, out_dir: str | Path) -> list[Path]:
     """Write one Harbor task directory per task in the benchmark. Returns the dirs written."""
     bench = store.get_benchmark(conn, benchmark_id)
@@ -238,16 +258,9 @@ def export(conn, benchmark_id: str, out_dir: str | Path) -> list[Path]:
         task = store.get_task(conn, tid)
         if task is None:
             continue
-        slug = f"{_slug(task.name)}-{task.id[-6:].lower()}"
-        while slug in used:  # ids are unique, but guard the suffix collision anyway
-            slug += "x"
-        used.add(slug)
-        task_dir = out / slug
+        task_dir = out / _unique_slug(task, used)
         _export_task(conn, task, task_dir)
         written.append(task_dir)
 
-    keep = {d.resolve() for d in written}
-    for child in out.iterdir():
-        if child.is_dir() and (child / _MARKER).exists() and child.resolve() not in keep:
-            shutil.rmtree(child)
+    _prune_stale(out, {d.resolve() for d in written})
     return written

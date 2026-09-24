@@ -86,32 +86,28 @@ def scoreboard(conn, run_ids: list[str]) -> dict:
     return {"models": models, "checks": checks, "tags": tags}
 
 
-def proof(conn, candidate_run: str, incumbent_run: str) -> dict:
-    """Task-by-task diff of candidate vs incumbent into four categories, plus cost totals."""
-    cand_run = store.get_run(conn, candidate_run)
-    inc_run = store.get_run(conn, incumbent_run)
-    for label, rid, run in (("candidate", candidate_run, cand_run),
-                            ("incumbent", incumbent_run, inc_run)):
-        if run is None:
-            raise ValueError(f"no {label} run with id {rid!r}")
-    if cand_run.benchmark_id != inc_run.benchmark_id:
-        raise ValueError(
-            "cannot compare runs from different benchmarks "
-            f"({cand_run.benchmark_id} vs {inc_run.benchmark_id})"
-        )
-    cand = {r.task_id: r for r in store.list_results(conn, candidate_run)}
-    inc = {r.task_id: r for r in store.list_results(conn, incumbent_run)}
+def _require_run(label: str, rid: str, run) -> None:
+    if run is None:
+        raise ValueError(f"no {label} run with id {rid!r}")
+
+
+def _category(c_pass: bool, i_pass: bool) -> str:
+    if c_pass and i_pass:
+        return "both_pass"
+    if c_pass:
+        return "only_candidate"
+    if i_pass:
+        return "only_incumbent"
+    return "both_fail"
+
+
+def _diff_rows(conn, cand: dict, inc: dict) -> tuple[dict, list[dict]]:
     counts = dict.fromkeys(_CATEGORIES, 0)
     rows = []
     for task_id in sorted(set(cand) & set(inc)):
         c_pass = bool(cand[task_id].passed)
         i_pass = bool(inc[task_id].passed)
-        category = (
-            "both_pass" if c_pass and i_pass
-            else "only_candidate" if c_pass
-            else "only_incumbent" if i_pass
-            else "both_fail"
-        )
+        category = _category(c_pass, i_pass)
         counts[category] += 1
         task = store.get_task(conn, task_id)
         rows.append({
@@ -121,6 +117,23 @@ def proof(conn, candidate_run: str, incumbent_run: str) -> dict:
             "incumbent_passed": i_pass,
             "category": category,
         })
+    return counts, rows
+
+
+def proof(conn, candidate_run: str, incumbent_run: str) -> dict:
+    """Task-by-task diff of candidate vs incumbent into four categories, plus cost totals."""
+    cand_run = store.get_run(conn, candidate_run)
+    inc_run = store.get_run(conn, incumbent_run)
+    _require_run("candidate", candidate_run, cand_run)
+    _require_run("incumbent", incumbent_run, inc_run)
+    if cand_run.benchmark_id != inc_run.benchmark_id:
+        raise ValueError(
+            "cannot compare runs from different benchmarks "
+            f"({cand_run.benchmark_id} vs {inc_run.benchmark_id})"
+        )
+    cand = {r.task_id: r for r in store.list_results(conn, candidate_run)}
+    inc = {r.task_id: r for r in store.list_results(conn, incumbent_run)}
+    counts, rows = _diff_rows(conn, cand, inc)
     return {
         "candidate_run": candidate_run,
         "incumbent_run": incumbent_run,
