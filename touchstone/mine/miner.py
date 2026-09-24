@@ -261,16 +261,18 @@ def _distinct_phrases(ranked: list[tuple[str, float]]) -> list[tuple[str, float]
     return kept
 
 
-def _phrase_proposals(good: list[_View], bad: list[_View]) -> list[Proposal]:
-    if not good:
-        return []
-    good_grams = [_ngrams(v.final_output) for v in good]
-    bad_grams = [_ngrams(v.final_output) for v in bad]
+def _phrase_counts(good_grams: list[set[str]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for grams in good_grams:
         for g in grams:
             counts[g] = counts.get(g, 0) + 1
+    return counts
 
+
+def _qualifying_phrases(
+    counts: dict[str, int], good: list[_View], bad: list[_View], bad_grams: list[set[str]]
+) -> list[tuple[str, float]]:
+    """Phrases in >= _PHRASE_GOOD_FRAC of good outputs and <= _PHRASE_BAD_FRAC of bad ones."""
     qualifying: list[tuple[str, float]] = []
     for gram, gc in counts.items():
         g_frac = gc / len(good)
@@ -279,7 +281,15 @@ def _phrase_proposals(good: list[_View], bad: list[_View]) -> list[Proposal]:
         b_frac = (sum(gram in gg for gg in bad_grams) / len(bad)) if bad else 0.0
         if b_frac <= _PHRASE_BAD_FRAC:
             qualifying.append((gram, g_frac))
+    return qualifying
 
+
+def _phrase_proposals(good: list[_View], bad: list[_View]) -> list[Proposal]:
+    if not good:
+        return []
+    good_grams = [_ngrams(v.final_output) for v in good]
+    bad_grams = [_ngrams(v.final_output) for v in bad]
+    qualifying = _qualifying_phrases(_phrase_counts(good_grams), good, bad, bad_grams)
     qualifying.sort(key=lambda gf: (-gf[1], -len(gf[0]), gf[0]))
     chosen = _distinct_phrases(qualifying)
 
@@ -298,21 +308,37 @@ def _phrase_proposals(good: list[_View], bad: list[_View]) -> list[Proposal]:
 # ---- LLM proposals ---------------------------------------------------------
 
 
-def _render_episode(conn, ep: store.Episode) -> str:
-    spans = store.list_spans(conn, ep.id)
+def _user_texts(span: store.Span) -> list[str]:
+    return [
+        m["content"]
+        for m in (span.input or {}).get("messages", [])
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    ]
+
+
+def _last_user_message(spans: list[store.Span]) -> str:
     user = ""
     for span in spans:
-        if span.kind == "llm":
-            for m in (span.input or {}).get("messages", []):
-                if m.get("role") == "user" and isinstance(m.get("content"), str):
-                    user = m["content"]
-    tools = sorted({s.name for s in spans if s.kind == "tool"})
+        if span.kind != "llm":
+            continue
+        for text in _user_texts(span):
+            user = text
+    return user
+
+
+def _outcome_text(ep: store.Episode) -> str:
     if ep.outcome_label:
-        outcome = ep.outcome_label
-    elif ep.outcome_score is not None:
-        outcome = f"scored {ep.outcome_score}"
-    else:
-        outcome = "unlabeled"
+        return ep.outcome_label
+    if ep.outcome_score is not None:
+        return f"scored {ep.outcome_score}"
+    return "unlabeled"
+
+
+def _render_episode(conn, ep: store.Episode) -> str:
+    spans = store.list_spans(conn, ep.id)
+    user = _last_user_message(spans)
+    tools = sorted({s.name for s in spans if s.kind == "tool"})
+    outcome = _outcome_text(ep)
     lines = [
         f"- user: {user[:300]}",
         f"  tools_called: {', '.join(tools) or 'none'}",
