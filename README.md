@@ -5,8 +5,24 @@ for it. Touchstone does that for LLM agents: **one line of code captures what yo
 does**, the traces become a benchmark your stakeholders agree is fair, and the benchmark proves
 whether a cheaper or open model is good enough **before** you switch or train.
 
-Everything runs locally on a laptop — one SQLite file, no cloud service, no paid service, no keys
-required. Real providers, speech, Harbor export, and GPU training are all additive. By Pebble ML.
+Everything runs locally on a laptop — no cloud service, no paid service, no keys required. Real
+providers, speech, and GPU training are all additive. By Pebble ML.
+
+**Files are the source of truth for what you author; the database keeps what is captured.** Tasks,
+checks and benchmarks live as diffable files beside `.touchstone/`; a task directory *is* a Harbor
+task, so `harbor run -p tasks/<name>` runs it unchanged.
+
+```
+touchstone.toml            project config
+checks.toml                policies: checks that apply to every task (mined + interview "always")
+tasks/<name>/              one Harbor task per directory
+  task.toml                Harbor 1.4 schema + [metadata.touchstone] + [[…check]] blocks (read aloud)
+  instruction.md           the prompt; context.json + reference.json are the machine input + oracle
+  environment/Dockerfile   solution/solve.sh (oracle)   tests/{test.sh,verify.py}
+benchmarks/<name>.toml     a named set: tasks = […] or glob + tags
+.touchstone/touchstone.db  captured traces (episodes, spans), the run record, interview rooms
+.touchstone/runs/<id>/     run.json + results.jsonl — the portable copy of what the DB indexes
+```
 
 ## Install
 
@@ -36,56 +52,53 @@ captures a turn you make yourself.
 ```
 import touchstone; touchstone.trace()   # 1. capture what your agent does
 touchstone serve                        # 2. local UI: episodes, checks, tasks, rooms, scoreboard, train
-touchstone mine                         # 3. agent reads traces + code, proposes checks + cuts tasks
+touchstone mine                         # 3. agent reads traces + code, writes task dirs + proposals
 touchstone interview <task>             # 4. voice/text room; stakeholders turn opinions into checks
 touchstone bench run BENCH -m <spec>    # 5. prove a candidate against the incumbent
 touchstone train prepare BENCH          # 6. SFT / preference / RL datasets, ready for GPU infra
-touchstone export harbor BENCH          # 7. tasks as a Harbor benchmark (`harbor run` on a Docker host)
+harbor run -p tasks/                    # 7. the tasks are already Harbor tasks (on a Docker host)
 ```
 
 Real output from the built-in zero-key demo (`touchstone demo` runs a scripted support agent):
 
 ```
-$ touchstone demo
-captured 30 episodes (18 resolved), 100 spans in .touchstone/touchstone.db
-
 $ touchstone mine --no-llm
 KIND             SEV   SUP  RATIONALE
-tool_not_called  hard   12  escalate used in 100% of bad vs 0% of good episodes
-tool_called      hard   18  order_status used in 100% of good vs 0% of bad episodes
-max_length       soft   18  p99 good output length 59 chars, +25% slack
-no_pii           hard    3  email leaked in 3 output(s)
-contains         soft   15  'all sorted is there anything else' appears in 83% of good o
-contains         soft   15  'there anything else i can help' appears in 83% of good outp
-proposed 6 check(s) (6 stats, 0 llm), cut 60 task(s)
+tool_not_called  hard    4  escalate used in 100% of bad vs 0% of good episodes
+tool_called      hard    8  order_status used in 100% of good vs 0% of bad episodes
+max_length       soft    8  p99 good output length 58 chars, +25% slack
+no_pii           hard    1  email leaked in 1 output(s)
+contains         soft    7  'all sorted is there anything else' appears in 88% of good o
+contains         soft    7  'there anything else i can help' appears in 88% of good outp
+proposed 6 check(s) (6 stats, 0 llm), cut 24 task(s)
 ```
 
-Everything mined is disabled until a human (or an interview) enables it. Enable, re-cut so the checks
-attach to the tasks whose reference passes them, freeze a benchmark, and run:
+`mine` writes a task directory for every recorded assistant turn and appends the proposals to
+`checks.toml` **disabled**. Enable them, `tasks sync` to re-materialise each task with the checks its
+reference passes (the reference gate), freeze a benchmark, and run:
 
 ```
 $ touchstone checks enable --all-mined
 enabled 6 mined check(s)
-$ touchstone mine --no-llm            # re-cut: attach enabled checks to consistent tasks
+$ touchstone tasks sync
+synced 24 task(s)
 $ touchstone bench create demo --all
-created benchmark 01M38VG… (60 tasks)
+wrote benchmarks/demo.toml (8 tasks)
 
-$ touchstone bench run demo -m reference -m scripted
+$ touchstone bench run demo -m reference
 MODELS
 model      tasks  pass  rate%  errors  cost
 ---------  -----  ----  -----  ------  ----
-reference  60     45    75.0   0       -
-scripted   60     42    70.0   0       -
+reference  8      8     100.0  0       -
 ```
 
-`reference` is the incumbent baseline — it replays each task's recorded reply, so it passes every task
-whose attached checks the recorded behaviour satisfied. Prove a candidate against it task-by-task:
+`reference` is the incumbent baseline — it replays each task's recorded reply, so it passes every
+active task by construction (a check attaches only when the reference already passes it, and a task
+counts only if its reference scores 1 and an empty reply scores 0). Prove a candidate against it
+task-by-task with `touchstone bench proof <candidate-run> <incumbent-run>`.
 
-```
-$ touchstone bench proof <candidate-run> <incumbent-run>
-both pass: 27   only incumbent: 18   only candidate: 15   both fail: 0
-cost  incumbent: -   candidate: -
-```
+The same tasks run under Harbor directly — `harbor run -p tasks -a oracle` replays each reference and
+scores it against the checks in `task.toml`, with no export step.
 
 ## Checks
 
@@ -97,7 +110,11 @@ enabled **hard** check passes; **soft** checks are reported but never gate. Kind
 `output`/`tools`/`reference`), and `judge` (an LLM rubric; soft by default, skipped when no provider).
 Prefer a programmatic kind that states the rule exactly; reach for `judge` only when none can.
 
-`touchstone checks list|add|enable|disable|show|eval`, and `tasks list|show|attach|detach`.
+Each check reads as a sentence — `name`, `rule`, `because`, `severity`, `source` — in a task's
+`task.toml` or, when it applies to every task, in `checks.toml`. `checks.toml` holds **policies**
+(with an `enabled` flag); `tasks sync` copies every enabled policy the reference gate passes into
+each task with `source = "policy"`. `touchstone checks list|add|enable|disable|show|eval` manage
+`checks.toml`; `tasks list|show|sync` inspect and rebuild task directories.
 
 ## Interview
 
@@ -105,8 +122,10 @@ Prefer a programmatic kind that states the rule exactly; reach for `judge` only 
 any browser with a display name. The agent summarizes the task and the model's reply, asks one concrete
 question at a time, and keeps a live draft-check list. Any participant can confirm — no host. A bare
 "yes" commits the draft; a confirmation that carries an amendment ("yes, and one L is fine too") is
-revised through the LLM first, then committed. Committed checks are attached to the task and enabled.
-Voice is push-to-talk (browser `MediaRecorder` → STT → message; agent reply → TTS to everyone);
+revised through the LLM first, then committed. A committed check is written as a
+`[[metadata.touchstone.check]]` block in the task's `task.toml` — or, when the stakeholder says it
+applies to every task, as an enabled policy in `checks.toml` — so `git diff` is the audit trail of
+what everyone agreed to. Voice is push-to-talk (browser `MediaRecorder` → STT → message; agent reply → TTS to everyone);
 text-only always works.
 
 ## Providers
@@ -173,24 +192,23 @@ STT: `faster-whisper` (local, `pip install 'touchstone[whisper]'`), `openai` (wh
 TTS: `browser` (`speechSynthesis`, zero-dep default), `say` (macOS), or `openai`. `touchstone doctor`
 reports what's resolvable; text-only interviews always work.
 
-## Harbor export
+## Harbor
+
+The tasks are already Harbor tasks — there is no export step. Each `tasks/<name>/` carries
+`task.toml`, `instruction.md`, `context.json`, `reference.json`, `environment/Dockerfile`,
+`solution/solve.sh`, and `tests/{test.sh,verify.py}`. The container verifier scores
+`/app/output.json` against the `[[metadata.touchstone.check]]` blocks in `task.toml` with a
+**vendored** copy of Touchstone's checks — no network, no `touchstone` install inside the container.
+`judge` checks (which need an LLM) are excluded from the container copy.
 
 ```bash
-touchstone export harbor BENCH --out ./harbor-tasks
+touchstone export harbor            # prints the tasks path and the `harbor run` command
+harbor run -p tasks -a oracle       # or a single task: harbor run -p tasks/<name>
+touchstone bench harbor-run tasks/<name> -a <agent>   # shells out to harbor, or explains what's missing
 ```
 
-writes one task directory per task in Harbor's layout (`task.toml`, `instruction.md`,
-`environment/Dockerfile`, `tests/test.sh`, `tests/test_outputs.py`, `solution/solve.sh`). The
-container verifier scores `/app/output.json` with a **vendored** copy of Touchstone's checks — no
-network, no `touchstone` install inside the container. `judge` checks (which need an LLM) are dropped.
-Run them where Docker exists:
-
-```bash
-touchstone bench harbor-run ./harbor-tasks/<task-dir> -a <agent>
-```
-
-If Docker or the `harbor` CLI is missing, it prints the exact command to run elsewhere and exits
-non-zero — it never installs anything.
+If Docker or the `harbor` CLI is missing, `bench harbor-run` prints the exact command to run
+elsewhere and exits non-zero — it never installs anything.
 
 ## Training hook
 
@@ -209,9 +227,9 @@ touchstone train submit  BENCH --backend null|art|trl
 - `preference.jsonl` — `{prompt, chosen, rejected}` pairs: a passing candidate reply over a failing
   one (from run results), plus the reference over each failing candidate on tasks whose reference is
   good.
-- `rl_tasks.jsonl` — task id, context, tools, and the serialized attached checks a reward verifier
-  evaluates.
-- `manifest.json` — counts + the benchmark id.
+- `rl_tasks.jsonl` — task name, context, tools, and the serialized attached checks a reward
+  verifier evaluates.
+- `manifest.json` — counts + the target name.
 
 `submit` picks a backend:
 
@@ -240,9 +258,9 @@ providers:
 touchstone init
 touchstone demo                        # 30 real episodes from a scripted support agent
 touchstone mine --provider scripted    # or --no-llm for statistics only
-touchstone checks enable --all-mined && touchstone mine --no-llm
+touchstone checks enable --all-mined && touchstone tasks sync
 touchstone bench create demo --all
-touchstone bench run demo -m reference -m scripted
+touchstone bench run demo -m reference
 touchstone train prepare demo
 ```
 

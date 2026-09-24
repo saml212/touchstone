@@ -52,16 +52,19 @@ touchstone/
                     "anthropic:claude-sonnet-4-5", "openai-compatible:<base_url>:<model>", "codex-cli:gpt-5.6-sol".
                     The runner passes the task on its provider call path; only `reference` reads it,
                     every other provider keeps its unchanged signature and ignores it.
-  checks/           dsl.py (Check dataclass + kinds), run.py (evaluate checks against an output), judge.py
-  mine/             miner.py (statistical + LLM proposals of checks), cut.py (episodes -> replay tasks),
-                    codebase.py (find system prompts / tool schemas in a repo)
-  interview/        rooms.py (state), agent.py (question policy -> committed checks), speech.py (STT/TTS providers)
-  bench/            benchmark.py (assemble), runner.py (replay tasks against candidates, async, retries),
-                    report.py (scoreboard, proof table), harbor_export.py (Harbor task dirs), harbor_run.py
+  checks/           dsl.py (Check dataclass + kinds + flat TOML surface), run.py (evaluate), judge.py
+  tasks.py          read/write task directories — the authored source of truth
+  policies.py       checks.toml (policies) + materialize() with the reference gate
+  _verify.py        vendored into each task's tests/verify.py (reads checks from task.toml)
+  mine/             miner.py (statistical + LLM proposals -> checks.toml; writes task dirs), cut.py
+                    (episode -> Task builder), codebase.py (find system prompts / tool schemas in a repo)
+  interview/        rooms.py (state), agent.py (question policy -> checks written to files), speech.py
+  bench/            benchmark.py (resolve benchmarks/<name>.toml to task dirs), runner.py (replay tasks,
+                    async, retries), report.py (scoreboard, proof table), harbor_run.py
   train/            trainer.py (Protocol + NullTrainer), datasets.py (sft/preference/rl exports),
                     art.py, trl.py (adapters that write configs + commands; raise clearly when no infra)
-  server/           app.py (FastAPI), routes/*.py, ws.py (rooms), static/ (index.html, app.js, app.css)
-  cli.py            Typer: init, doctor, demo, serve, mine, checks, tasks, interview, bench, export, train
+  server/           app.py (FastAPI), routes/*.py (files for tasks/checks/benchmarks), static/
+  cli/              Typer: init, doctor, demo, serve, mine, checks, tasks, interview, bench, export, train
 ```
 
 ## Data model (store.py)
@@ -76,15 +79,13 @@ touchstone/
     tool_call_id?: str, name?: str}`. `arguments` is always a JSON string. Capture points call
     `canonical()` (from OpenAI/Anthropic wire or already-canonical); the HTTP providers call
     `to_openai()` / `to_anthropic()` to convert back to wire shape when replaying.
-- `checks(id, name, kind, params JSON, applies_to ['final','any_turn','tool_calls'], severity ['hard','soft'],
-   source ['mined','interview','manual'], rationale, enabled INT, created_at)`
-- `tasks(id, name, episode_id, cut_span_id, context JSON {messages, tools}, reference JSON, check_ids JSON,
-   kind ['replay','harbor'], tags JSON, created_at)`
-- `benchmarks(id, name, task_ids JSON, created_at)`
-- `runs(id, benchmark_id, model_spec, started_at, finished_at, meta JSON)`
-- `results(run_id, task_id, passed INT, check_results JSON, output JSON, latency_ms, cost_usd, error)`
-- `rooms(id, task_id, topic, created_at, closed_at)`, `room_messages(id, room_id, speaker, role, text, audio_path, ts)`,
-  `room_checks(room_id, check_id)`
+- `runs(id, target, model_spec, started_at, finished_at, meta JSON)` — `target` is a benchmark
+  name, a `tasks/` path, or a glob.
+- `results(run_id, task, passed INT, reward REAL, check_results JSON, output JSON, latency_ms,
+  cost_usd, error)` — `task` is the task dir name; `check_results` is keyed by check name.
+- `rooms(id, task_id, topic, created_at, closed_at)`, `room_messages(id, room_id, speaker, role, text, audio_path, ts)`
+- Tasks, checks and benchmarks are **files**, not rows — see "v2 — contracts" below. `task_id` on a
+  room is the task directory name.
 IDs are `ulid`-style sortable strings generated in Python (no dependency). All timestamps ISO-8601 UTC.
 SQLite opened with WAL + busy_timeout=5000; safe under concurrent writers (server + instrumented app).
 Connections are opened `check_same_thread=False` and each caller (the CLI, each web request, each
@@ -115,14 +116,15 @@ Input: episodes (optionally filtered), optional `--code <path>`. Steps:
 2. LLM proposals (provider from config `agent_provider`, default `codex-cli`): sample of episodes +
    discovered system prompts and tool schemas → JSON list of checks in the DSL with rationale and
    supporting episode ids. Invalid proposals are dropped with a logged reason, never crash.
-3. Cutting: every recorded assistant turn in every episode becomes a replay task (not only the final
-   turn). Context = messages before the cut + tools; reference = recorded assistant message. A check
-   attaches to a task only when the reference passes it (reference-consistent attachment), so a
-   candidate is never asked to satisfy a check the recorded behaviour did not — except safety checks
-   ("avoid this": `no_pii`, `not_contains`, `not_regex`, `tool_not_called`), which always attach.
-   Tasks from episodes with bad outcomes get tag `failure` and only safety checks.
-Everything mined is `enabled=0` until a human (or an interview) enables it. Idempotent: re-mining does not
-duplicate identical checks/tasks.
+3. Cutting: every recorded assistant turn in every episode becomes a replay task directory (not only
+   the final turn). Context = messages before the cut + tools; reference = recorded assistant message.
+   `policies.materialize` decides which checks land in each `task.toml` via the reference gate: a
+   non-safety check attaches only when the reference passes it, safety checks
+   (`no_pii`, `not_contains`, `not_regex`, `tool_not_called`) always attach, and failure tasks carry
+   safety checks only. See "v2 — contracts" for the file layout.
+Proposals are appended to `checks.toml` as `enabled = false` policies until a human (or an interview)
+enables them; `tasks sync` re-materialises. Idempotent: re-mining does not duplicate policies, and
+task directory names are stable (derived from the episode + span).
 
 ## Interview
 
@@ -134,9 +136,10 @@ commits a check when a participant confirms. The agent prefers a programmatic ch
 the rule exactly and reaches for `judge` only when no programmatic kind can express it. A bare "yes"
 commits the current draft as-is; a confirmation that carries an amendment ("yes, and one L is fine
 too") is revised through the LLM first and only then committed, so the stored check reflects the
-amendment. Committed checks are `source='interview'`, `enabled=1`,
-attached to the task. Multiplayer: no host; any participant can confirm; the agent addresses people by name
-and reconciles disagreement by asking the group.
+amendment. A committed check is written as a `[[metadata.touchstone.check]]` block with
+`source = "interview"` in the task's `task.toml`, or, when the participant says it applies to every
+task, as an enabled policy in `checks.toml`; the draft lives in room state. Multiplayer: no host; any
+participant can confirm; the agent addresses people by name and reconciles disagreement by asking the group.
 Voice: browser push-to-talk (MediaRecorder) → `POST /rooms/{id}/audio` → STT → message. Agent replies →
 TTS → audio to all clients. Providers: STT `faster-whisper` (local, optional extra), `openai` (whisper-1),
 `none`; TTS `openai`, `say` (macOS), `browser` (speechSynthesis, zero-dep default). Auto-detect in
@@ -144,9 +147,12 @@ TTS → audio to all clients. Providers: STT `faster-whisper` (local, optional e
 
 ## Bench
 
-`Benchmark` = task ids. Runner replays each task's context to each candidate `model_spec`, records the
-reply as output, evaluates checks, stores results. Async with a semaphore, per-call timeout, 2 retries
-on transport errors, cost from token counts × a small price table (unknown model → null cost, never a guess).
+A benchmark is `benchmarks/<name>.toml` (`tasks = [...]` or `glob` + `tags`); a run `target` is a
+benchmark name, a `tasks/` path, or a glob. Runner resolves the target to active task directories,
+replays each task's context to each candidate `model_spec`, records the reply as output, evaluates the
+task's checks, and stores a `Result` with the real `reward` plus a portable `.touchstone/runs/<id>/`
+copy. Async with a semaphore, per-call timeout, 2 retries on transport errors, cost from token counts ×
+a small price table (unknown model → null cost, never a guess).
 Report: pass rate per model, per check, per tag; proof table "candidate vs incumbent"; JSON + terminal
 table + UI. Determinism: `scripted` provider yields identical results on rerun. The `reference`
 model spec is the honest incumbent: it replays each task's recorded reply, so `bench run -m reference`
@@ -154,25 +160,24 @@ passes every task whose attached checks the reference satisfies (all non-failure
 since a non-safety check attaches only when the reference already passes it) — the baseline a cheaper
 candidate is proven against, and a way to confirm attached checks are satisfiable.
 
-Harbor export: `touchstone export harbor --benchmark X --out ./harbor-tasks` writes one task dir per
-task in the exact layout Harbor expects (read `~/Pebble/Github/harbor` to confirm: `instruction.md`,
-`task.toml`, `environment/Dockerfile`, `tests/test.sh`, `tests/test_outputs.py`, `solution/solve.sh`).
-The container test replays checks with a vendored `checks` module against `/logs/agent/output.json`.
-`touchstone bench harbor-run` shells out to `harbor run` when Docker is available; otherwise prints the
-exact command and where Docker is missing.
+Harbor: the tasks are already Harbor tasks, so there is no export step. `touchstone export harbor`
+prints the tasks path and the `harbor run -p tasks` command. Each task's `tests/verify.py` (with a
+vendored `touchstone_checks`) scores `/app/output.json` against the checks in `task.toml`, writing
+`/logs/verifier/reward.txt`. `touchstone bench harbor-run tasks/<name>` shells out to `harbor run`
+when Docker is available; otherwise it prints the exact command and where Docker is missing.
 
 ## Train
 
-`Trainer` Protocol: `prepare(conn, benchmark_id, out_dir) -> DatasetBundle` and
-`submit(bundle, config) -> JobHandle`. `datasets.py` writes, all atomically (re-runs overwrite),
-under `.touchstone/train/<benchmark>/`: `sft.jsonl` (canonical context + reference completion for
-tasks whose reference passes every attached hard check), `preference.jsonl` (per task, `{prompt,
-chosen, rejected}` pairs — a passing candidate reply over a failing one from run results, plus the
-reference over each failing candidate on tasks whose reference is good), `rl_tasks.jsonl` (task id,
-context, tools, serialized attached checks for the reward verifier), and `manifest.json` (counts +
-benchmark id). `NullTrainer.submit` writes `train_plan.md` and returns a handle with status
-"planned". `art.py` writes `art_train.py` (an `art.TrainableModel` + a rollout that replays a task and
-scores it with the vendored `touchstone_checks`, mirroring `bench/harbor_export`); `trl.py` writes
+`Trainer` Protocol: `prepare(conn, root, target, out_dir) -> DatasetBundle` and
+`submit(bundle, config) -> JobHandle`. `datasets.py` resolves the target to task dirs and writes, all
+atomically (re-runs overwrite), under `.touchstone/train/<target>/`: `sft.jsonl` (canonical context +
+reference completion for tasks whose reference passes every attached hard check), `preference.jsonl`
+(per task, `{prompt, chosen, rejected}` pairs — a passing candidate reply over a failing one from run
+results, plus the reference over each failing candidate on tasks whose reference is good),
+`rl_tasks.jsonl` (task name, context, tools, serialized attached checks for the reward verifier), and
+`manifest.json` (counts + target name). `NullTrainer.submit` writes `train_plan.md` and returns a
+handle with status "planned". `art.py` writes `art_train.py` (an `art.TrainableModel` + a rollout that
+replays a task and scores it with the vendored `touchstone_checks`); `trl.py` writes
 `trl_sft.yaml` + `run_trl.sh`. Both write their files and then raise `InfraRequired` with a one-line
 instruction naming the file and command. `touchstone train prepare BENCH [--out DIR]` and
 `train submit BENCH --backend null|art|trl [--out DIR]`; API `POST /api/train/prepare|submit` and a
@@ -194,9 +199,10 @@ prefix, else the default `touchstone-` is left implicit), `doctor` (one table: p
 providers, speech, `harbor`/`docker`/`ffmpeg` on PATH, and the `art`/`trl` train backends importable —
 never installs, never a network call, always exits 0), `demo` (runs the built-in scripted support
 agent: 30 episodes, mixed outcomes), `serve`,
-`mine [--code PATH] [--provider SPEC]`, `checks list|enable|disable`, `tasks list|show`,
-`interview <task_id>` (prints room URL, opens browser), `bench create|run|report`, `export harbor|atif`,
-`train prepare|submit`. Exit codes non-zero on failure; errors are one clear sentence.
+`mine [--code PATH] [--provider SPEC]`, `checks list|add|enable|disable|show|eval` (over `checks.toml`),
+`tasks list|show|sync`, `interview <task>` (prints room URL, opens browser),
+`bench create|run|report|proof|runs|harbor-run`, `export harbor|atif`, `train prepare|submit`. Exit
+codes non-zero on failure; errors are one clear sentence.
 
 ## Quality bar
 
