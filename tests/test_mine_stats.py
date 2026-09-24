@@ -66,6 +66,52 @@ def test_unlabeled_episodes_produce_no_tool_or_phrase_stats(conn):
     assert all(p.kind not in ("tool_called", "tool_not_called", "contains") for p in props)
 
 
+def _messages_only_episode(conn, name, *, good, call_refund):
+    """An episode whose tool activity lives ONLY in the model spans' messages (no tool spans) —
+    the shape of an app that added touchstone.trace() but never decorated its tool functions."""
+    score = 1.0 if good else 0.0
+    ep = store.insert_episode(conn, store.Episode(
+        name=name, outcome_score=score, outcome_label="good" if good else "bad"))
+    tool_calls = ([{"id": "c1", "name": "refund", "arguments": '{"order_id": "A1", "amount": 5}'}]
+                  if call_refund else [])
+    # first turn: the assistant calls refund; the recorded result is a following role:tool message
+    store.insert_span(conn, store.Span(
+        episode_id=ep.id, kind="model", name="m1",
+        input={"messages": [{"role": "user", "content": "refund my order please"}], "tools": []},
+        output={"message": {"role": "assistant", "content": "", "tool_calls": tool_calls}}))
+    history = [{"role": "user", "content": "refund my order please"},
+               {"role": "assistant", "content": "", "tool_calls": tool_calls}]
+    if call_refund:
+        history.append({"role": "tool", "tool_call_id": "c1",
+                        "content": '{"refunded": 5, "currency": "USD"}'})
+    store.insert_span(conn, store.Span(
+        episode_id=ep.id, kind="model", name="m2",
+        input={"messages": history, "tools": []},
+        output={"message": {"role": "assistant", "content": "Done, refunded.", "tool_calls": []}}))
+    return ep
+
+
+def test_tool_and_state_proposals_from_model_span_messages_without_tool_spans(conn):
+    # Two good episodes call refund with an amount; two bad ones never call it. No tool spans exist.
+    for i in range(2):
+        _messages_only_episode(conn, f"g{i}", good=True, call_refund=True)
+    for i in range(2):
+        _messages_only_episode(conn, f"b{i}", good=False, call_refund=False)
+    assert not [s for e in store.list_episodes(conn)
+                for s in store.list_spans(conn, e.id) if s.kind == "tool"]
+
+    props = mine_stats(conn, store.list_episodes(conn))
+    by = _by_kind(props)
+    # rank 2: tool_called from the assistant tool_calls in the messages
+    assert "refund" in {p.params["name"] for p in by.get("tool_called", [])}
+    # rank 3: a state assertion that refund is always called with the recorded fields
+    state = [p for p in by.get("expr", []) if "refund" in p.name]
+    assert state and state[0].confidence == 0.9
+    assert all("amount" in p.name or "order_id" in p.name for p in state)
+    # confidence is stamped on the programmatic tool proposal
+    assert by["tool_called"][0].confidence is not None
+
+
 def test_json_schema_proposed_when_good_outputs_are_json(conn):
     for i in range(4):
         ep = store.insert_episode(
