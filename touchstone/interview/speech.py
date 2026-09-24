@@ -193,35 +193,63 @@ def _whisper_importable() -> bool:
     return importlib.util.find_spec("faster_whisper") is not None
 
 
+def _auto_stt(settings: Settings) -> str:
+    if _whisper_importable():
+        return "faster-whisper"
+    if _openai_key(settings):
+        return "openai"
+    return "none"
+
+
+def _build_whisper_stt(reason: str) -> tuple[STT, Resolution]:
+    if not _whisper_importable():
+        return NoneSTT(), Resolution(
+            "stt", "none", "faster-whisper not installed; `pip install touchstone[whisper]`"
+        )
+    detail = "model 'base' will download ~150MB on first use"
+    return FasterWhisperSTT(), Resolution("stt", "faster-whisper", f"{reason}; {detail}")
+
+
+def _build_openai_stt(settings: Settings, reason: str) -> tuple[STT, Resolution]:
+    key = _openai_key(settings)
+    if not key:
+        return NoneSTT(), Resolution(
+            "stt", "none", "openai selected but no OPENAI_API_KEY / keychain key"
+        )
+    return OpenAISTT(key), Resolution("stt", "openai", f"{reason}; whisper-1")
+
+
 def resolve_stt(settings: Settings) -> tuple[STT, Resolution]:
     choice = settings.stt
     if choice == "auto":
-        if _whisper_importable():
-            choice = "faster-whisper"
-        elif _openai_key(settings):
-            choice = "openai"
-        else:
-            choice = "none"
+        choice = _auto_stt(settings)
         reason = f"auto -> {choice}"
     else:
         reason = "configured"
 
     if choice == "faster-whisper":
-        if not _whisper_importable():
-            return NoneSTT(), Resolution(
-                "stt", "none", "faster-whisper not installed; `pip install touchstone[whisper]`"
-            )
-        detail = "model 'base' will download ~150MB on first use"
-        return FasterWhisperSTT(), Resolution("stt", "faster-whisper", f"{reason}; {detail}")
+        return _build_whisper_stt(reason)
     if choice == "openai":
-        key = _openai_key(settings)
-        if not key:
-            return NoneSTT(), Resolution(
-                "stt", "none", "openai selected but no OPENAI_API_KEY / keychain key"
-            )
-        return OpenAISTT(key), Resolution("stt", "openai", f"{reason}; whisper-1")
+        return _build_openai_stt(settings, reason)
     detail = reason if choice == "none" else f"unknown stt {choice!r} -> none"
     return NoneSTT(), Resolution("stt", "none", detail)
+
+
+def _build_say_tts(reason: str) -> tuple[TTS, Resolution]:
+    if shutil.which("say") is None:
+        return BrowserTTS(), Resolution(
+            "tts", "browser", "say selected but not on PATH; using browser"
+        )
+    return SayTTS(), Resolution("tts", "say", f"{reason}; macOS `say`")
+
+
+def _build_openai_tts(settings: Settings, reason: str) -> tuple[TTS, Resolution]:
+    key = _openai_key(settings)
+    if not key:
+        return BrowserTTS(), Resolution(
+            "tts", "browser", "openai selected but no key; using browser"
+        )
+    return OpenAITTS(key), Resolution("tts", "openai", f"{reason}; tts-1 voice alloy")
 
 
 def resolve_tts(settings: Settings) -> tuple[TTS, Resolution]:
@@ -231,18 +259,9 @@ def resolve_tts(settings: Settings) -> tuple[TTS, Resolution]:
         choice = "browser"
 
     if choice == "say":
-        if shutil.which("say") is None:
-            return BrowserTTS(), Resolution(
-                "tts", "browser", "say selected but not on PATH; using browser"
-            )
-        return SayTTS(), Resolution("tts", "say", f"{reason}; macOS `say`")
+        return _build_say_tts(reason)
     if choice == "openai":
-        key = _openai_key(settings)
-        if not key:
-            return BrowserTTS(), Resolution(
-                "tts", "browser", "openai selected but no key; using browser"
-            )
-        return OpenAITTS(key), Resolution("tts", "openai", f"{reason}; tts-1 voice alloy")
+        return _build_openai_tts(settings, reason)
     detail = reason if choice == "browser" else f"unknown tts {choice!r} -> browser"
     return BrowserTTS(), Resolution("tts", "browser", detail)
 
