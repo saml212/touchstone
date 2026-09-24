@@ -146,6 +146,31 @@ def test_transport_error_message_has_no_key():
     assert KEY not in str(exc.value)
 
 
+def test_400_includes_api_error_message_not_the_key():
+    def handler(req):
+        return httpx.Response(400, json={"error": {
+            "message": "Invalid 'messages[3].role': tool must follow a tool_calls turn.",
+            "type": "invalid_request_error"}})
+
+    with pytest.raises(ProviderError) as exc:
+        make(handler).chat([{"role": "user", "content": "hi"}])
+    msg = str(exc.value)
+    assert "HTTP 400" in msg
+    assert "tool must follow a tool_calls turn" in msg
+    assert KEY not in msg
+
+
+def test_error_detail_is_capped_at_200_chars():
+    def handler(req):
+        return httpx.Response(400, json={"error": {"message": "x" * 500}})
+
+    with pytest.raises(ProviderError) as exc:
+        make(handler).chat([{"role": "user", "content": "hi"}])
+    # 200 chars of detail, plus the "... HTTP 400: " prefix
+    assert ("x" * 200) in str(exc.value)
+    assert ("x" * 201) not in str(exc.value)
+
+
 def test_malformed_json_response():
     def handler(req):
         return httpx.Response(200, content=b"not json")

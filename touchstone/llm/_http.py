@@ -27,6 +27,32 @@ def _sleep(backoff: float, attempt: int) -> None:
         time.sleep(backoff * (2**attempt))
 
 
+def _error_detail(resp: httpx.Response) -> str:
+    """The API's own error reason (`error.message` when present), capped at 200 chars.
+
+    Reads only the response body — never the request or a key.
+    """
+    try:
+        data = resp.json()
+    except (ValueError, UnicodeDecodeError):
+        return (resp.text or "").strip()[:200]
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])[:200]
+        if isinstance(err, str) and err:
+            return err[:200]
+        if data.get("message"):
+            return str(data["message"])[:200]
+    return str(data)[:200]
+
+
+def _http_error(label: str, resp: httpx.Response) -> ProviderError:
+    detail = _error_detail(resp)
+    suffix = f": {detail}" if detail else "."
+    return ProviderError(f"{label} failed with HTTP {resp.status_code}{suffix}")
+
+
 def post_json(
     client: httpx.Client,
     url: str,
@@ -59,7 +85,7 @@ def post_json(
                 _sleep(backoff, attempt)
                 attempt += 1
                 continue
-            raise ProviderError(f"{label} failed with HTTP {resp.status_code}.")
+            raise _http_error(label, resp)
         return resp
 
 
@@ -95,5 +121,5 @@ async def apost_json(
                 _sleep(backoff, attempt)
                 attempt += 1
                 continue
-            raise ProviderError(f"{label} failed with HTTP {resp.status_code}.")
+            raise _http_error(label, resp)
         return resp
