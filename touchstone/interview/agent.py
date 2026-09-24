@@ -102,8 +102,14 @@ class Interviewer:
             lines.append(outcome)
         kinds = ", ".join(c.kind for c in task.checks)
         lines.append(f"Checks already attached: {kinds}." if kinds else "No checks attached yet.")
+        lines.append(self._queue_line(task))
         lines.append(_CLARIFY)
         return " ".join(lines)
+
+    def _queue_line(self, task) -> str:
+        """Which work queue the task is in, and why — so the room knows what it owes."""
+        reason = f" — {task.status_reason}" if task.status_reason else ""
+        return f"This task is in the {task.status} queue{reason}."
 
     def _last_user_turn(self, task) -> str:
         for msg in reversed((task.context or {}).get("messages", [])):

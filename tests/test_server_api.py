@@ -198,6 +198,19 @@ def test_rooms_list_open_first(db):
     assert rooms[0]["task_name"] == "t1"
 
 
+def test_create_room_accepts_task_key_and_summarizes(db):
+    # The room create route must resolve the task whether the body carries `task_id`
+    # or the shorter `task`; a dropped key silently degrades the opening to the
+    # taskless "Let's define what good looks like" fallback instead of a summary.
+    ids = _seed(db)
+    c = _client(db)
+    r = c.post("/api/rooms", json={"task": ids["t1"], "topic": "needs a positive check"}).json()
+    assert r["room"]["task_id"] == ids["t1"]
+    opening = r["messages"][0]["text"]
+    assert "Let's define what good looks like" not in opening
+    assert "t1" in opening and "refund" in opening
+
+
 def test_export_harbor_points_at_tasks(db):
     _seed(db)
     c = _client(db)

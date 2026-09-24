@@ -61,6 +61,15 @@ def test_open_statement_summarizes_task(conn, root):
     assert "?" in text
 
 
+def test_open_statement_names_the_work_queue(conn, root):
+    # support-1 has no hard checks, so an empty reply already passes -> needs_checks.
+    # The opening must say which queue the task is in and why, so a stakeholder knows
+    # the room needs a positive rule that measures the work.
+    name, room = _task_room(conn, root)
+    text = Interviewer(_provider(), conn, room, root).open_statement()
+    assert "empty reply already passes every hard check" in text
+
+
 def test_draft_then_yes_commits_check(conn, root):
     name, room = _task_room(conn, root)
     agent = Interviewer(_provider(), conn, room, root)

@@ -67,7 +67,8 @@ def get_room(room_id: str, request: Request, conn=Depends(get_conn),
 def create_room(body: dict, request: Request, conn=Depends(get_conn),
                 root=Depends(get_root)) -> dict:
     topic = (body.get("topic") or "").strip() or "quality review"
-    room = rooms.open(conn, task_id=body.get("task_id"), topic=topic)
+    task_id = body.get("task_id") or body.get("task")
+    room = rooms.open(conn, task_id=task_id, topic=topic)
     opening = Interviewer(None, conn, room, root).open_statement()
     rooms.post(conn, room.id, "agent", "assistant", opening)
     return _room_state(conn, root, room.id, request.app.state.settings.speech_mode)
