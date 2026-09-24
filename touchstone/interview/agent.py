@@ -138,14 +138,17 @@ class Interviewer:
 
         explicit = any(_is_cmd(m, "/commit") for m in new)
         if explicit or (affirm and not object_):
-            # "Yes, but with X" — a confirmation carrying a new rule must be revised through the
-            # LLM before it's committed, so the committed check reflects the amendment, not the
-            # stale draft. A bare "yes" commits the draft as-is.
-            if not explicit and self._has_amendment(new):
-                return self._revise_then_commit(history)
-            return self._commit_draft()
+            return self._confirm_turn(history, new, explicit)
 
         return self._llm_turn(history)
+
+    def _confirm_turn(self, history: list[dict], new: list[dict], explicit: bool) -> AgentTurn:
+        # "Yes, but with X" — a confirmation carrying a new rule must be revised through the LLM
+        # before it's committed, so the committed check reflects the amendment, not the stale
+        # draft. A bare "yes" commits the draft as-is.
+        if not explicit and self._has_amendment(new):
+            return self._revise_then_commit(history)
+        return self._commit_draft()
 
     def _has_amendment(self, new: list[dict]) -> bool:
         for m in new:

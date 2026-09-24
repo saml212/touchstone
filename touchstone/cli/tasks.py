@@ -21,6 +21,21 @@ def tasks_list(tag: str = typer.Option(None, "--tag", help="Filter by tag.")) ->
             typer.echo(f"{t.id}  [{len(t.check_ids or [])} checks]  {t.name}  ({tags})")
 
 
+def _echo_context(task: store.Task) -> None:
+    typer.echo("context:")
+    for m in (task.context or {}).get("messages", []):
+        content = m.get("content", "")
+        text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        typer.echo(f"  {m.get('role', '?'):9} {text[:100]}")
+
+
+def _echo_checks(conn, task: store.Task) -> None:
+    typer.echo("checks:")
+    for cid in task.check_ids or []:
+        c = store.get_check(conn, cid)
+        typer.echo(f"  {cid}  {c.kind if c else '(missing)'}")
+
+
 @tasks_app.command("show")
 def tasks_show(task_id: str) -> None:
     """Show one task: context turns, reference, and attached checks."""
@@ -31,16 +46,9 @@ def tasks_show(task_id: str) -> None:
         typer.echo(f"id:     {task.id}")
         typer.echo(f"name:   {task.name}")
         typer.echo(f"tags:   {', '.join(task.tags or [])}")
-        typer.echo("context:")
-        for m in (task.context or {}).get("messages", []):
-            content = m.get("content", "")
-            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
-            typer.echo(f"  {m.get('role', '?'):9} {text[:100]}")
+        _echo_context(task)
         typer.echo(f"reference: {json.dumps(task.reference, ensure_ascii=False)}")
-        typer.echo("checks:")
-        for cid in task.check_ids or []:
-            c = store.get_check(conn, cid)
-            typer.echo(f"  {cid}  {c.kind if c else '(missing)'}")
+        _echo_checks(conn, task)
 
 
 @tasks_app.command("attach")
