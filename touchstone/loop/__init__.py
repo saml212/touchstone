@@ -6,6 +6,7 @@ training data. All run off the store and the task files, deterministically with 
 provider.
 """
 
+from .distill import distill
 from .frontier import (
     check_stop,
     frontier,
@@ -30,4 +31,5 @@ __all__ = [
     "teach",
     "demo_replies",
     "escalate",
+    "distill",
 ]

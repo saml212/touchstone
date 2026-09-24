@@ -50,11 +50,15 @@ def teach(
     names: list[str],
     teacher_spec: str | None = None,
     *,
+    target: str = "teacher",
     settings: Settings | None = None,
     teacher_provider=None,
     judge_provider=None,
 ) -> dict:
-    """Produce and store gated teacher demonstrations for `names`. Returns accepted/failed lists."""
+    """Produce and store gated teacher demonstrations for `names`. Returns accepted/failed lists.
+
+    Demos are stored under run `target` (Distill passes the benchmark so the demos join its run
+    history and pair against the student's failing replies)."""
     settings = settings or load_settings()
     teacher_spec = teacher_spec or settings.agent_provider
     provider = teacher_provider or provider_or_none(teacher_spec, settings)
@@ -62,7 +66,7 @@ def teach(
     if provider is None:
         return {"teacher": model_spec, "run": None, "accepted": [], "failed": list(names)}
 
-    run = store.insert_run(conn, store.Run(target="teacher", model_spec=model_spec))
+    run = store.insert_run(conn, store.Run(target=target, model_spec=model_spec))
     accepted, failed = [], []
     for name in names:
         ok = _teach_one(conn, root, run.id, name, provider, judge_provider, model_spec)

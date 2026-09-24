@@ -51,3 +51,32 @@ def post_sample(body: dict, request: Request, conn=Depends(get_conn),
                           concurrency=int(body.get("concurrency", 4)))
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(422, f"sample failed: {exc}") from exc
+
+
+@router.post("/api/distill")
+def post_distill(body: dict, request: Request, conn=Depends(get_conn),
+                 root=Depends(get_root)) -> dict:
+    from ...loop import distill as run_distill
+
+    target = (body.get("target") or body.get("benchmark") or "").strip()
+    student = (body.get("student") or "").strip()
+    if not target or not student:
+        raise HTTPException(422, "target and student are required")
+    _require_target(root, target)
+    settings = request.app.state.settings
+    try:
+        return run_distill(conn, root, target, student,
+                           teacher_spec=body.get("teacher") or None,
+                           backend=(body.get("backend") or "null").strip(),
+                           base_model=body.get("base_model") or None,
+                           settings=settings,
+                           judge_provider=_judge(settings, body.get("judge")))
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(422, f"distill failed: {exc}") from exc
+
+
+@router.get("/api/loop/{benchmark}")
+def get_loop_state(benchmark: str, root=Depends(get_root)) -> dict:
+    from ...loop import read_loop_state
+
+    return read_loop_state(root, benchmark)

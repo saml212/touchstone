@@ -150,9 +150,15 @@ def _preference_rows(conn, target: str, tasks: list[tasks_mod.Task]) -> list[dic
     return rows
 
 
-def prepare(conn, root, target: str, out_dir: str | Path) -> DatasetBundle:
-    """Write sft/preference/rl datasets + manifest for `target` into `out_dir`."""
+def prepare(conn, root, target: str, out_dir: str | Path,
+            *, only: set[str] | None = None) -> DatasetBundle:
+    """Write sft/preference/rl datasets + manifest for `target` into `out_dir`.
+
+    `only` restricts the rows to a subset of task names (Distill passes the frontier), so a
+    Distill round packages exactly the tasks the student is still failing."""
     tasks = [tasks_mod.read_task(d) for d in benchmark.resolve(root, target)]
+    if only is not None:
+        tasks = [t for t in tasks if t.name in only]
     if not tasks:
         raise ValueError(f"target {target!r} resolves to no active tasks")
     out = Path(out_dir).expanduser()

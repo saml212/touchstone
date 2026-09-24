@@ -295,3 +295,14 @@ def test_sample_endpoint_returns_frontier(db):
     # validation errors are one clear sentence
     assert c.post("/api/sample", json={"target": "demo"}).status_code == 422
     assert c.post("/api/sample", json={"target": "nope", "student": "scripted"}).status_code == 404
+
+
+def test_distill_endpoint_packages_frontier(db):
+    _seed(db)
+    c = _client(db)
+    c.post("/api/sample", json={"target": "demo", "student": "scripted", "variants": 1})
+    r = c.post("/api/distill", json={"target": "demo", "student": "scripted", "backend": "null"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "frontier" in body and "plan" in body and body["backend"] == "null"
+    assert c.get("/api/loop/demo").json()["student"] == "scripted"
