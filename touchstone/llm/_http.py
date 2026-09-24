@@ -27,6 +27,17 @@ def _sleep(backoff: float, attempt: int) -> None:
         time.sleep(backoff * (2**attempt))
 
 
+def _error_from_dict(data: dict) -> str | None:
+    err = data.get("error")
+    if isinstance(err, dict) and err.get("message"):
+        return str(err["message"])[:200]
+    if isinstance(err, str) and err:
+        return err[:200]
+    if data.get("message"):
+        return str(data["message"])[:200]
+    return None
+
+
 def _error_detail(resp: httpx.Response) -> str:
     """The API's own error reason (`error.message` when present), capped at 200 chars.
 
@@ -37,13 +48,9 @@ def _error_detail(resp: httpx.Response) -> str:
     except (ValueError, UnicodeDecodeError):
         return (resp.text or "").strip()[:200]
     if isinstance(data, dict):
-        err = data.get("error")
-        if isinstance(err, dict) and err.get("message"):
-            return str(err["message"])[:200]
-        if isinstance(err, str) and err:
-            return err[:200]
-        if data.get("message"):
-            return str(data["message"])[:200]
+        detail = _error_from_dict(data)
+        if detail is not None:
+            return detail
     return str(data)[:200]
 
 
@@ -51,6 +58,33 @@ def _http_error(label: str, resp: httpx.Response) -> ProviderError:
     detail = _error_detail(resp)
     suffix = f": {detail}" if detail else "."
     return ProviderError(f"{label} failed with HTTP {resp.status_code}{suffix}")
+
+
+def _retry_transport(
+    exc: httpx.TransportError,
+    label: str,
+    timeout: float,
+    attempt: int,
+    retries: int,
+    backoff: float,
+) -> int:
+    """Sleep and return the next attempt for a transport failure, or raise the terminal error."""
+    if attempt < retries:
+        _sleep(backoff, attempt)
+        return attempt + 1
+    if isinstance(exc, httpx.TimeoutException):
+        raise ProviderError(f"{label} timed out after {timeout}s.") from exc
+    raise ProviderError(f"{label} could not reach the endpoint.") from exc
+
+
+def _retry_status(
+    resp: httpx.Response, label: str, attempt: int, retries: int, backoff: float
+) -> int:
+    """Sleep and return the next attempt for a retryable HTTP error, or raise the terminal error."""
+    if _should_retry(resp.status_code) and attempt < retries:
+        _sleep(backoff, attempt)
+        return attempt + 1
+    raise _http_error(label, resp)
 
 
 def post_json(
@@ -68,24 +102,12 @@ def post_json(
     while True:
         try:
             resp = client.post(url, headers=headers, json=body, timeout=timeout)
-        except httpx.TimeoutException as exc:
-            if attempt < retries:
-                _sleep(backoff, attempt)
-                attempt += 1
-                continue
-            raise ProviderError(f"{label} timed out after {timeout}s.") from exc
         except httpx.TransportError as exc:
-            if attempt < retries:
-                _sleep(backoff, attempt)
-                attempt += 1
-                continue
-            raise ProviderError(f"{label} could not reach the endpoint.") from exc
+            attempt = _retry_transport(exc, label, timeout, attempt, retries, backoff)
+            continue
         if resp.status_code >= 400:
-            if _should_retry(resp.status_code) and attempt < retries:
-                _sleep(backoff, attempt)
-                attempt += 1
-                continue
-            raise _http_error(label, resp)
+            attempt = _retry_status(resp, label, attempt, retries, backoff)
+            continue
         return resp
 
 
@@ -104,22 +126,10 @@ async def apost_json(
     while True:
         try:
             resp = await client.post(url, headers=headers, json=body, timeout=timeout)
-        except httpx.TimeoutException as exc:
-            if attempt < retries:
-                _sleep(backoff, attempt)
-                attempt += 1
-                continue
-            raise ProviderError(f"{label} timed out after {timeout}s.") from exc
         except httpx.TransportError as exc:
-            if attempt < retries:
-                _sleep(backoff, attempt)
-                attempt += 1
-                continue
-            raise ProviderError(f"{label} could not reach the endpoint.") from exc
+            attempt = _retry_transport(exc, label, timeout, attempt, retries, backoff)
+            continue
         if resp.status_code >= 400:
-            if _should_retry(resp.status_code) and attempt < retries:
-                _sleep(backoff, attempt)
-                attempt += 1
-                continue
-            raise _http_error(label, resp)
+            attempt = _retry_status(resp, label, attempt, retries, backoff)
+            continue
         return resp
