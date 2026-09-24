@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 
 import jsonschema
-from simpleeval import SimpleEval
+from simpleeval import EvalWithCompoundTypes
 
 from .dsl import Target, is_catastrophic_regex
 
@@ -193,7 +193,10 @@ def _expr(params, target):
         "tools": target.tool_calls,
         "reference": target.reference,
     }
-    evaluator = SimpleEval(names=names, functions={"len": len})
+    # EvalWithCompoundTypes allows comprehensions so a state assertion can iterate `tools`
+    # (e.g. any(t.get('name') == 'refund' ... for t in tools)); it keeps the same dunder/import
+    # sandbox as SimpleEval. `any`/`all` join the whitelisted functions.
+    evaluator = EvalWithCompoundTypes(names=names, functions={"len": len, "any": any, "all": all})
     try:
         value = evaluator.eval(params["expr"])
     except Exception as exc:  # sandbox refusal, timeout guards, bad expression

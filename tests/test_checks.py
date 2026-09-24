@@ -162,6 +162,13 @@ def test_expr_uses_tools_and_reference():
     assert r.passed is True
 
 
+def test_expr_comprehension_over_tools_for_state_assertions():
+    calls = [{"name": "refund", "arguments": '{"amount": 5}'}]
+    expr = "any(t.get('name') == 'refund' and 'amount' in (t.get('arguments') or '') for t in tools)"
+    assert _one("expr", {"expr": expr}, tool_calls=calls).passed is True
+    assert _one("expr", {"expr": expr}, tool_calls=[]).passed is False
+
+
 def test_expr_sandbox_refuses_import():
     r = _one("expr", {"expr": '__import__("os").system("echo hi")'}, "x")
     assert r.passed is None
