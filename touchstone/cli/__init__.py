@@ -22,6 +22,7 @@ db_path = "{DEFAULT_DB}"
 provider = "scripted"
 {{keychain_prefix}}
 [speech]
+mode = "local"                 # local | realtime (OpenAI Realtime, needs OPENAI_API_KEY)
 stt = "none"
 tts = "browser"
 """

@@ -1,9 +1,9 @@
 from touchstone.config import load_settings
 
 
-def test_agent_provider_defaults_to_codex_cli(tmp_path, monkeypatch):
+def test_agent_provider_defaults_to_claude_cli(tmp_path, monkeypatch):
     monkeypatch.delenv("TOUCHSTONE_AGENT_PROVIDER", raising=False)
-    assert load_settings(tmp_path / "missing.toml").agent_provider == "codex-cli"
+    assert load_settings(tmp_path / "missing.toml").agent_provider == "claude-cli"
 
 
 def test_agent_provider_from_toml(tmp_path):
@@ -30,3 +30,24 @@ def test_keychain_prefix_from_toml_overrides_default(tmp_path):
     cfg = tmp_path / "touchstone.toml"
     cfg.write_text('keychain_prefix = "rockie-"\n', encoding="utf-8")
     assert load_settings(cfg).keychain_prefix == "rockie-"
+
+
+def test_speech_mode_defaults_to_local(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOUCHSTONE_SPEECH_MODE", raising=False)
+    s = load_settings(tmp_path / "missing.toml")
+    assert s.speech_mode == "local"
+    assert s.realtime_model == "gpt-realtime-2.1-mini"
+    assert s.realtime_voice == "marin"
+
+
+def test_speech_mode_from_toml_and_env(tmp_path, monkeypatch):
+    cfg = tmp_path / "touchstone.toml"
+    cfg.write_text(
+        '[speech]\nmode = "realtime"\nrealtime_model = "gpt-realtime-2.1"\n', encoding="utf-8"
+    )
+    monkeypatch.delenv("TOUCHSTONE_SPEECH_MODE", raising=False)
+    s = load_settings(cfg)
+    assert s.speech_mode == "realtime"
+    assert s.realtime_model == "gpt-realtime-2.1"
+    monkeypatch.setenv("TOUCHSTONE_SPEECH_MODE", "local")
+    assert load_settings(cfg).speech_mode == "local"

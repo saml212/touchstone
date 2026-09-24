@@ -14,12 +14,15 @@ DEFAULT_DB = "./.touchstone/touchstone.db"
 class Settings:
     db_path: str = DEFAULT_DB
     provider: str = "scripted"
-    agent_provider: str = "codex-cli"
+    agent_provider: str = "claude-cli"
     keychain_prefix: str = "touchstone-"
     keychain_openai: str = "openai-api-key"
     keychain_anthropic: str = "anthropic-api-key"
     stt: str = "none"
     tts: str = "browser"
+    speech_mode: str = "local"  # local | realtime
+    realtime_model: str = "gpt-realtime-2.1-mini"
+    realtime_voice: str = "marin"
     extra: dict = field(default_factory=dict)
 
     @property
@@ -52,6 +55,7 @@ _ENV_KEYS = {
     "TOUCHSTONE_KEYCHAIN_PREFIX": "keychain_prefix",
     "TOUCHSTONE_STT": "stt",
     "TOUCHSTONE_TTS": "tts",
+    "TOUCHSTONE_SPEECH_MODE": "speech_mode",
 }
 
 
@@ -65,6 +69,9 @@ def _apply_toml(s: Settings, data: dict) -> None:
     speech = data.get("speech", {})
     s.stt = speech.get("stt", s.stt)
     s.tts = speech.get("tts", s.tts)
+    s.speech_mode = speech.get("mode", s.speech_mode)
+    s.realtime_model = speech.get("realtime_model", s.realtime_model)
+    s.realtime_voice = speech.get("realtime_voice", s.realtime_voice)
     s.extra = data
 
 

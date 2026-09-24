@@ -85,7 +85,7 @@ class NoneSTT:
 @dataclass
 class OpenAISTT:
     api_key: str
-    model: str = "whisper-1"
+    model: str = "gpt-4o-mini-transcribe"
     timeout: float = 60.0
     name: str = "openai"
 
@@ -154,8 +154,8 @@ class SayTTS:
 @dataclass
 class OpenAITTS:
     api_key: str
-    model: str = "tts-1"
-    voice: str = "alloy"
+    model: str = "gpt-4o-mini-tts"
+    voice: str = "marin"
     timeout: float = 60.0
     name: str = "openai"
 
@@ -216,7 +216,7 @@ def _build_openai_stt(settings: Settings, reason: str) -> tuple[STT, Resolution]
         return NoneSTT(), Resolution(
             "stt", "none", "openai selected but no OPENAI_API_KEY / keychain key"
         )
-    return OpenAISTT(key), Resolution("stt", "openai", f"{reason}; whisper-1")
+    return OpenAISTT(key), Resolution("stt", "openai", f"{reason}; gpt-4o-mini-transcribe")
 
 
 def resolve_stt(settings: Settings) -> tuple[STT, Resolution]:
@@ -249,7 +249,7 @@ def _build_openai_tts(settings: Settings, reason: str) -> tuple[TTS, Resolution]
         return BrowserTTS(), Resolution(
             "tts", "browser", "openai selected but no key; using browser"
         )
-    return OpenAITTS(key), Resolution("tts", "openai", f"{reason}; tts-1 voice alloy")
+    return OpenAITTS(key), Resolution("tts", "openai", f"{reason}; gpt-4o-mini-tts voice marin")
 
 
 def resolve_tts(settings: Settings) -> tuple[TTS, Resolution]:
@@ -280,15 +280,25 @@ class Speech:
         return cls(stt=stt, tts=tts, stt_resolution=stt_res, tts_resolution=tts_res)
 
 
+def realtime_status(settings: Settings) -> Resolution:
+    """For `doctor`: the speech mode and whether realtime is reachable (key present), no network."""
+    has_key = _openai_key(settings) is not None
+    if settings.speech_mode == "realtime":
+        avail = settings.realtime_model if has_key else "no OPENAI_API_KEY — falls back to local"
+        return Resolution("mode", "realtime", avail)
+    avail = "available (key present)" if has_key else "needs OPENAI_API_KEY"
+    return Resolution("mode", "local", f"realtime {avail}")
+
+
 def speech_status(settings: Settings) -> list[Resolution]:
-    """For `doctor`: which STT/TTS resolved and why, without loading heavy models."""
-    return [resolve_stt(settings)[1], resolve_tts(settings)[1]]
+    """For `doctor`: the mode plus which STT/TTS resolved and why, without loading heavy models."""
+    return [realtime_status(settings), resolve_stt(settings)[1], resolve_tts(settings)[1]]
 
 
 __all__ = [
     "STT", "TTS", "Speech", "SpeechError", "Resolution",
     "NoneSTT", "OpenAISTT", "FasterWhisperSTT",
     "BrowserTTS", "SayTTS", "OpenAITTS",
-    "validate_audio", "sniff_audio", "speech_status", "resolve_stt", "resolve_tts",
-    "MAX_AUDIO_BYTES",
+    "validate_audio", "sniff_audio", "speech_status", "realtime_status",
+    "resolve_stt", "resolve_tts", "MAX_AUDIO_BYTES",
 ]

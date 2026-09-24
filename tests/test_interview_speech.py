@@ -93,7 +93,18 @@ def test_from_settings_and_status(monkeypatch):
     sp = Speech.from_settings(_settings())
     assert isinstance(sp.stt, NoneSTT) and isinstance(sp.tts, BrowserTTS)
     kinds = {r.kind for r in speech.speech_status(_settings())}
-    assert kinds == {"stt", "tts"}
+    assert kinds == {"mode", "stt", "tts"}
+
+
+def test_realtime_status_reports_mode_and_key(monkeypatch):
+    monkeypatch.setattr(speech, "_openai_key", lambda s: None)
+    local = speech.realtime_status(_settings())
+    assert local.name == "local" and "needs OPENAI_API_KEY" in local.detail
+    monkeypatch.setattr(speech, "_openai_key", lambda s: "sk-test")
+    avail = speech.realtime_status(_settings())
+    assert "available" in avail.detail
+    rt = speech.realtime_status(Settings(speech_mode="realtime", realtime_model="gpt-realtime-2.1"))
+    assert rt.name == "realtime" and "gpt-realtime-2.1" in rt.detail
 
 
 @pytest.mark.skipif(

@@ -202,6 +202,7 @@ sdk: openai           missing  not installed
 provider: scripted    ok       always available
 provider: reference   ok       always available (replays recorded references)
 provider: claude-cli  ok       claude on PATH
+speech: mode          ok       local — realtime needs OPENAI_API_KEY
 speech: stt           ok       none — configured
 tool: harbor          ok       /Users/you/.local/bin/harbor
 tool: docker          missing  not on PATH
@@ -217,7 +218,7 @@ the Keychain service prefix; omit it to use the default `touchstone-`.
 ```toml
 db_path = "./.touchstone/touchstone.db"
 provider = "scripted"          # default judge/mining provider spec
-agent_provider = "codex-cli"   # provider for mining LLM proposals + the interviewer
+agent_provider = "claude-cli"  # provider for mining LLM proposals + the interviewer
 # keychain_prefix = "touchstone-"   # written only when you pass --keychain-prefix
 
 [keychain]
@@ -225,19 +226,32 @@ openai = "openai-api-key"       # -> service "touchstone-openai-api-key"
 anthropic = "anthropic-api-key"
 
 [speech]
+mode = "local"                 # local | realtime (OpenAI Realtime, needs OPENAI_API_KEY)
 stt = "none"                    # none | faster-whisper | openai
 tts = "browser"                 # browser | say | openai
+# realtime_model = "gpt-realtime-2.1-mini"
+# realtime_voice = "marin"
 ```
 
 Every value also has an env override: `TOUCHSTONE_DB`, `TOUCHSTONE_PROVIDER`,
-`TOUCHSTONE_AGENT_PROVIDER`, `TOUCHSTONE_KEYCHAIN_PREFIX`, `TOUCHSTONE_STT`, `TOUCHSTONE_TTS` (env
-beats file beats default).
+`TOUCHSTONE_AGENT_PROVIDER`, `TOUCHSTONE_KEYCHAIN_PREFIX`, `TOUCHSTONE_STT`, `TOUCHSTONE_TTS`,
+`TOUCHSTONE_SPEECH_MODE` (env beats file beats default).
 
 ## Speech
 
-STT: `faster-whisper` (local, `pip install 'touchstone[whisper]'`), `openai` (whisper-1), or `none`.
-TTS: `browser` (`speechSynthesis`, zero-dep default), `say` (macOS), or `openai`. `touchstone doctor`
-reports what's resolvable; text-only interviews always work.
+Two modes, set by `[speech] mode`:
+
+- **`local`** (default, zero-key, offline): push-to-talk → STT → text interviewer → TTS.
+  STT: `faster-whisper` (local, `pip install 'touchstone[whisper]'`), `openai`
+  (`gpt-4o-mini-transcribe`), or `none`. TTS: `browser` (`speechSynthesis`, zero-dep default),
+  `say` (macOS), or `openai` (`gpt-4o-mini-tts`). Text-only always works.
+- **`realtime`** (additive, needs `OPENAI_API_KEY`): one server-side OpenAI Realtime
+  speech-to-speech session per room (`realtime_model`, default `gpt-realtime-2.1-mini`; `realtime_voice`,
+  default `marin`). Browsers push-to-talk 24 kHz PCM over the room WebSocket and hear the agent's
+  reply; several stakeholders share one session. The agent reads a check back in plain words before
+  committing. On any Realtime error the room falls back to `local` for that session.
+
+`touchstone doctor` reports the mode and whether realtime is reachable (key present), no network.
 
 ## Harbor
 

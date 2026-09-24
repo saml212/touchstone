@@ -33,7 +33,7 @@ def test_doctor_reports_one_table(tmp_path, monkeypatch):
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     for row in ("component", "python", "database", "provider: scripted", "provider: reference",
-                "provider: claude-cli", "speech: stt", "tool: harbor", "tool: docker",
+                "provider: claude-cli", "speech: mode", "speech: stt", "tool: harbor", "tool: docker",
                 "tool: ffmpeg", "train: art", "train: trl"):
         assert row in result.output, row
 
