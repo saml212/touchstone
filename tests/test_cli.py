@@ -28,6 +28,18 @@ def test_init_writes_keychain_prefix_when_passed(tmp_path, monkeypatch):
     assert 'keychain_prefix = "rockie-"' in text
 
 
+def test_bare_command_prints_the_loop_and_next_step(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, [])
+    assert result.exit_code == 0
+    assert "Touchstone — the loop:" in result.output
+    # Six numbered loop lines, then the project's next step.
+    for i in range(1, 7):
+        assert f"  {i}. " in result.output
+    assert "Next: Capture traces first" in result.output  # empty project -> capture
+    assert not (tmp_path / ".touchstone").exists()  # a bare run creates nothing
+
+
 def test_doctor_reports_one_table(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["doctor"])

@@ -271,8 +271,9 @@ backend, run the one command.
 
 FastAPI + uvicorn, single-page static UI (vanilla JS, no build step). Pages: Overview, Episodes,
 Checks, Tasks, Rooms, Benchmarks, Train. JSON API under `/api/*`, WebSocket `/ws/rooms/{id}`;
-everything the CLI does the API does, both calling the same functions. The Overview page shows a
-next-step hint driven by the work queues. CLI surface:
+everything the CLI does the API does, both calling the same functions. `touchstone` with no
+arguments prints the loop in six lines and this project's next step — the same
+`overview.next_step` hint the Overview page shows (and it never creates a database). CLI surface:
 `init`, `doctor`, `demo`, `serve`, `mine`, `checks {list,add,enable,disable,show,eval}`,
 `tasks {list,show,sync}`, `interview`, `bench {create,run,report,proof,runs,harbor-run}`, `sample`,
 `distill`, `export {harbor,atif}`, `train {prepare,submit}`. Exit codes non-zero on failure; errors

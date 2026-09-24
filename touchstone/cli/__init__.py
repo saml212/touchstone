@@ -12,10 +12,43 @@ from .. import store
 from ..config import DEFAULT_DB, load_settings
 from ._common import _fail, _installed
 
-app = typer.Typer(
-    help="Touchstone — prove a cheaper model is good enough before you switch.",
-    no_args_is_help=True,
+app = typer.Typer(add_completion=True)
+
+_LOOP = (
+    ("capture", "import touchstone; touchstone.trace()"),
+    ("review", "touchstone serve"),
+    ("mine", "touchstone mine"),
+    ("interview", "touchstone interview <task>"),
+    ("prove", "touchstone bench run <bench> -m <model>"),
+    ("improve", "touchstone sample / distill <bench>"),
 )
+_EMPTY_SIGNALS = {"episodes": 0, "tasks": 0, "active": 0, "needs_checks": 0,
+                  "needs_solution": 0, "runs": 0, "sampled": False, "frontier": 0}
+
+
+def _next_step() -> str:
+    """This project's one next move — the same hint the Overview page shows."""
+    from ..overview import next_step, project_signals
+
+    settings = load_settings()
+    if not settings.db.exists():  # a bare `touchstone` must not create a database
+        return next_step(_EMPTY_SIGNALS)
+    conn = store.connect(settings.db_path)
+    try:
+        return next_step(project_signals(conn, settings.root))
+    finally:
+        conn.close()
+
+
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context) -> None:
+    """Touchstone — prove a cheaper model is good enough before you switch."""
+    if ctx.invoked_subcommand is not None:
+        return
+    typer.echo("Touchstone — the loop:")
+    for i, (label, cmd) in enumerate(_LOOP, 1):
+        typer.echo(f"  {i}. {label:9} {cmd}")
+    typer.echo(f"\nNext: {_next_step()}")
 
 TOML_TEMPLATE = f"""# Touchstone config
 db_path = "{DEFAULT_DB}"
@@ -85,8 +118,7 @@ def _doctor_rows(settings) -> list[tuple[str, str, str]]:
 
 @app.command()
 def doctor() -> None:
-    """Report the environment as one table: python, db, SDKs, providers, speech, tools, train
-    backends. Never installs anything, never makes a network call, always exits 0."""
+    """Report python, db, SDKs, providers, speech, tools and train backends in one table."""
     rows = _doctor_rows(load_settings())
     widths = [max(len(r[i]) for r in [("component", "status", "detail"), *rows]) for i in range(3)]
     header = ("component", "status", "detail")
