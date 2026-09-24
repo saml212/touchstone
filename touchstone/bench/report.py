@@ -88,6 +88,17 @@ def scoreboard(conn, run_ids: list[str]) -> dict:
 
 def proof(conn, candidate_run: str, incumbent_run: str) -> dict:
     """Task-by-task diff of candidate vs incumbent into four categories, plus cost totals."""
+    cand_run = store.get_run(conn, candidate_run)
+    inc_run = store.get_run(conn, incumbent_run)
+    for label, rid, run in (("candidate", candidate_run, cand_run),
+                            ("incumbent", incumbent_run, inc_run)):
+        if run is None:
+            raise ValueError(f"no {label} run with id {rid!r}")
+    if cand_run.benchmark_id != inc_run.benchmark_id:
+        raise ValueError(
+            "cannot compare runs from different benchmarks "
+            f"({cand_run.benchmark_id} vs {inc_run.benchmark_id})"
+        )
     cand = {r.task_id: r for r in store.list_results(conn, candidate_run)}
     inc = {r.task_id: r for r in store.list_results(conn, incumbent_run)}
     counts = dict.fromkeys(_CATEGORIES, 0)

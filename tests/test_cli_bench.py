@@ -84,3 +84,12 @@ def test_harbor_run_reports_missing_docker(tmp_path, monkeypatch):
     result = runner.invoke(app, ["bench", "harbor-run", str(task_dir), "--agent", "claude"])
     assert result.exit_code == 1
     assert "harbor run -p" in result.output
+
+
+def test_bench_proof_bad_run_fails_cleanly(tmp_path, monkeypatch):
+    bid = _bench_repo(tmp_path, monkeypatch)
+    r1 = _ID.search(runner.invoke(app, ["bench", "run", bid, "-m", "scripted"]).output).group()
+    result = runner.invoke(app, ["bench", "proof", r1, "nope"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert "\n" not in result.output.strip()
+    assert "run" in result.output.lower()

@@ -88,3 +88,23 @@ def test_benchmark_from_tags_and_explicit_ids(traced):
     assert benchmark.get(conn, by_ids.id).name == "two"
     assert {b.id for b in benchmark.list_benchmarks(conn)} == {by_ids.id, tagged.id}
     conn.close()
+
+
+def test_proof_rejects_missing_run(two_runs):
+    conn, inc, cand = two_runs
+    with pytest.raises(ValueError, match="run"):
+        report.proof(conn, cand.id, "nonexistent-run-id")
+
+
+def test_proof_rejects_different_benchmarks(traced):
+    run_demo(n=8)
+    conn = store.connect(traced)
+    cut_tasks(conn, store.list_episodes(conn))
+    tasks = store.list_tasks(conn)
+    b1 = benchmark.create(conn, "b1", task_ids=[tasks[0].id, tasks[1].id])
+    b2 = benchmark.create(conn, "b2", task_ids=[tasks[2].id, tasks[3].id])
+    r1 = runner.run(conn, b1.id, "scripted")
+    r2 = runner.run(conn, b2.id, "scripted")
+    with pytest.raises(ValueError, match="benchmark"):
+        report.proof(conn, r1.id, r2.id)
+    conn.close()

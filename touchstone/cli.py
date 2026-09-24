@@ -545,6 +545,8 @@ def bench_proof(
     conn = _open_db()
     try:
         report = proof(conn, candidate_run, incumbent_run)
+    except ValueError as exc:
+        _fail(str(exc))
     finally:
         conn.close()
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2) if as_json
