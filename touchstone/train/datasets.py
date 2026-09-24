@@ -103,6 +103,16 @@ def _benchmark_runs(conn, bench: store.Benchmark) -> list[store.Run]:
     return [r for r in store.list_runs(conn) if r.benchmark_id == bench.id]
 
 
+def _record_result(r: store.Result, out: dict[str, dict[str, list[dict]]]) -> None:
+    if r.error or not r.output:
+        return
+    reply = {"content": r.output.get("content") or "",
+             "tool_calls": r.output.get("tool_calls") or []}
+    side = out.setdefault(r.task_id, {"pass": [], "fail": []})["pass" if r.passed else "fail"]
+    if all(_output_key(reply) != _output_key(x) for x in side):
+        side.append(reply)
+
+
 def _candidate_outcomes(conn, bench: store.Benchmark) -> dict[str, dict[str, list[dict]]]:
     """Per task, the distinct candidate replies that passed and that failed, across all runs.
 
@@ -112,44 +122,44 @@ def _candidate_outcomes(conn, bench: store.Benchmark) -> dict[str, dict[str, lis
         if run.model_spec == "reference":
             continue
         for r in store.list_results(conn, run.id):
-            if r.error or not r.output:
-                continue
-            reply = {"content": r.output.get("content") or "",
-                     "tool_calls": r.output.get("tool_calls") or []}
-            bucket = out.setdefault(r.task_id, {"pass": [], "fail": []})
-            side = bucket["pass" if r.passed else "fail"]
-            if all(_output_key(reply) != _output_key(x) for x in side):
-                side.append(reply)
+            _record_result(r, out)
     return out
+
+
+def _pair_row(task, prompt, tools, chosen, rejected, source) -> dict:
+    return {"task_id": task.id, "prompt": prompt, "tools": tools,
+            "chosen": chosen, "rejected": rejected, "source": source}
+
+
+def _emit_pair(rows: list[dict], seen: set, row: dict) -> None:
+    ck, rk = _output_key(row["chosen"]), _output_key(row["rejected"])
+    key = (row["task_id"], ck, rk)
+    if ck == rk or key in seen:
+        return
+    seen.add(key)
+    rows.append(row)
+
+
+def _task_pairs(conn, task, bucket: dict, rows: list[dict], seen: set) -> None:
+    prompt = (task.context or {}).get("messages", [])
+    tools = (task.context or {}).get("tools") or []
+    for chosen in bucket["pass"]:
+        for rejected in bucket["fail"]:
+            _emit_pair(rows, seen, _pair_row(task, prompt, tools, chosen, rejected, "candidates"))
+    # The reference is a trusted "chosen" only when it passes the task's hard checks.
+    if bucket["fail"] and _reference_passes(task, _enabled_checks(conn, task)):
+        ref = _reference_msg(task)
+        for rejected in bucket["fail"]:
+            _emit_pair(rows, seen, _pair_row(task, prompt, tools, ref, rejected, "reference"))
 
 
 def _preference_rows(conn, bench: store.Benchmark, tasks: list[store.Task]) -> list[dict]:
     outcomes = _candidate_outcomes(conn, bench)
     rows: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
-
-    def emit(task, prompt, tools, chosen, rejected, source):
-        if _output_key(chosen) == _output_key(rejected):
-            return
-        key = (task.id, _output_key(chosen), _output_key(rejected))
-        if key in seen:
-            return
-        seen.add(key)
-        rows.append({"task_id": task.id, "prompt": prompt, "tools": tools,
-                     "chosen": chosen, "rejected": rejected, "source": source})
-
     for task in tasks:
-        prompt = (task.context or {}).get("messages", [])
-        tools = (task.context or {}).get("tools") or []
         bucket = outcomes.get(task.id, {"pass": [], "fail": []})
-        for chosen in bucket["pass"]:
-            for rejected in bucket["fail"]:
-                emit(task, prompt, tools, chosen, rejected, "candidates")
-        # The reference is a trusted "chosen" only when it passes the task's hard checks.
-        if bucket["fail"] and _reference_passes(task, _enabled_checks(conn, task)):
-            ref = _reference_msg(task)
-            for rejected in bucket["fail"]:
-                emit(task, prompt, tools, ref, rejected, "reference")
+        _task_pairs(conn, task, bucket, rows, seen)
     return rows
 
 
