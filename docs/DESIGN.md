@@ -68,6 +68,11 @@ touchstone/
    input JSON, output JSON, tokens_in, tokens_out, cost_usd, error)`
   - llm input = `{messages:[...], tools:[...], params:{}}`; output = `{message:{role,content,tool_calls}}`
   - tool input = `{name, arguments}`; output = `{result}`
+  - Messages everywhere in the store are the ONE canonical shape (`touchstone/messages.py`):
+    `{role: system|user|assistant|tool, content: str, tool_calls?: [{id, name, arguments: str}],
+    tool_call_id?: str, name?: str}`. `arguments` is always a JSON string. Capture points call
+    `canonical()` (from OpenAI/Anthropic wire or already-canonical); the HTTP providers call
+    `to_openai()` / `to_anthropic()` to convert back to wire shape when replaying.
 - `checks(id, name, kind, params JSON, applies_to ['final','any_turn','tool_calls'], severity ['hard','soft'],
    source ['mined','interview','manual'], rationale, enabled INT, created_at)`
 - `tasks(id, name, episode_id, cut_span_id, context JSON {messages, tools}, reference JSON, check_ids JSON,
