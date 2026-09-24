@@ -41,6 +41,16 @@ def outcome(score: float | None, label: str | None) -> None:
     capture.current_episode().outcome(score, label)
 
 
+def _normalize_calls(items) -> list[dict]:
+    calls = []
+    for tc in items:
+        args = tc.get("arguments")
+        if not isinstance(args, str):
+            args = json.dumps(args, ensure_ascii=False)
+        calls.append({"id": tc.get("id"), "name": tc.get("name"), "arguments": args})
+    return calls
+
+
 def _normalize_reply(reply) -> tuple[str, list[dict], dict | None]:
     from .llm.base import Reply
 
@@ -49,12 +59,7 @@ def _normalize_reply(reply) -> tuple[str, list[dict], dict | None]:
     if isinstance(reply, str):
         return reply, [], None
     if isinstance(reply, dict):
-        calls = []
-        for tc in reply.get("tool_calls") or []:
-            args = tc.get("arguments")
-            if not isinstance(args, str):
-                args = json.dumps(args, ensure_ascii=False)
-            calls.append({"id": tc.get("id"), "name": tc.get("name"), "arguments": args})
+        calls = _normalize_calls(reply.get("tool_calls") or [])
         return reply.get("content", "") or "", calls, reply.get("usage")
     return str(reply), [], None
 

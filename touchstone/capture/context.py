@@ -67,6 +67,13 @@ def episode(name: str, meta: dict | None = None, source: str = "app"):
         _current.reset(token)
 
 
+def _find_untracked(conn, name: str) -> str | None:
+    for e in store.list_episodes(conn):
+        if e.name == name and e.source == "untracked":
+            return e.id
+    return None
+
+
 def _untracked() -> EpisodeHandle:
     conn = get_conn()
     date = datetime.now(UTC).date().isoformat()
@@ -75,13 +82,11 @@ def _untracked() -> EpisodeHandle:
         eid = _untracked_ids.get(date)
         if eid and store.get_episode(conn, eid):
             return EpisodeHandle(eid)
-        for e in store.list_episodes(conn):
-            if e.name == name and e.source == "untracked":
-                _untracked_ids[date] = e.id
-                return EpisodeHandle(e.id)
-        ep = store.insert_episode(conn, store.Episode(name=name, source="untracked"))
-        _untracked_ids[date] = ep.id
-        return EpisodeHandle(ep.id)
+        found = _find_untracked(conn, name)
+        if found is None:
+            found = store.insert_episode(conn, store.Episode(name=name, source="untracked")).id
+        _untracked_ids[date] = found
+        return EpisodeHandle(found)
 
 
 def current_episode() -> EpisodeHandle:
