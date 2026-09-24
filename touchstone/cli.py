@@ -63,6 +63,12 @@ def doctor() -> None:
         mark = "ok" if st.ok else "missing"
         typer.echo(f"  {st.name:16} {mark:8} {st.detail}")
 
+    from .interview.speech import speech_status
+
+    typer.echo("speech:")
+    for r in speech_status(settings):
+        typer.echo(f"  {r.kind:4} {r.name:16} {r.detail}")
+
 
 @app.command()
 def demo(
@@ -86,6 +92,61 @@ def demo(
     typer.echo(
         f"captured {len(episodes)} episodes ({resolved} resolved), {spans} spans in {settings.db}"
     )
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Bind host."),
+    port: int = typer.Option(8765, help="Bind port."),
+) -> None:
+    """Run the local interview + review server."""
+    import uvicorn
+
+    from .server import create_app
+
+    uvicorn.run(create_app(load_settings()), host=host, port=port)
+
+
+@app.command()
+def interview(
+    task_id: str,
+    topic: str = typer.Option(None, "--topic", help="Room topic (defaults to the task name)."),
+    no_open: bool = typer.Option(False, "--no-open", help="Do not open a browser."),
+) -> None:
+    """Open an interview room for a task and print (and open) its URL."""
+    from .interview import rooms
+    from .interview.agent import Interviewer
+
+    host, port = "127.0.0.1", 8765
+    conn = _open_db()
+    try:
+        task = store.get_task(conn, task_id)
+        if task is None:
+            _fail(f"no task with id {task_id}")
+        room = rooms.open(conn, task_id, topic or f"review of {task.name}")
+        rooms.post(conn, room.id, "agent", "assistant",
+                   Interviewer(None, conn, room).open_statement())
+    finally:
+        conn.close()
+
+    url = f"http://{host}:{port}/rooms/{room.id}"
+    typer.echo(url)
+    if not _server_up(host, port):
+        typer.echo(f"Server not running — start it with `touchstone serve`, then open {url}.")
+        return
+    if not no_open:
+        import webbrowser
+
+        webbrowser.open(url)
+
+
+def _server_up(host: str, port: int) -> bool:
+    import httpx
+
+    try:
+        return httpx.get(f"http://{host}:{port}/api/health", timeout=0.5).status_code == 200
+    except httpx.HTTPError:
+        return False
 
 
 checks_app = typer.Typer(help="Manage and test checks.", no_args_is_help=True)
