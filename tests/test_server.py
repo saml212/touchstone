@@ -212,3 +212,77 @@ async def test_done_twice_second_is_rejected(db):
         assert first.status_code == 200
         second = await c.post(f"/api/rooms/{room_id}/messages", json=done)
         assert second.status_code == 409
+
+
+async def test_room_state_reports_speech_mode(db):
+    task_id = _seed_task(db)
+    async with _client(_app(db)) as c:  # default local
+        state = (await c.post("/api/rooms", json={"task_id": task_id})).json()
+        assert state["mode"] == "local"
+    rt = create_app(Settings(db_path=db, agent_provider="scripted", speech_mode="realtime"))
+    async with _client(rt) as c:
+        state = (await c.post("/api/rooms", json={"task_id": task_id})).json()
+        assert state["mode"] == "realtime"
+
+
+class _FakeBridge:
+    def __init__(self):
+        self.audio = []
+        self.ptts = []
+
+    async def append_audio(self, b64):
+        self.audio.append(b64)
+
+    async def ptt(self, state, speaker):
+        self.ptts.append((state, speaker))
+
+
+class _FakeBridges:
+    def __init__(self):
+        self.bridge = _FakeBridge()
+        self.here = self.gone = 0
+
+    def client_here(self, room_id):
+        self.here += 1
+
+    def client_gone(self, room_id):
+        self.gone += 1
+
+    async def get(self, room_id):
+        return self.bridge
+
+    async def close(self, room_id):
+        pass
+
+    async def close_all(self):
+        pass
+
+
+def test_realtime_ws_routes_audio_and_ptt_to_the_bridge(db):
+    task_id = _seed_task(db)
+    app = create_app(Settings(db_path=db, agent_provider="scripted", speech_mode="realtime"))
+    fake = _FakeBridges()
+    app.state.bridges = fake
+    client = TestClient(app)
+    room_id = client.post("/api/rooms", json={"task_id": task_id}).json()["room"]["id"]
+    with client.websocket_connect(f"/ws/rooms/{room_id}") as ws:
+        assert ws.receive_json()["type"] == "state"
+        ws.send_json({"type": "audio", "b64": "AAAA", "speaker": "sam"})
+        ws.send_json({"type": "ptt", "state": "down", "speaker": "sam"})
+        ws.send_json({"type": "message-noise"})  # ignored, not audio/ptt
+    assert fake.bridge.audio == ["AAAA"]
+    assert ("down", "sam") in fake.bridge.ptts
+    assert fake.here == 1 and fake.gone == 1
+
+
+def test_local_ws_ignores_audio_frames(db):
+    task_id = _seed_task(db)
+    app = _app(db)  # local mode
+    fake = _FakeBridges()
+    app.state.bridges = fake
+    client = TestClient(app)
+    room_id = client.post("/api/rooms", json={"task_id": task_id}).json()["room"]["id"]
+    with client.websocket_connect(f"/ws/rooms/{room_id}") as ws:
+        assert ws.receive_json()["type"] == "state"
+        ws.send_json({"type": "audio", "b64": "AAAA", "speaker": "sam"})
+    assert fake.bridge.audio == []  # local mode never touches the realtime bridge

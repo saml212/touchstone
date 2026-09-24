@@ -88,6 +88,7 @@ class RealtimeBridge:
         self._url = f"{url or OPENAI_REALTIME_URL}?model={settings.realtime_model}"
         self._ws: websockets.ClientConnection | None = None
         self._task: asyncio.Task | None = None
+        self._ready = asyncio.Event()  # set once the session is configured (or the bridge is done)
         self._ptt_speaker = "guest"
         self.closed = False
         self.failed = False
@@ -99,6 +100,7 @@ class RealtimeBridge:
 
     async def close(self) -> None:
         self.closed = True
+        self._ready.set()
         if self._ws is not None:
             with contextlib.suppress(Exception):
                 await self._ws.close()
@@ -123,6 +125,7 @@ class RealtimeBridge:
     async def _open(self) -> None:
         self._ws = await websockets.connect(self._url, additional_headers=self._headers())
         await self._ws.send(json.dumps(self._session_update()))
+        self._ready.set()
 
     def _headers(self) -> dict:
         service = self.settings.keychain_service(self.settings.keychain_openai)
@@ -144,6 +147,8 @@ class RealtimeBridge:
             await self._send({"type": "response.create"})
 
     async def _send(self, payload: dict) -> None:
+        if not self._ready.is_set():
+            await self._ready.wait()  # first audio can arrive before the socket is configured
         if self._ws is None or self.closed:
             return
         with contextlib.suppress(websockets.WebSocketException, OSError):
@@ -224,6 +229,7 @@ class RealtimeBridge:
 
     async def _fail(self, message: str) -> None:
         self.failed = True
+        self._ready.set()
         self._post("Interviewer", "assistant",
                    f"{message} Switching this room to local voice mode.")
         if self._ws is not None:
