@@ -79,9 +79,11 @@ def task_name(episode, span) -> str:
     """Stable, sortable, filesystem-safe name for the task cut at `span` of `episode`.
 
     Deterministic for a given episode/span: the span id (a sortable ULID) anchors it, so
-    re-mining and `tasks sync` rebuild the identical directory name.
+    re-mining and `tasks sync` rebuild the identical directory name. The episode slug is
+    capped so a very long name cannot push the directory component past the filesystem's
+    255-byte limit (the span id keeps every cut unique regardless).
     """
-    return f"{_slug(episode.name)}-{span.id.lower()}"
+    return f"{_slug(episode.name)[:100]}-{span.id.lower()}"
 
 
 def tasks_dir(root: str | Path) -> Path:

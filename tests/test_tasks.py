@@ -211,3 +211,16 @@ def test_list_tasks_skips_a_corrupt_task_toml(tmp_path):
     (bad / "task.toml").write_text("this is = = not valid toml [[[\n")
     names = [t.name for t in tasks.list_tasks(tmp_path)]
     assert names == ["good-01"]
+
+
+def test_task_name_caps_length_for_a_very_long_episode(tmp_path):
+    # A very long episode name must not produce a directory component that blows the
+    # filesystem's 255-byte limit and crashes `mine`/`sync` mid-run.
+    ep = _Ep(name="Order dispute " + "A" * 400)
+    span = _Span(id="01M38QQRHS8S3KV4W0VKW82DBA")
+    name = tasks.task_name(ep, span)
+    assert len(name.encode()) <= 255
+    assert name == tasks.task_name(ep, span)  # deterministic
+    assert name.endswith("-01m38qqrhs8s3kv4w0vkw82dba")  # span id still anchors it
+    d = tasks.write_task(tmp_path, _task(name=name))
+    assert d.exists()
