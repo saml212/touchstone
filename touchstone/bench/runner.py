@@ -99,6 +99,37 @@ async def _run_async(conn, run, tasks, provider, concurrency, timeout, judge_pro
     await asyncio.gather(*(guarded(t) for t in tasks))
 
 
+def start(
+    conn,
+    benchmark_id: str,
+    model_spec: str,
+    *,
+    concurrency: int = 4,
+    timeout: float = 60,
+) -> store.Run:
+    """Create the Run row (validating the benchmark) and return it without executing anything."""
+    bench = store.get_benchmark(conn, benchmark_id)
+    if bench is None:
+        raise ValueError(f"no benchmark {benchmark_id!r}")
+    tasks = [t for t in (store.get_task(conn, tid) for tid in bench.task_ids) if t is not None]
+    return store.insert_run(conn, store.Run(
+        benchmark_id=benchmark_id, model_spec=model_spec,
+        meta={"concurrency": concurrency, "timeout": timeout, "task_count": len(tasks)},
+    ))
+
+
+def execute(conn, run: store.Run, *, judge_provider=None, provider=None) -> store.Run:
+    """Replay a started run's tasks, storing results as they finish, then mark the run done."""
+    provider = provider or provider_from_spec(run.model_spec)
+    bench = store.get_benchmark(conn, run.benchmark_id)
+    tasks = [t for t in (store.get_task(conn, tid) for tid in bench.task_ids) if t is not None]
+    concurrency = run.meta.get("concurrency", 4)
+    timeout = run.meta.get("timeout", 60)
+    asyncio.run(_run_async(conn, run, tasks, provider, concurrency, timeout, judge_provider))
+    store.finish_run(conn, run.id)
+    return store.get_run(conn, run.id)
+
+
 def run(
     conn,
     benchmark_id: str,
@@ -110,19 +141,8 @@ def run(
     provider=None,
 ) -> store.Run:
     """Replay every task in `benchmark_id` against `model_spec` and store a Run + its Results."""
-    bench = store.get_benchmark(conn, benchmark_id)
-    if bench is None:
-        raise ValueError(f"no benchmark {benchmark_id!r}")
-    provider = provider or provider_from_spec(model_spec)
-    tasks = [t for t in (store.get_task(conn, tid) for tid in bench.task_ids) if t is not None]
-
-    run_row = store.insert_run(conn, store.Run(
-        benchmark_id=benchmark_id, model_spec=model_spec,
-        meta={"concurrency": concurrency, "timeout": timeout, "task_count": len(tasks)},
-    ))
-    asyncio.run(_run_async(conn, run_row, tasks, provider, concurrency, timeout, judge_provider))
-    store.finish_run(conn, run_row.id)
-    return store.get_run(conn, run_row.id)
+    run_row = start(conn, benchmark_id, model_spec, concurrency=concurrency, timeout=timeout)
+    return execute(conn, run_row, judge_provider=judge_provider, provider=provider)
 
 
 def result_view(result: store.Result) -> dict:

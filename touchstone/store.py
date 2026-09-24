@@ -360,6 +360,10 @@ def set_check_enabled(conn, id: str, enabled: bool) -> None:
     _update(conn, "checks", "id", id, enabled=1 if enabled else 0)
 
 
+def update_check(conn, id: str, **fields) -> None:
+    _update(conn, "checks", "id", id, **fields)
+
+
 # ---- tasks -----------------------------------------------------------------
 
 
@@ -383,6 +387,23 @@ def list_tasks(conn, tag: str | None = None) -> list[Task]:
 
 def update_task(conn, id: str, **fields) -> None:
     _update(conn, "tasks", "id", id, **fields)
+
+
+def set_task_check(conn, task_id: str, check_id: str, attach: bool) -> Task:
+    """Attach or detach a check on a task, idempotently. Raises ValueError for unknown ids."""
+    task = get_task(conn, task_id)
+    if task is None:
+        raise ValueError(f"no task with id {task_id}")
+    if attach and get_check(conn, check_id) is None:
+        raise ValueError(f"no check with id {check_id}")
+    ids = list(task.check_ids or [])
+    if attach:
+        if check_id not in ids:
+            ids.append(check_id)
+    else:
+        ids = [c for c in ids if c != check_id]
+    update_task(conn, task_id, check_ids=ids)
+    return get_task(conn, task_id)
 
 
 # ---- benchmarks ------------------------------------------------------------

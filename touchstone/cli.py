@@ -421,18 +421,9 @@ def tasks_detach(task_id: str, check_id: str) -> None:
 def _edit_task_checks(task_id: str, check_id: str, attach: bool) -> None:
     conn = _open_db()
     try:
-        task = store.get_task(conn, task_id)
-        if task is None:
-            _fail(f"no task with id {task_id}")
-        if attach and store.get_check(conn, check_id) is None:
-            _fail(f"no check with id {check_id}")
-        ids = list(task.check_ids or [])
-        if attach:
-            if check_id not in ids:
-                ids.append(check_id)
-        else:
-            ids = [c for c in ids if c != check_id]
-        store.update_task(conn, task_id, check_ids=ids)
+        store.set_task_check(conn, task_id, check_id, attach)
+    except ValueError as exc:
+        _fail(str(exc))
     finally:
         conn.close()
     verb, prep = ("attached", "to") if attach else ("detached", "from")
