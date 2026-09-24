@@ -14,7 +14,6 @@ from dataclasses import dataclass
 import jsonschema
 from simpleeval import SimpleEval
 
-from . import judge as judge_mod
 from .dsl import Target
 
 
@@ -48,6 +47,8 @@ def passes(results: list[CheckResult], checks) -> bool:
 def _run_one(check, target: Target, judge_provider) -> tuple[bool | None, str]:
     kind = check.kind
     if kind == "judge":
+        from . import judge as judge_mod  # keeps vendored run.py free of the llm subpackage
+
         return judge_mod.judge(check, target, judge_provider)
     fn = _EVALUATORS.get(kind)
     if fn is None:
