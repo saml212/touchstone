@@ -16,6 +16,7 @@ from .frontier import (
     write_loop_state,
 )
 from .sample import sample
+from .teach import demo_replies, escalate, teach
 
 __all__ = [
     "record_run",
@@ -26,4 +27,7 @@ __all__ = [
     "read_loop_state",
     "write_loop_state",
     "sample",
+    "teach",
+    "demo_replies",
+    "escalate",
 ]

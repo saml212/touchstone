@@ -27,6 +27,7 @@ from ..bench import benchmark, runner
 from ..config import Settings, load_settings
 from ..llm.prompt import extract_json
 from ..messages import text_of
+from ._providers import provider_or_none
 from .frontier import frontier_split, mean_pass_rate, record_run, write_loop_state
 
 _VARIANTS_TARGET = "__sample_variants__"
@@ -221,15 +222,6 @@ def _run_on_tasks(conn, root, names, student_spec, concurrency, timeout, judge_p
         path.unlink(missing_ok=True)
 
 
-def _teacher_provider(teacher_spec: str, settings: Settings):
-    from ..llm import provider_from_spec
-
-    try:
-        return provider_from_spec(teacher_spec, settings)
-    except Exception:  # no key/binary: fall back to mechanical variants
-        return None
-
-
 def sample(
     conn,
     root: str,
@@ -248,7 +240,7 @@ def sample(
     settings = settings or load_settings()
     teacher_spec = teacher_spec or settings.agent_provider
     if teacher_provider is None:
-        teacher_provider = _teacher_provider(teacher_spec, settings)
+        teacher_provider = provider_or_none(teacher_spec, settings)
 
     prev = mean_pass_rate(conn, root, student_spec)
     student_run = _run_on(conn, root, benchmark_name, student_spec, concurrency, timeout,
