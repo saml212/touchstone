@@ -48,3 +48,7 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's Depends()/File()/Form() belong in argument defaults by design.
+"touchstone/server/app.py" = ["B008"]

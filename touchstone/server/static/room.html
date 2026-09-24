@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Touchstone interview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <header>
+    <h1>Touchstone</h1>
+    <span class="topic" id="topic"></span>
+    <span class="closed hidden" id="closed">closed</span>
+  </header>
+
+  <main>
+    <section id="conversation">
+      <div id="messages"></div>
+      <div id="composer">
+        <textarea id="text" rows="2" placeholder="Say what good looks like… (/commit, /done)"></textarea>
+        <button id="talk" class="ghost" title="Push to talk">● talk</button>
+        <button id="send">Send</button>
+      </div>
+    </section>
+
+    <aside id="drafts">
+      <h2>Draft checks</h2>
+      <div id="draftList"></div>
+      <h2>Committed</h2>
+      <div id="committedList"></div>
+    </aside>
+  </main>
+
+  <div id="join">
+    <div class="card">
+      <strong>Join the interview</strong>
+      <input id="name" placeholder="Your display name" />
+      <button id="joinBtn">Join</button>
+    </div>
+  </div>
+
+  <script src="/static/room.js"></script>
+</body>
+</html>
