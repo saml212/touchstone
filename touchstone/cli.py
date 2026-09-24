@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -49,7 +50,10 @@ def init(
         cfg.write_text(TOML_TEMPLATE.format(keychain_prefix=prefix_line), encoding="utf-8")
         typer.echo(f"wrote {cfg}")
     settings = load_settings(cfg)
-    store.connect(settings.db_path).close()
+    try:
+        store.connect(settings.db_path).close()
+    except (OSError, sqlite3.Error) as exc:
+        _fail(f"cannot open database: {exc}")
     typer.echo(f"initialized db at {settings.db}")
 
 
@@ -182,7 +186,10 @@ app.add_typer(checks_app, name="checks")
 
 
 def _open_db():
-    return store.connect(load_settings().db_path)
+    try:
+        return store.connect(load_settings().db_path)
+    except (OSError, sqlite3.Error) as exc:
+        _fail(f"cannot open database: {exc}")
 
 
 def _fail(message: str) -> None:
