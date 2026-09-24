@@ -102,9 +102,11 @@ def add_span(
     output: dict | None = None,
     tokens_in: int | None = None,
     tokens_out: int | None = None,
+    cost_usd: float | None = None,
     error: str | None = None,
     started_at: str | None = None,
     parent_id: str | None = None,
+    tool_call_id: str | None = None,
 ) -> store.Span:
     conn = get_conn()
     ep = current_episode()
@@ -118,8 +120,10 @@ def add_span(
         output=output or {},
         tokens_in=tokens_in,
         tokens_out=tokens_out,
+        cost_usd=cost_usd,
         error=error,
         started_at=started_at or store.now(),
+        tool_call_id=tool_call_id,
     )
     span.ended_at = store.now()
     return store.insert_span(conn, span)

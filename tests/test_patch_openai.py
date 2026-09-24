@@ -139,3 +139,61 @@ def test_async_streaming(traced, monkeypatch):
     chunks = asyncio.run(scenario())
     assert len(chunks) == len(STREAM)
     assert _last_span(traced).output["message"]["content"] == "Hello"
+
+
+def test_stop_reason_cached_tokens_and_cost_recorded(traced, monkeypatch):
+    resp = {
+        "choices": [{"message": {"content": "ok", "tool_calls": []}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 20,
+                  "prompt_tokens_details": {"cached_tokens": 40},
+                  "completion_tokens_details": {"reasoning_tokens": 5}},
+    }
+
+    class C:
+        def create(self, **kwargs):
+            return resp
+
+    install_fake_openai(monkeypatch, C, AsyncCompletions)
+    patch()
+    from openai.resources.chat import completions as c
+    c.Completions().create(model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}])
+
+    span = _last_span(traced)
+    assert span.output["stop_reason"] == "stop"
+    assert span.output["usage"]["cached_tokens"] == 40
+    assert span.output["usage"]["reasoning_tokens"] == 5
+    assert span.cost_usd == 100 / 1e6 * 0.15 + 20 / 1e6 * 0.60
+
+
+def test_refusal_recorded_with_stop_reason(traced, monkeypatch):
+    resp = {"choices": [{"message": {"content": None, "refusal": "I can't help with that"},
+                         "finish_reason": "stop"}]}
+
+    class C:
+        def create(self, **kwargs):
+            return resp
+
+    install_fake_openai(monkeypatch, C, AsyncCompletions)
+    patch()
+    from openai.resources.chat import completions as c
+    c.Completions().create(model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}])
+
+    span = _last_span(traced)
+    assert span.output["message"]["refusal"] == "I can't help with that"
+    assert span.output["stop_reason"] == "refusal"  # refusal overrides finish_reason
+
+
+def test_capture_failure_never_breaks_the_call(traced, monkeypatch, caplog):
+    install_fake_openai(monkeypatch, Completions, AsyncCompletions)
+    patch()
+    from touchstone.capture import spans
+
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(spans, "canonical", _boom)
+    from openai.resources.chat import completions as c
+
+    resp = c.Completions().create(model="gpt-x", messages=[{"role": "user", "content": "hi"}])
+    assert resp is RESPONSE  # the user's app still gets its reply
+    assert any("touchstone capture failed" in r.message for r in caplog.records)

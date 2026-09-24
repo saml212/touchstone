@@ -5,8 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from ..messages import canonical
-from . import context
+from . import spans
 from .patch_openai import _extract  # litellm ModelResponse is OpenAI-shaped
 
 
@@ -33,22 +32,12 @@ class TouchstoneLogger(_base()):
         messages = kwargs.get("messages") or []
         opt = kwargs.get("optional_params") or {}
         tools = opt.get("tools") or kwargs.get("tools")
-        content, tool_calls, usage = ("", [], None)
-        if response_obj is not None:
-            content, tool_calls, usage = _extract(response_obj)
+        result = _extract(response_obj) if response_obj is not None else spans._ERROR
         err = error or (repr(kwargs["exception"]) if kwargs.get("exception") else None)
-        reply = canonical([{"role": "assistant", "content": content, "tool_calls": tool_calls}])[0]
-        context.add_span(
-            "model",
-            model or "litellm",
-            model=model,
-            input={"messages": canonical(messages), "tools": tools or [], "params": {}},
-            output={"message": reply},
-            tokens_in=usage.get("tokens_in") if usage else None,
-            tokens_out=usage.get("tokens_out") if usage else None,
-            error=err,
-            started_at=_iso(start_time),
-        )
+        try:
+            spans.record("litellm", model, messages, tools, {}, result, err, _iso(start_time))
+        except Exception as exc:  # capture must never break the caller
+            spans._log.warning("touchstone capture failed: %r", exc)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._record(kwargs, response_obj, start_time, None)

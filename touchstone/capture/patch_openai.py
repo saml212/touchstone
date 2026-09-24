@@ -8,7 +8,7 @@ The span lifecycle lives in `spans`; this module only maps openai's wire shapes.
 from __future__ import annotations
 
 from . import spans
-from .spans import as_str, get
+from .spans import as_str, get, model_result
 
 DEFAULT_NAME = "openai.chat"
 
@@ -17,14 +17,22 @@ def _usage(resp):
     u = get(resp, "usage")
     if u is None:
         return None
-    return {"tokens_in": get(u, "prompt_tokens"), "tokens_out": get(u, "completion_tokens")}
+    usage = {"tokens_in": get(u, "prompt_tokens"), "tokens_out": get(u, "completion_tokens")}
+    cached = get(get(u, "prompt_tokens_details"), "cached_tokens")
+    if cached is not None:
+        usage["cached_tokens"] = cached
+    reasoning = get(get(u, "completion_tokens_details"), "reasoning_tokens")
+    if reasoning is not None:
+        usage["reasoning_tokens"] = reasoning
+    return usage
 
 
 def _extract(resp):
     choices = get(resp, "choices") or []
     if not choices:
-        return "", [], _usage(resp)
-    msg = get(choices[0], "message")
+        return model_result("", [], _usage(resp))
+    choice = choices[0]
+    msg = get(choice, "message")
     tool_calls = []
     for tc in get(msg, "tool_calls") or []:
         fn = get(tc, "function")
@@ -33,11 +41,12 @@ def _extract(resp):
             "name": get(fn, "name"),
             "arguments": as_str(get(fn, "arguments")),
         })
-    return get(msg, "content") or "", tool_calls, _usage(resp)
+    return model_result(get(msg, "content") or "", tool_calls, _usage(resp),
+                        stop_reason=get(choice, "finish_reason"), refusal=get(msg, "refusal"))
 
 
 def _state():
-    return {"parts": [], "args": {}, "meta": {}, "usage": None}
+    return {"parts": [], "args": {}, "meta": {}, "usage": None, "stop": None, "refusal": []}
 
 
 def _accumulate_tool_call(tc, st):
@@ -60,10 +69,14 @@ def _accumulate(chunk, st):
     choices = get(chunk, "choices") or []
     if not choices:
         return
+    if get(choices[0], "finish_reason"):
+        st["stop"] = get(choices[0], "finish_reason")
     delta = get(choices[0], "delta")
     c = get(delta, "content")
     if c:
         st["parts"].append(c)
+    if get(delta, "refusal"):
+        st["refusal"].append(get(delta, "refusal"))
     for tc in get(delta, "tool_calls") or []:
         _accumulate_tool_call(tc, st)
 
@@ -75,7 +88,9 @@ def _finish(st):
         calls.append(
             {"id": meta.get("id"), "name": meta.get("name"), "arguments": st["args"].get(idx, "")}
         )
-    return "".join(st["parts"]), calls, st["usage"]
+    refusal = "".join(st["refusal"]) or None
+    return model_result("".join(st["parts"]), calls, st["usage"],
+                        stop_reason=st["stop"], refusal=refusal)
 
 
 _wrap_stream, _wrap_astream = spans.stream_wrappers(_state, _accumulate, _finish)
