@@ -200,3 +200,14 @@ def test_instruction_renders_multimodal_parts_as_markers(tmp_path):
     assert "what is in this" in instruction and "[image]" in instruction
     # the text-based check still passes the reference gate through text_of
     assert tasks.read_task(d).status == "active"
+
+
+def test_list_tasks_skips_a_corrupt_task_toml(tmp_path):
+    # A hand-edited task.toml that no longer parses must not take down enumeration of
+    # every sibling task (the tasks page, `tasks sync`, benchmark glob resolution).
+    tasks.write_task(tmp_path, _task(name="good-01"))
+    bad = tasks.tasks_dir(tmp_path) / "bad-01"
+    bad.mkdir(parents=True)
+    (bad / "task.toml").write_text("this is = = not valid toml [[[\n")
+    names = [t.name for t in tasks.list_tasks(tmp_path)]
+    assert names == ["good-01"]

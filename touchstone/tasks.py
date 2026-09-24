@@ -336,8 +336,14 @@ def list_tasks(
     base = tasks_dir(root)
     if not base.exists():
         return []
-    tasks = [read_task(d) for d in sorted(base.iterdir())
-             if d.is_dir() and (d / "task.toml").exists()]
+    tasks = []
+    for d in sorted(base.iterdir()):
+        if not (d.is_dir() and (d / "task.toml").exists()):
+            continue
+        try:
+            tasks.append(read_task(d))
+        except (tomllib.TOMLDecodeError, OSError, ValueError):
+            continue  # one hand-corrupted task must not break enumeration of the rest
     if tag is not None:
         tasks = [t for t in tasks if tag in (t.tags or [])]
     if active_only:
