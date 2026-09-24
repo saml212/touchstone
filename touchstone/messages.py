@@ -185,8 +185,23 @@ def _split_content(content) -> tuple[list, list, list, list]:
     return parts, tool_calls, tool_results, reasoning
 
 
+_RESPONSES_ITEMS = frozenset({"function_call", "function_call_output", "reasoning"})
+
+
+def _responses_item(itype: str, item) -> list[dict]:
+    """A top-level OpenAI Responses input item (sibling of messages) -> canonical message(s)."""
+    if itype == "function_call_output":
+        return [_tool_message(_get(item, "call_id"), None, _get(item, "output"))]
+    if itype == "reasoning":
+        return [{"role": "assistant", "content": "", "reasoning": _norm_reasoning([item])}]
+    return [{"role": "assistant", "content": "", "tool_calls": [_norm_tool_call(item)]}]
+
+
 def _canonical_one(msg) -> list[dict]:
     msg = _to_plain(msg)
+    itype = _get(msg, "type")
+    if itype in _RESPONSES_ITEMS and _get(msg, "role") is None:
+        return _responses_item(itype, msg)
     role = _get(msg, "role") or "user"
     content = _get(msg, "content")
     if role == "tool":
@@ -230,11 +245,7 @@ def _first_unused(pending: list[list], predicate) -> int | None:
     return None
 
 
-def _match_pending(pending: list[list], call_id, name) -> int | None:
-    if call_id:
-        idx = _first_unused(pending, lambda entry: entry[0] == call_id)
-        if idx is not None:
-            return idx
+def _match_pending(pending: list[list], name) -> int | None:
     if name:
         idx = _first_unused(pending, lambda entry: entry[1] == name)
         if idx is not None:
@@ -248,9 +259,14 @@ def _link_tool_messages(messages: list[dict]) -> None:
         if msg["role"] == "assistant" and msg.get("tool_calls"):
             pending = [[tc["id"], tc.get("name"), False] for tc in msg["tool_calls"]]
         elif msg["role"] == "tool":
-            idx = _match_pending(pending, msg.get("tool_call_id"), msg.get("name"))
+            existing = msg.get("tool_call_id")
+            if existing:  # keep an id the caller already supplied; just consume its pending slot
+                idx = _first_unused(pending, lambda entry, _id=existing: entry[0] == _id)
+            else:
+                idx = _match_pending(pending, msg.get("name"))
+                if idx is not None:
+                    msg["tool_call_id"] = pending[idx][0]
             if idx is not None:
-                msg["tool_call_id"] = pending[idx][0]
                 pending[idx][2] = True
 
 

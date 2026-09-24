@@ -166,11 +166,11 @@ def stream_wrappers(state_factory, accumulate, finish):
     return wrap, awrap
 
 
-def instrument_create(orig, default_name, extract, wrap_stream):
+def instrument_create(orig, default_name, extract, wrap_stream, split_fn=split):
     @functools.wraps(orig)
     def create(self, *args, **kwargs):
         from .. import store
-        model, messages, tools, stream, params = split(kwargs)
+        model, messages, tools, stream, params = split_fn(kwargs)
         rec = _recorder(default_name, model, messages, tools, params, store.now())
         try:
             resp = orig(self, *args, **kwargs)
@@ -186,11 +186,11 @@ def instrument_create(orig, default_name, extract, wrap_stream):
     return create
 
 
-def instrument_acreate(orig, default_name, extract, wrap_astream):
+def instrument_acreate(orig, default_name, extract, wrap_astream, split_fn=split):
     @functools.wraps(orig)
     async def acreate(self, *args, **kwargs):
         from .. import store
-        model, messages, tools, stream, params = split(kwargs)
+        model, messages, tools, stream, params = split_fn(kwargs)
         rec = _recorder(default_name, model, messages, tools, params, store.now())
         try:
             resp = await orig(self, *args, **kwargs)

@@ -5,7 +5,8 @@ import sys
 import types
 
 
-def install_fake_openai(monkeypatch, completions_cls, async_cls):
+def install_fake_openai(monkeypatch, completions_cls, async_cls,
+                        responses_cls=None, async_responses_cls=None):
     completions = types.ModuleType("openai.resources.chat.completions")
     completions.Completions = completions_cls
     completions.AsyncCompletions = async_cls
@@ -15,12 +16,19 @@ def install_fake_openai(monkeypatch, completions_cls, async_cls):
     resources.chat = chat
     openai = types.ModuleType("openai")
     openai.resources = resources
-    for name, mod in [
+    mods = [
         ("openai", openai),
         ("openai.resources", resources),
         ("openai.resources.chat", chat),
         ("openai.resources.chat.completions", completions),
-    ]:
+    ]
+    if responses_cls is not None:
+        responses = types.ModuleType("openai.resources.responses")
+        responses.Responses = responses_cls
+        responses.AsyncResponses = async_responses_cls
+        resources.responses = responses
+        mods.append(("openai.resources.responses", responses))
+    for name, mod in mods:
         monkeypatch.setitem(sys.modules, name, mod)
 
 
