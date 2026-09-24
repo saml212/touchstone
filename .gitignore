@@ -11,3 +11,4 @@ dist/
 harbor-tasks/
 *.egg-info/
 .DS_Store
+touchstone.toml

@@ -1,0 +1,118 @@
+import asyncio
+
+from _fakes import install_fake_openai
+
+from touchstone import store
+from touchstone.capture import context
+from touchstone.capture.patch_openai import patch
+
+NON_JSON_ARGS = 'order_id=A1, note="broke"'
+
+RESPONSE = {
+    "choices": [{
+        "message": {
+            "content": "here you go",
+            "tool_calls": [
+                {"id": "c1", "function": {"name": "order_status", "arguments": NON_JSON_ARGS}}
+            ],
+        }
+    }],
+    "usage": {"prompt_tokens": 12, "completion_tokens": 7},
+}
+
+STREAM = [
+    {"choices": [{"delta": {"content": "Hel"}}]},
+    {"choices": [{"delta": {"content": "lo"}}]},
+    {"choices": [{"delta": {"tool_calls": [
+        {"index": 0, "id": "c9", "function": {"name": "refund", "arguments": '{"amt":'}}]}}]},
+    {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "5}"}}]}}]},
+    {"choices": [{"delta": {}}], "usage": {"prompt_tokens": 3, "completion_tokens": 4}},
+]
+
+
+class Completions:
+    def create(self, **kwargs):
+        return iter(STREAM) if kwargs.get("stream") else RESPONSE
+
+
+class AsyncCompletions:
+    async def create(self, **kwargs):
+        if kwargs.get("stream"):
+            async def gen():
+                for ch in STREAM:
+                    yield ch
+            return gen()
+        return RESPONSE
+
+
+def _last_span(traced):
+    conn = context.get_conn()
+    eps = store.list_episodes(conn)
+    return store.list_spans(conn, eps[-1].id)[-1]
+
+
+def test_nonstream_records_content_tokens_and_nonjson_tool_args(traced, monkeypatch):
+    install_fake_openai(monkeypatch, Completions, AsyncCompletions)
+    assert patch() is True
+    from openai.resources.chat import completions as c
+
+    resp = c.Completions().create(model="gpt-x", messages=[{"role": "user", "content": "hi"}])
+    assert resp is RESPONSE  # patch is transparent to the caller
+
+    span = _last_span(traced)
+    msg = span.output["message"]
+    assert msg["content"] == "here you go"
+    assert msg["tool_calls"][0]["arguments"] == NON_JSON_ARGS
+    assert span.tokens_in == 12 and span.tokens_out == 7
+    assert span.model == "gpt-x"
+
+
+def test_streaming_accumulates_into_one_span(traced, monkeypatch):
+    install_fake_openai(monkeypatch, Completions, AsyncCompletions)
+    patch()
+    from openai.resources.chat import completions as c
+
+    stream = c.Completions().create(
+        model="gpt-x", messages=[{"role": "user", "content": "q"}], stream=True
+    )
+    chunks = list(stream)
+    assert len(chunks) == len(STREAM)
+
+    span = _last_span(traced)
+    assert span.output["message"]["content"] == "Hello"
+    tc = span.output["message"]["tool_calls"][0]
+    assert tc["name"] == "refund" and tc["arguments"] == '{"amt":5}' and tc["id"] == "c9"
+    assert span.tokens_in == 3 and span.tokens_out == 4
+
+
+def test_error_is_recorded_on_span(traced, monkeypatch):
+    class Boom:
+        def create(self, **kwargs):
+            raise RuntimeError("upstream down")
+
+    install_fake_openai(monkeypatch, Boom, AsyncCompletions)
+    patch()
+    from openai.resources.chat import completions as c
+
+    try:
+        c.Completions().create(model="m", messages=[{"role": "user", "content": "x"}])
+        raise AssertionError("should have raised")
+    except RuntimeError:
+        pass
+    assert "upstream down" in _last_span(traced).error
+
+
+def test_async_streaming(traced, monkeypatch):
+    install_fake_openai(monkeypatch, Completions, AsyncCompletions)
+    patch()
+    from openai.resources.chat import completions as c
+
+    async def scenario():
+        stream = await c.AsyncCompletions().create(
+            model="m", messages=[{"role": "user", "content": "x"}], stream=True
+        )
+        return [ch async for ch in stream]
+
+    chunks = asyncio.run(scenario())
+    assert len(chunks) == len(STREAM)
+    assert _last_span(traced).output["message"]["content"] == "Hello"
