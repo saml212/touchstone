@@ -554,6 +554,75 @@ def bench_harbor_run(
     raise typer.Exit(code)
 
 
+# ---- train -----------------------------------------------------------------
+
+train_app = typer.Typer(help="Build training datasets and emit runnable backend configs.",
+                        no_args_is_help=True)
+app.add_typer(train_app, name="train")
+
+
+def _resolve_out(conn, benchmark_id: str, out: str | None):
+    from .train import default_out_dir
+
+    bench = store.get_benchmark(conn, benchmark_id)
+    if bench is None:
+        _fail(f"no benchmark {benchmark_id!r}")
+    return bench, (Path(out) if out else default_out_dir(load_settings().db_path, bench))
+
+
+@train_app.command("prepare")
+def train_prepare(
+    benchmark_id: str,
+    out: str = typer.Option(None, "--out", help="Output dir (default .touchstone/train/<bench>)."),
+) -> None:
+    """Write sft.jsonl, preference.jsonl, rl_tasks.jsonl and manifest.json for a benchmark."""
+    from .train import prepare
+
+    conn = _open_db()
+    try:
+        bench, out_dir = _resolve_out(conn, benchmark_id, out)
+        bundle = prepare(conn, bench.id, out_dir)
+    finally:
+        conn.close()
+    c = bundle.counts
+    typer.echo(f"wrote datasets to {bundle.out_dir}")
+    typer.echo(f"  sft.jsonl        {c['sft']} rows")
+    typer.echo(f"  preference.jsonl {c['preference']} rows")
+    typer.echo(f"  rl_tasks.jsonl   {c['rl_tasks']} rows")
+
+
+@train_app.command("submit")
+def train_submit(
+    benchmark_id: str,
+    backend: str = typer.Option("null", "--backend", help="null | art | trl."),
+    out: str = typer.Option(None, "--out", help="Output dir (default .touchstone/train/<bench>)."),
+    base_model: str = typer.Option(None, "--base-model", help="Base model for the backend config."),
+) -> None:
+    """Prepare datasets then run a backend: null writes a plan; art/trl write a GPU config."""
+    from .train import InfraRequired, TrainConfig, trainer_for
+
+    try:
+        trainer = trainer_for(backend)
+    except ValueError as exc:
+        _fail(str(exc))
+    config = TrainConfig(base_model=base_model) if base_model else TrainConfig()
+
+    conn = _open_db()
+    try:
+        bench, out_dir = _resolve_out(conn, benchmark_id, out)
+        bundle = trainer.prepare(conn, bench.id, out_dir)
+        try:
+            handle = trainer.submit(bundle, config)
+        except InfraRequired as exc:
+            typer.echo(f"prepared datasets in {bundle.out_dir}")
+            typer.echo(str(exc))
+            return
+    finally:
+        conn.close()
+    typer.echo(f"prepared datasets in {bundle.out_dir}")
+    typer.echo(f"{handle.status}: {handle.detail}")
+
+
 # ---- export ----------------------------------------------------------------
 
 export_app = typer.Typer(help="Export tasks to Harbor or an episode to ATIF.",

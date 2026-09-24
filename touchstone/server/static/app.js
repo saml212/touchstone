@@ -45,6 +45,7 @@ const PAGES = {
   tasks: tasksPage,
   rooms: roomsPage,
   benchmarks: benchmarksPage,
+  train: trainPage,
 };
 
 let pollTimer = null;
@@ -373,6 +374,84 @@ function proofPanel(runs) {
     <label>candidate <select id="proof-cand">${opts}</select></label>
     <label>incumbent <select id="proof-inc">${opts}</select></label>
     <button id="proof-go">Compare</button></div><div id="proof-out"></div>`;
+}
+
+// ---- train -----------------------------------------------------------------
+
+async function trainPage() {
+  const { benchmarks } = await api("/api/benchmarks");
+  if (!benchmarks.length) {
+    view.innerHTML = `<h2>Train</h2><p class="muted">No benchmarks yet — create one on the Benchmarks page.</p>`;
+    return;
+  }
+  const opts = benchmarks.map((b) =>
+    `<option value="${b.id}">${esc(b.name)} (${(b.task_ids || []).length} tasks)</option>`).join("");
+  view.innerHTML = `<h2>Train</h2>
+    <p class="muted">Prepare SFT / preference / RL datasets from a benchmark, then emit a runnable backend config. Nothing trains here — Touchstone hands you the datasets and the exact command to run on GPU infra.</p>
+    <div class="form">
+      <label>benchmark <select id="tr-bench">${opts}</select></label>
+      <button id="tr-prepare">Prepare datasets</button>
+    </div>
+    <div id="tr-out"></div>`;
+  document.getElementById("tr-prepare").onclick = trainPrepare;
+}
+
+async function trainPrepare() {
+  const bench = document.getElementById("tr-bench").value;
+  const out = document.getElementById("tr-out");
+  out.innerHTML = `<div class="loading">Preparing…</div>`;
+  try {
+    const b = await api("/api/train/prepare", "POST", { benchmark: bench });
+    out.innerHTML = trainResult(bench, b);
+    wireTrainSubmit(bench);
+  } catch (e) {
+    out.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+  }
+}
+
+function dlLink(bench, file, rows) {
+  const href = `/api/train/download?benchmark=${encodeURIComponent(bench)}&file=${file}`;
+  const count = rows === undefined ? "" : ` <span class="muted">(${rows} rows)</span>`;
+  return `<a href="${href}" download>${file}</a>${count}`;
+}
+
+function trainResult(bench, b) {
+  const c = b.counts;
+  return `<div class="panel">
+    <p>Wrote datasets to <code>${esc(b.out_dir)}</code></p>
+    <ul>
+      <li>${dlLink(bench, "sft.jsonl", c.sft)}</li>
+      <li>${dlLink(bench, "preference.jsonl", c.preference)}</li>
+      <li>${dlLink(bench, "rl_tasks.jsonl", c.rl_tasks)}</li>
+      <li>${dlLink(bench, "manifest.json")}</li>
+    </ul>
+    <div class="form">
+      <label>backend <select id="tr-backend">
+        <option value="null">null (write plan)</option>
+        <option value="art">art (RL)</option>
+        <option value="trl">trl (SFT)</option>
+      </select></label>
+      <label>base model <input id="tr-model" placeholder="Qwen/Qwen2.5-7B-Instruct"></label>
+      <button id="tr-submit">Submit</button>
+    </div>
+    <div id="tr-submit-out"></div>
+  </div>`;
+}
+
+function wireTrainSubmit(bench) {
+  document.getElementById("tr-submit").onclick = async () => {
+    const out = document.getElementById("tr-submit-out");
+    const body = { benchmark: bench, backend: document.getElementById("tr-backend").value };
+    const model = document.getElementById("tr-model").value.trim();
+    if (model) body.base_model = model;
+    out.innerHTML = `<div class="loading">Submitting…</div>`;
+    try {
+      const r = await api("/api/train/submit", "POST", body);
+      out.innerHTML = `<p class="muted"><b>${esc(r.status)}</b> — ${esc(r.detail)}</p>`;
+    } catch (e) {
+      out.innerHTML = `<div class="error">${esc(e.message)}</div>`;
+    }
+  };
 }
 
 async function showProof() {

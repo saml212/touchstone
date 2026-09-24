@@ -153,11 +153,20 @@ exact command and where Docker is missing.
 
 ## Train
 
-`Trainer` Protocol: `prepare(benchmark_id) -> DatasetBundle` and `submit(bundle, config) -> JobHandle`.
-`datasets.py` writes `sft.jsonl` (task context + passing reference), `preference.jsonl` (pass vs fail pairs
-per task from run results), `rl_tasks.jsonl` (task id + context + serialized checks for verifiers).
-`NullTrainer.submit` writes `train_plan.md` describing exactly what would run. `art.py` and `trl.py` write
-runnable configs and the launch command, then raise `InfraRequired` with a one-line instruction.
+`Trainer` Protocol: `prepare(conn, benchmark_id, out_dir) -> DatasetBundle` and
+`submit(bundle, config) -> JobHandle`. `datasets.py` writes, all atomically (re-runs overwrite),
+under `.touchstone/train/<benchmark>/`: `sft.jsonl` (canonical context + reference completion for
+tasks whose reference passes every attached hard check), `preference.jsonl` (per task, `{prompt,
+chosen, rejected}` pairs — a passing candidate reply over a failing one from run results, plus the
+reference over each failing candidate on tasks whose reference is good), `rl_tasks.jsonl` (task id,
+context, tools, serialized attached checks for the reward verifier), and `manifest.json` (counts +
+benchmark id). `NullTrainer.submit` writes `train_plan.md` and returns a handle with status
+"planned". `art.py` writes `art_train.py` (an `art.TrainableModel` + a rollout that replays a task and
+scores it with the vendored `touchstone_checks`, mirroring `bench/harbor_export`); `trl.py` writes
+`trl_sft.yaml` + `run_trl.sh`. Both write their files and then raise `InfraRequired` with a one-line
+instruction naming the file and command. `touchstone train prepare BENCH [--out DIR]` and
+`train submit BENCH --backend null|art|trl [--out DIR]`; API `POST /api/train/prepare|submit` and a
+download route for the jsonl files. Everything runs off the store; no GPU, no network.
 
 ## Server
 

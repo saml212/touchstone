@@ -223,3 +223,52 @@ def _run_and_wait(c, benchmark_id, spec="scripted"):
             return run["id"]
         time.sleep(0.05)
     raise AssertionError("run did not finish")
+
+
+def test_train_prepare_and_download(db):
+    ids = _seed(db)
+    c = _client(db)
+    r = c.post("/api/train/prepare", json={"benchmark": ids["bench"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["counts"]["rl_tasks"] == 2
+    assert set(body["files"]) >= {"sft", "preference", "rl_tasks", "manifest"}
+
+    dl = c.get(f"/api/train/download?benchmark={ids['bench']}&file=rl_tasks.jsonl")
+    assert dl.status_code == 200 and dl.text.strip()
+    # a filename not on the allowlist is refused (no path traversal)
+    assert c.get(f"/api/train/download?benchmark={ids['bench']}&file=../secret").status_code == 404
+
+
+def test_train_download_before_prepare_is_404(db):
+    ids = _seed(db)
+    c = _client(db)
+    assert c.get(f"/api/train/download?benchmark={ids['bench']}&file=sft.jsonl").status_code == 404
+
+
+def test_train_submit_null_writes_plan(db):
+    ids = _seed(db)
+    c = _client(db)
+    r = c.post("/api/train/submit", json={"benchmark": ids["bench"], "backend": "null"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "planned"
+    plan = c.get(f"/api/train/download?benchmark={ids['bench']}&file=train_plan.md")
+    assert plan.status_code == 200 and "Training plan" in plan.text
+
+
+def test_train_submit_art_reports_infra_required(db):
+    ids = _seed(db)
+    c = _client(db)
+    r = c.post("/api/train/submit", json={"benchmark": ids["bench"], "backend": "art"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "infra_required"
+    assert "art_train.py" in body["detail"]
+
+
+def test_train_submit_unknown_backend_422(db):
+    ids = _seed(db)
+    c = _client(db)
+    assert c.post("/api/train/submit",
+                  json={"benchmark": ids["bench"], "backend": "nope"}).status_code == 422
