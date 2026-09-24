@@ -9,10 +9,12 @@ def test_trace_twice_is_idempotent(db):
     assert a["db"] == b["db"] == db
 
 
-def test_trace_never_raises_when_no_sdk_installed(db):
-    # openai/anthropic are not project dependencies, so neither should be importable here.
+def test_trace_never_raises_for_absent_sdk(db):
+    # openai is a dev dependency (real-SDK smoke), anthropic is not installed: trace must not
+    # raise for the absent one and returns whatever it could patch.
     info = touchstone.trace(db)
-    assert info["patched"] == []
+    assert isinstance(info["patched"], list)
+    assert "anthropic" not in info["patched"]
 
 
 def test_record_llm_call_without_episode_uses_untracked(db):
