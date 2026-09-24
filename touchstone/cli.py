@@ -104,6 +104,7 @@ def serve(
 
     from .server import create_app
 
+    typer.echo(f"Touchstone UI on http://{host}:{port}")
     uvicorn.run(create_app(load_settings()), host=host, port=port)
 
 

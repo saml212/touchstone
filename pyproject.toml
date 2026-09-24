@@ -50,5 +50,6 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-# FastAPI's Depends()/File()/Form() belong in argument defaults by design.
+# FastAPI's Depends()/File()/Form()/Query() belong in argument defaults by design.
 "touchstone/server/app.py" = ["B008"]
+"touchstone/server/routes/*.py" = ["B008"]

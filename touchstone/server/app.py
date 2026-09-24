@@ -31,6 +31,7 @@ from ..interview import rooms
 from ..interview.agent import Interviewer
 from ..interview.rooms import Event, Hub
 from ..interview.speech import Speech, SpeechError, validate_audio
+from .routes import ROUTERS
 
 STATIC = Path(__file__).parent / "static"
 
@@ -67,13 +68,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/health")
     def health() -> dict:
         return {"status": "ok"}
-
-    @app.get("/api/tasks/{task_id}")
-    def get_task(task_id: str, conn=Depends(get_conn)) -> dict:
-        task = store.get_task(conn, task_id)
-        if task is None:
-            raise HTTPException(404, f"no task with id {task_id}")
-        return asdict(task)
 
     @app.get("/api/rooms/{room_id}")
     def get_room(room_id: str, conn=Depends(get_conn)) -> dict:
@@ -172,14 +166,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # -- static UI -----------------------------------------------------------
 
+    _NO_STORE = {"Cache-Control": "no-store"}
+
     @app.get("/")
-    def index() -> Response:
-        return Response("Touchstone interview. Open /rooms/<id>.", media_type="text/plain")
+    def index() -> FileResponse:
+        return FileResponse(STATIC / "index.html", headers=_NO_STORE)
+
+    @app.get("/app.js")
+    def app_js() -> FileResponse:
+        return FileResponse(STATIC / "app.js", media_type="text/javascript", headers=_NO_STORE)
+
+    @app.get("/app.css")
+    def app_css() -> FileResponse:
+        return FileResponse(STATIC / "app.css", media_type="text/css", headers=_NO_STORE)
 
     @app.get("/rooms/{room_id}")
     def room_page(room_id: str) -> FileResponse:
         return FileResponse(STATIC / "room.html")
 
+    for router in ROUTERS:
+        app.include_router(router)
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     return app
 
