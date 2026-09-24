@@ -94,6 +94,30 @@ def test_tool_result_becomes_user_block():
     assert turns[2]["content"][0] == {"type": "tool_result", "tool_use_id": "u1", "content": "done"}
 
 
+def test_canonical_context_becomes_tool_use_and_tool_result_blocks():
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return _ok()
+
+    canonical_context = [
+        {"role": "user", "content": "refund order 1"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call_1", "name": "refund", "arguments": '{"amount": 5}'}]},
+        {"role": "tool", "tool_call_id": "call_1", "name": "refund", "content": "done"},
+    ]
+    make(handler).chat(canonical_context)
+    turns = seen["body"]["messages"]
+    assistant = next(t for t in turns if t["role"] == "assistant")
+    assert assistant["content"][0] == {
+        "type": "tool_use", "id": "call_1", "name": "refund", "input": {"amount": 5}}
+    result = turns[-1]
+    assert result["role"] == "user"
+    assert result["content"][0] == {
+        "type": "tool_result", "tool_use_id": "call_1", "content": "done"}
+
+
 def test_json_mode_appends_instruction():
     seen = {}
 

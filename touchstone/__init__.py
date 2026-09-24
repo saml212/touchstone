@@ -15,6 +15,7 @@ from .capture import episode, tool
 from .capture.patch_anthropic import patch as _patch_anthropic
 from .capture.patch_openai import patch as _patch_openai
 from .config import load_settings
+from .messages import canonical
 
 __all__ = ["trace", "episode", "outcome", "tool", "record_llm_call"]
 
@@ -62,12 +63,15 @@ def record_llm_call(model, messages, reply, tools=None, usage=None) -> None:
     """Record an llm call made outside a patched SDK (e.g. via a Provider)."""
     content, tool_calls, reply_usage = _normalize_reply(reply)
     u = usage or reply_usage or {}
+    convo = canonical(
+        list(messages) + [{"role": "assistant", "content": content, "tool_calls": tool_calls}]
+    )
     capture.add_span(
         "llm",
         model or "llm",
         model=model,
-        input={"messages": messages, "tools": tools or [], "params": {}},
-        output={"message": {"role": "assistant", "content": content, "tool_calls": tool_calls}},
+        input={"messages": convo[:-1], "tools": tools or [], "params": {}},
+        output={"message": convo[-1]},
         tokens_in=u.get("tokens_in"),
         tokens_out=u.get("tokens_out"),
     )

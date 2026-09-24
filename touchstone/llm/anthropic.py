@@ -11,6 +11,7 @@ import json
 
 import httpx
 
+from ..messages import to_anthropic
 from ._http import ProviderError, apost_json, post_json
 from .base import Reply
 
@@ -53,7 +54,7 @@ class AnthropicProvider:
         }
 
     def _body(self, messages, tools, want_json) -> dict:
-        system, converted = _convert_messages(messages)
+        system, converted = to_anthropic(messages)
         if want_json:
             system = (system + "\n\n" + _JSON_INSTRUCTION).strip()
         body: dict = {
@@ -136,65 +137,3 @@ def _convert_tool(tool: dict) -> dict:
         "description": fn.get("description", ""),
         "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
     }
-
-
-def _parse_args(arguments) -> dict:
-    if isinstance(arguments, dict):
-        return arguments
-    try:
-        parsed = json.loads(arguments)
-        return parsed if isinstance(parsed, dict) else {"value": parsed}
-    except (json.JSONDecodeError, TypeError):
-        return {"raw": arguments}
-
-
-def _blocks_for(message: dict) -> tuple[str, list[dict]]:
-    """Return (role, content-blocks) for one non-system OpenAI message."""
-    role = message.get("role", "user")
-    content = message.get("content")
-    if role == "tool":
-        return "user", [
-            {
-                "type": "tool_result",
-                "tool_use_id": message.get("tool_call_id") or message.get("name") or "",
-                "content": content if isinstance(content, str) else json.dumps(content),
-            }
-        ]
-    blocks: list[dict] = []
-    if isinstance(content, str) and content:
-        blocks.append({"type": "text", "text": content})
-    elif isinstance(content, list):
-        for part in content:
-            text = part.get("text") if isinstance(part, dict) else str(part)
-            if text:
-                blocks.append({"type": "text", "text": text})
-    for tc in message.get("tool_calls") or []:
-        fn = tc.get("function", tc)
-        blocks.append(
-            {
-                "type": "tool_use",
-                "id": tc.get("id") or fn.get("name"),
-                "name": fn.get("name"),
-                "input": _parse_args(fn.get("arguments")),
-            }
-        )
-    return role, blocks
-
-
-def _convert_messages(messages: list[dict]) -> tuple[str, list[dict]]:
-    systems: list[str] = []
-    turns: list[dict] = []
-    for message in messages:
-        if message.get("role") == "system":
-            text = message.get("content")
-            if isinstance(text, str) and text:
-                systems.append(text)
-            continue
-        role, blocks = _blocks_for(message)
-        if not blocks:
-            continue
-        if turns and turns[-1]["role"] == role:  # coalesce adjacent same-role turns
-            turns[-1]["content"].extend(blocks)
-        else:
-            turns.append({"role": role, "content": blocks})
-    return "\n\n".join(systems), turns

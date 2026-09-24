@@ -102,6 +102,29 @@ def test_error_is_recorded_on_span(traced, monkeypatch):
     assert "upstream down" in _last_span(traced).error
 
 
+def test_stored_input_messages_are_canonical(traced, monkeypatch):
+    install_fake_openai(monkeypatch, Completions, AsyncCompletions)
+    patch()
+    from openai.resources.chat import completions as c
+
+    wire_context = [
+        {"role": "user", "content": "refund order 1"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "type": "function",
+             "function": {"name": "refund", "arguments": '{"amount": 5}'}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "done"},
+    ]
+    c.Completions().create(model="gpt-x", messages=wire_context)
+
+    stored = _last_span(traced).input["messages"]
+    assistant = next(m for m in stored if m.get("tool_calls"))
+    assert assistant["tool_calls"] == [
+        {"id": "c1", "name": "refund", "arguments": '{"amount": 5}'}]
+    assert "function" not in assistant["tool_calls"][0]
+    tool = next(m for m in stored if m["role"] == "tool")
+    assert tool["tool_call_id"] == "c1" and tool["content"] == "done"
+
+
 def test_async_streaming(traced, monkeypatch):
     install_fake_openai(monkeypatch, Completions, AsyncCompletions)
     patch()

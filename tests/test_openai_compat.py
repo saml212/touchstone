@@ -51,6 +51,29 @@ def test_json_mode_sets_response_format():
     assert seen["body"]["response_format"] == {"type": "json_object"}
 
 
+def test_canonical_context_becomes_valid_openai_wire():
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return _ok()
+
+    canonical_context = [
+        {"role": "user", "content": "refund order 1"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call_1", "name": "refund", "arguments": '{"amount": 5}'}]},
+        {"role": "tool", "tool_call_id": "call_1", "name": "refund", "content": "done"},
+    ]
+    make(handler).chat(canonical_context)
+    sent = seen["body"]["messages"]
+    assistant = next(m for m in sent if m.get("tool_calls"))
+    tc = assistant["tool_calls"][0]
+    assert tc["type"] == "function"
+    assert tc["function"] == {"name": "refund", "arguments": '{"amount": 5}'}
+    tool = next(m for m in sent if m["role"] == "tool")
+    assert tool["tool_call_id"] == "call_1"
+
+
 def test_tools_forwarded():
     seen = {}
 

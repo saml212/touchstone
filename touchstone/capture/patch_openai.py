@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import json
 
+from ..messages import canonical
 from . import context
 
 
@@ -86,16 +87,17 @@ def _stream_tool_calls(tool_args, tool_meta):
 def _record(model, messages, tools, params, content, tool_calls, usage, error, started):
     tokens_in = usage.get("tokens_in") if usage else None
     tokens_out = usage.get("tokens_out") if usage else None
+    reply = canonical([{"role": "assistant", "content": content, "tool_calls": tool_calls}])[0]
     context.add_span(
         "llm",
         model or "openai.chat",
         model=model,
         input={
-            "messages": messages,
+            "messages": canonical(messages),
             "tools": tools or [],
             "params": {k: context.jsonable(v) for k, v in params.items()},
         },
-        output={"message": {"role": "assistant", "content": content, "tool_calls": tool_calls}},
+        output={"message": reply},
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         error=error,

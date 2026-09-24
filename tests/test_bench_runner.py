@@ -1,11 +1,13 @@
 import asyncio
 
+import httpx
 import pytest
 
 from touchstone import store
 from touchstone.bench import benchmark, pricing, runner
 from touchstone.demo import run_demo
 from touchstone.llm import Reply
+from touchstone.llm.openai_compat import OpenAICompatProvider
 from touchstone.mine import cut_tasks
 
 
@@ -142,6 +144,34 @@ def test_judge_provider_path(traced):
     judged = [cr for r in results for cr in (r.check_results or []) if cr["check_id"] == judge.id]
     assert judged and all(cr["passed"] is True for cr in judged)
     conn.close()
+
+
+def test_replay_tool_context_to_openai_is_valid_wire_and_no_errors(seeded):
+    # The regression: tasks whose context has assistant tool calls + tool results used to
+    # 400 against the OpenAI API because the stored context was not OpenAI-shaped.
+    conn, bench = seeded
+    import json as _json
+
+    saw_tool_context = {"hit": False}
+
+    def handler(req):
+        for msg in _json.loads(req.content)["messages"]:
+            if msg["role"] == "tool":
+                saw_tool_context["hit"] = True
+                assert msg.get("tool_call_id"), "tool message needs tool_call_id"
+            for tc in msg.get("tool_calls") or []:
+                assert tc["type"] == "function" and "arguments" in tc["function"]
+        body = {"choices": [{"message": {"role": "assistant", "content": "sorted"}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1}}
+        return httpx.Response(200, json=body)
+
+    provider = OpenAICompatProvider(
+        "https://api.openai.com/v1", "gpt-4o-mini", "sk-test",
+        transport=httpx.MockTransport(handler), backoff=0)
+    run = runner.run(conn, bench.id, "openai:gpt-4o-mini", provider=provider)
+    results = store.list_results(conn, run.id)
+    assert results and all(r.error is None for r in results)
+    assert saw_tool_context["hit"], "expected at least one task with tool context"
 
 
 def test_pricing_unknown_and_longest_match():
