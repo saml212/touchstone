@@ -28,6 +28,14 @@ def _load_reference(task_dir: Path, ts: dict):
         return None
 
 
+def _load_context_text(task_dir: Path) -> str:
+    """The flattened user/system text an expr check reads as `context_text` (empty if absent)."""
+    try:
+        return (task_dir / "context_text.txt").read_text()
+    except OSError:
+        return ""
+
+
 def main() -> int:
     task_toml = Path(os.environ.get("TOUCHSTONE_TASK", HERE / "task.toml"))
     output_path = Path(os.environ.get("TOUCHSTONE_OUTPUT", "/app/output.json"))
@@ -47,7 +55,8 @@ def main() -> int:
         out = {}
 
     target = Target(output_text=out.get("content") or "",
-                    tool_calls=out.get("tool_calls") or [], reference=reference)
+                    tool_calls=out.get("tool_calls") or [], reference=reference,
+                    context_text=_load_context_text(task_toml.parent))
     results = evaluate(checks, target, judge_provider=None)
     ok = passes(results, checks)
     reward = 1.0 if ok else 0.0

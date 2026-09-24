@@ -19,8 +19,10 @@ from dataclasses import dataclass, field
 from .. import store
 from .. import tasks as tasks_mod
 from ..checks import Check as DslCheck
+from ..checks import Target, evaluate
 from ..checks.dsl import PARAM_SPEC
 from ..llm.prompt import extract_json
+from ..messages import context_text, text_of
 from ..policies import Policy, materialize, read_policies, write_policies
 from . import rooms
 
@@ -211,8 +213,11 @@ class Interviewer:
         if policy_names:
             n = self._sync_other_tasks(policy_names)
             applied = f" Applied to {n} other task{'' if n == 1 else 's'}."
+        demoted = [c.get("name") or c["kind"] for c in committed if c.get("demoted")]
+        note = (f" Couldn't generalise {', '.join(demoted)} beyond this task, so I attached it "
+                "here only.") if demoted else ""
         tail = f" {status}" if status else ""
-        return f"Committed: {names}.{applied}{tail} Anything else, or /done to close?"
+        return f"Committed: {names}.{applied}{note}{tail} Anything else, or /done to close?"
 
     def _reconcile_task(self, committed: list[dict]) -> str:
         """Re-materialise the room's task from current policies, re-validate, write it; return a
@@ -308,20 +313,82 @@ class Interviewer:
         return {"check": norm, "read_back": _read_back(norm)}
 
     def commit_check(self, raw: dict) -> dict:
-        """Write one confirmed check to the task (or to checks.toml when flagged a policy)."""
+        """Write one confirmed check to the task (or to checks.toml when flagged a policy).
+
+        A draft flagged a policy is first generalised: task-specific literals copied from this
+        task's context are lifted into a pattern that holds on every task. When the literal can't
+        be generalised, the check attaches to this task only (`demoted`).
+        """
         norm = _normalize(raw)
         if norm is None:
             return {}
+        is_policy, demoted = bool(norm.get("policy")), False
+        if is_policy:
+            norm, is_policy = self._generalize_policy(norm)
+            demoted = not is_policy
         check = DslCheck(kind=norm["kind"], params=norm["params"], name=norm["name"],
                          applies_to=norm["applies_to"], severity=norm["severity"],
                          rule=norm.get("rule", ""), because=norm.get("because", ""),
                          source="interview")
         check.id = check.name
-        if norm.get("policy"):
+        if is_policy:
             self._commit_policy(check)
         elif self.room.task_id:
             tasks_mod.append_check(self.root, self.room.task_id, check)
-        return _check_dict(check, policy=bool(norm.get("policy")))
+        out = _check_dict(check, policy=is_policy)
+        if demoted:
+            out["demoted"] = True
+        return out
+
+    # -- generalising a task-specific draft into a policy --------------------
+
+    def _generalize_policy(self, norm: dict) -> tuple[dict, bool]:
+        """(check, is_policy): lift task literals into a pattern via the LLM and confirm the result
+        still passes this task's reference. A draft with no copied literal stays a policy as-is; a
+        literal that can't be generalised demotes the check to this task only (is_policy False)."""
+        task = self._task()
+        if task is None or self.provider is None or not _has_task_literal(norm, task):
+            return norm, True
+        general = self._ask_generalize(norm, task)
+        if general is not None and self._passes_reference(general, task):
+            return general, True
+        return norm, False
+
+    def _ask_generalize(self, norm: dict, task) -> dict | None:
+        try:
+            reply = self.provider.chat(self._generalize_prompt(norm, task))
+            data = json.loads(extract_json(reply.content) or reply.content)
+        except Exception:
+            return None
+        return _normalize(data) if isinstance(data, dict) else None
+
+    def _generalize_prompt(self, norm: dict, task) -> list[dict]:
+        system = (
+            "You are Touchstone's interviewer. Rewrite ONE check so it works as a POLICY applied "
+            "to EVERY task. This will apply to every task: replace values copied from THIS task's "
+            "context (an order id, a name, an amount) with a regex, or an expr over the context — "
+            "e.g. the order id mentioned in the user's message. An expr reads output, tools, "
+            "reference and context_text (the flattened user/system text of the task). Keep the "
+            "same intent and name. Reply with the single check as JSON only, the draft's shape."
+        )
+        user = (f"Draft check (pinned to this task):\n{json.dumps(norm, ensure_ascii=False)}\n\n"
+                f"This task's user/system context:\n{context_text(task.context)}\n\n"
+                f"This task's reference reply:\n{_clip(text_of(task.reference or {}), 400)}\n\n"
+                "Respond with the generalized check as JSON.")
+        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+    def _passes_reference(self, check: dict, task) -> bool:
+        """Whether the generalized check still passes this task's recorded reference."""
+        ref = task.reference or {"content": "", "tool_calls": []}
+        try:
+            dsl = DslCheck.from_dict(check)
+            dsl.validate()
+        except (ValueError, TypeError, KeyError):
+            return False
+        dsl.id = dsl.name or dsl.kind
+        target = Target(output_text=text_of(ref), tool_calls=ref.get("tool_calls") or [],
+                        reference=ref, context_text=context_text(task.context))
+        return evaluate([dsl], target)[0].passed is True
 
     def show_task(self) -> dict:
         """The current task summary the agent narrates, plus the live draft/committed checks."""
@@ -374,6 +441,26 @@ class Interviewer:
         """The interview checks written to this room's task (for the room panel)."""
         task = self._task()
         return [_check_dict(c) for c in (task.checks if task else []) if c.source == "interview"]
+
+
+def _param_literals(params: dict) -> list[str]:
+    """The string values in a check's params — the candidates for a copied task literal."""
+    out: list[str] = []
+    for value in (params or {}).values():
+        if isinstance(value, str):
+            out.append(value)
+        elif isinstance(value, list):
+            out += [v for v in value if isinstance(v, str)]
+    return out
+
+
+def _has_task_literal(norm: dict, task) -> bool:
+    """True when a param value was copied verbatim from the task's user/system context — the mark
+    of a check that would only ever pass this one task if committed as a policy."""
+    ctx = context_text(task.context)
+    if not ctx:
+        return False
+    return any(lit and lit in ctx for lit in _param_literals(norm.get("params", {})))
 
 
 def _normalize(raw) -> dict | None:

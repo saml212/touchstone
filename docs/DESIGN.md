@@ -163,7 +163,10 @@ timestamps ISO-8601 UTC. SQLite is WAL with `busy_timeout`; each caller holds it
 `Check(kind, params)` is evaluated against `Target(output_text, tool_calls, reference)`.
 Kinds, programmatic first: `contains`, `not_contains`, `regex`, `not_regex`, `json_schema`,
 `tool_called` (name + optional `arguments_match`), `tool_not_called`, `tool_order`, `max_length`,
-`min_length`, `no_pii`, `expr` (a sandboxed expression over `output`/`tools`/`reference`), and
+`min_length`, `no_pii`, `expr` (a sandboxed expression over `output`/`tools`/`reference`/
+`context_text` — the last being the flattened user/system text of the task, so a rule can refer to
+what the user asked without pinning to a literal; it is written to each task's
+`tests/context_text.txt` so the vendored container verifier reads it too), and
 `judge` (an LLM rubric; soft by default, sampled `samples` times — default 3 — combined by majority
 with a reported `agreement`, demoted to `passed=None` below `min_agreement`, default 0.67, and
 skipped when no provider). Prefer a programmatic kind that states the rule exactly; reach for `judge`
@@ -232,6 +235,12 @@ fine too") is revised through the LLM first, then committed. A committed check i
 `[[metadata.touchstone.check]]` block with `source = "interview"` in the task's `task.toml`, or as an
 enabled policy in `checks.toml` when the stakeholder says it applies to every task — so `git diff` is
 the audit trail. The agent prefers a programmatic kind and reaches for `judge` only when none fits.
+A draft promoted to a policy is first generalised: any value copied verbatim from this task's
+context (an order id, a name, an amount) is lifted by the LLM into a regex or an `expr` over
+`context_text`, then validated to still pass this task's reference; a literal that cannot be
+generalised is committed to this task only. After every commit the room's own task is
+re-materialised through the reference gate, re-validated, and the room is told its new work queue in
+one sentence; a policy commit also re-syncs every other task and reports how many it applied to.
 
 ## Speech
 

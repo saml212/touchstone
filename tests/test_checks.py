@@ -170,6 +170,17 @@ def test_expr_comprehension_over_tools_for_state_assertions():
     assert _one("expr", {"expr": expr}, tool_calls=[]).passed is False
 
 
+def test_expr_reads_context_text():
+    # context_text is the flattened user/system text of the task; an expr can require the reply
+    # to echo an id the user mentioned, without pinning the check to that literal id.
+    check = Check(kind="expr", id="e",
+                  params={"expr": "'A1094' in context_text and 'A1094' in output"})
+    passing = Target(output_text="Order A1094 ships tomorrow.", context_text="where is A1094?")
+    assert evaluate([check], passing)[0].passed is True
+    missing = Target(output_text="Your order ships tomorrow.", context_text="where is A1094?")
+    assert evaluate([check], missing)[0].passed is False
+
+
 def test_expr_sandbox_refuses_import():
     r = _one("expr", {"expr": '__import__("os").system("echo hi")'}, "x")
     assert r.passed is None

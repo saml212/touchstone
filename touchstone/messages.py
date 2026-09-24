@@ -299,6 +299,13 @@ def text_of(message: dict) -> str:
     return "" if content is None else json.dumps(content, ensure_ascii=False)
 
 
+def context_text(context: dict | None) -> str:
+    """Flattened user + system text of a task's context — the `context_text` an expr check reads."""
+    messages = (context or {}).get("messages", [])
+    parts = [text_of(m) for m in messages if m.get("role") in ("user", "system")]
+    return "\n".join(p for p in parts if p)
+
+
 # ---- back to wire ----------------------------------------------------------
 
 

@@ -28,7 +28,7 @@ from pathlib import Path
 import tomli_w
 
 from .checks import Check, Target, evaluate, passes
-from .messages import text_of
+from .messages import context_text, text_of
 
 _CHECKS_SRC = Path(__file__).resolve().parent / "checks"
 PRESERVE_SOURCES = frozenset({"interview", "manual"})
@@ -100,9 +100,11 @@ def tasks_dir(root: str | Path) -> Path:
 # ---- reference gate + status ------------------------------------------------
 
 
-def _reward(checks: list[Check], output_text: str, tool_calls: list[dict], reference) -> float:
+def _reward(checks: list[Check], output_text: str, tool_calls: list[dict], reference,
+            ctx_text: str = "") -> float:
     gradable = [c for c in checks if c.kind != "judge"]  # judge needs an LLM; skipped offline
-    target = Target(output_text=output_text, tool_calls=tool_calls, reference=reference)
+    target = Target(output_text=output_text, tool_calls=tool_calls, reference=reference,
+                    context_text=ctx_text)
     return 1.0 if passes(evaluate(gradable, target), gradable) else 0.0
 
 
@@ -115,9 +117,10 @@ def validate(task: Task) -> tuple[str, str]:
     """
     ref = task.reference or {"content": "", "tool_calls": []}
     calls = ref.get("tool_calls") or []
-    if _reward(task.checks, text_of(ref), calls, ref) < 1.0:
+    ctx = context_text(task.context)
+    if _reward(task.checks, text_of(ref), calls, ref, ctx) < 1.0:
         return "needs_solution", "the recorded reply fails its own hard checks"
-    if _reward(task.checks, "", [], ref) >= 1.0:
+    if _reward(task.checks, "", [], ref, ctx) >= 1.0:
         return "needs_checks", "an empty reply already passes every hard check"
     return "active", ""
 
@@ -236,6 +239,8 @@ def _write_tests(task_dir: Path, task: Task) -> None:
     _write(tests / "task.toml", _task_toml(container))
     _write(tests / "reference.json",
            json.dumps(task.reference or {"content": "", "tool_calls": []}, ensure_ascii=False))
+    # The flattened user/system text an expr check reads as `context_text` inside the container.
+    _write(tests / "context_text.txt", context_text(task.context))
     vendor = tests / "touchstone_checks"
     vendor.mkdir(parents=True, exist_ok=True)
     _write(vendor / "__init__.py", "")

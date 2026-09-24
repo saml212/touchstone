@@ -245,6 +245,88 @@ def test_task_level_commit_activates_and_names_status(conn, root):
     assert "active" in turn.say.lower()
 
 
+def _order_room(conn, root, name):
+    ep = store.insert_episode(conn, store.Episode(name=name, outcome_label="ok"))
+    tasks.write_task(root, tasks.Task(
+        name=name, episode_id=ep.id,
+        context={"messages": [{"role": "user", "content": "where is order A1094?"}], "tools": []},
+        reference={"content": "Order A1094 ships tomorrow.", "tool_calls": []}))
+    return rooms.open(conn, task_id=name, topic="order confirmation")
+
+
+_ORDER_DRAFT = {"kind": "contains", "params": {"values": ["A1094"], "mode": "any"},
+                "name": "confirms order number", "severity": "hard", "policy": True}
+
+
+def test_policy_draft_with_task_literal_is_generalized(conn, root):
+    from touchstone import policies
+
+    room = _order_room(conn, root, "order-1")
+    # the LLM lifts the copied id "A1094" into a pattern that still matches this task's reference
+    general = json.dumps({"kind": "regex", "params": {"pattern": "[A-Z]\\d{4}"},
+                          "name": "confirms order number", "severity": "hard", "policy": True})
+    provider = ScriptedProvider(rules=[Rule(substring="A1094", content=general)])
+    agent = Interviewer(provider, conn, room, root)
+
+    out = agent.commit_check(dict(_ORDER_DRAFT))
+    assert out["policy"] is True and not out.get("demoted")
+    pol = next(p for p in policies.read_policies(root) if p.check.name == "confirms order number")
+    assert pol.check.kind == "regex"
+    assert "A1094" not in json.dumps(pol.check.params)  # the task literal was generalised away
+
+
+def test_policy_draft_that_cannot_generalize_falls_back_to_task_only(conn, root):
+    from touchstone import policies
+
+    room = _order_room(conn, root, "order-2")
+    # the LLM's rewrite no longer passes this task's reference -> it cannot be generalised
+    bad = json.dumps({"kind": "regex", "params": {"pattern": "ZZZ\\d+"},
+                      "name": "confirms order number", "severity": "hard", "policy": True})
+    provider = ScriptedProvider(rules=[Rule(substring="A1094", content=bad)])
+    agent = Interviewer(provider, conn, room, root)
+
+    out = agent.commit_check(dict(_ORDER_DRAFT))
+    assert out["policy"] is False and out.get("demoted") is True
+    assert policies.read_policies(root) == []  # nothing written to checks.toml
+    assert any(c.name == "confirms order number" and c.source == "interview"
+               for c in tasks.get_task(root, "order-2").checks)
+
+
+def test_generic_policy_draft_needs_no_generalization(conn, root):
+    # "refund" is not a literal copied from the user turn ("I want my money back"), so the draft
+    # commits straight to checks.toml as a policy without an LLM generalisation round-trip.
+    from touchstone import policies
+
+    name, room = _task_room(conn, root)
+    provider = _CountingProvider(ScriptedProvider())
+    agent = Interviewer(provider, conn, room, root)
+    out = agent.commit_check({"kind": "contains", "params": {"values": ["refund"], "mode": "any"},
+                              "name": "mentions refund", "severity": "hard", "policy": True})
+    assert out["policy"] is True and not out.get("demoted")
+    assert provider.calls == 0  # no generalisation call was needed
+    assert any(p.check.name == "mentions refund" for p in policies.read_policies(root))
+
+
+def test_demoted_policy_is_reported_in_the_room(conn, root):
+    room = _order_room(conn, root, "order-3")
+    draft_json = json.dumps({"say": "ok", "draft": [_ORDER_DRAFT], "commit": []})
+    bad = json.dumps({"kind": "regex", "params": {"pattern": "ZZZ\\d+"},
+                      "name": "confirms order number", "severity": "hard", "policy": True})
+    provider = ScriptedProvider(rules=[
+        Rule(substring="pin this rule", content=draft_json),
+        Rule(substring="A1094", content=bad),  # the generalisation attempt
+    ])
+    agent = Interviewer(provider, conn, room, root)
+    first = agent.respond(_hist(("sam", "user", "pin this rule to every task")))
+    assert len(first.draft) == 1
+    turn = agent.respond(_hist(
+        ("sam", "user", "pin this rule to every task"),
+        ("agent", "assistant", first.say),
+        ("sam", "user", "yes"),
+    ))
+    assert "here only" in turn.say.lower()
+
+
 def test_prompt_prefers_programmatic_kinds_over_judge(conn, root):
     _name, room = _task_room(conn, root)
     prompt = Interviewer(_provider(), conn, room, root)._prompt(_hist(("sam", "user", "hi")))

@@ -192,6 +192,7 @@ def _expr(params, target):
         "output": target.output_text,
         "tools": target.tool_calls,
         "reference": target.reference,
+        "context_text": target.context_text,
     }
     # EvalWithCompoundTypes allows comprehensions so a state assertion can iterate `tools`
     # (e.g. any(t.get('name') == 'refund' ... for t in tools)); it keeps the same dunder/import

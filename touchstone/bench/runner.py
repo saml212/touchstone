@@ -20,6 +20,7 @@ from .. import store
 from .. import tasks as tasks_mod
 from ..checks import Target, evaluate, passes
 from ..llm import provider_from_spec
+from ..messages import context_text
 from . import benchmark, pricing
 
 
@@ -66,6 +67,7 @@ def _target(task: tasks_mod.Task, reply) -> Target:
         output_text=reply.content or "",
         tool_calls=reply.tool_calls or [],
         reference=task.reference,
+        context_text=context_text(task.context),
     )
 
 

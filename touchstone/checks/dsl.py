@@ -146,6 +146,7 @@ class Target:
     output_text: str = ""
     tool_calls: list[dict] = field(default_factory=list)  # [{"name","arguments"}]
     reference: dict | None = None
+    context_text: str = ""  # flattened user/system text of the task, for expr checks
 
 
 def coerce_tool_calls(value) -> list[dict]:
