@@ -123,46 +123,39 @@ def mine_stats(conn, episodes: list[store.Episode]) -> list[Proposal]:
     return proposals
 
 
+def _proposal(kind: str, name: str, rationale: str, ids: list[str], counts: dict, **kw) -> Proposal:
+    """A stats Proposal with the shared support shape (supporting episode ids + counts)."""
+    return Proposal(
+        kind=kind, name=name, rationale=rationale,
+        support={"episode_ids": ids, "counts": counts}, **kw,
+    )
+
+
+def _fraction(views: list[_View], predicate) -> tuple[list[str], float]:
+    """The episode ids in `views` where `predicate` holds, and their fraction of `views`."""
+    ids = [v.episode.id for v in views if predicate(v)]
+    return ids, (len(ids) / len(views) if views else 0.0)
+
+
 def _tool_proposals(good: list[_View], bad: list[_View]) -> list[Proposal]:
     names = sorted({n for v in good + bad for n in v.tool_names})
     out: list[Proposal] = []
     for name in names:
-        g_ids = [v.episode.id for v in good if name in v.tool_names]
-        b_ids = [v.episode.id for v in bad if name in v.tool_names]
-        g_frac = len(g_ids) / len(good) if good else 0.0
-        b_frac = len(b_ids) / len(bad) if bad else 0.0
+        g_ids, g_frac = _fraction(good, lambda v, n=name: n in v.tool_names)
+        b_ids, b_frac = _fraction(bad, lambda v, n=name: n in v.tool_names)
+        counts = {"good": len(g_ids), "bad": len(b_ids)}
         if good and g_frac >= _TOOL_GOOD_FRAC and b_frac < _TOOL_BAD_FRAC:
-            out.append(
-                Proposal(
-                    kind="tool_called",
-                    params={"name": name},
-                    applies_to="tool_calls",
-                    name=f"calls {name}",
-                    rationale=(
-                        f"{name} used in {g_frac:.0%} of good vs {b_frac:.0%} of bad episodes"
-                    ),
-                    support={
-                        "episode_ids": g_ids,
-                        "counts": {"good": len(g_ids), "bad": len(b_ids)},
-                    },
-                )
-            )
+            out.append(_proposal(
+                "tool_called", f"calls {name}",
+                f"{name} used in {g_frac:.0%} of good vs {b_frac:.0%} of bad episodes",
+                g_ids, counts, params={"name": name}, applies_to="tool_calls",
+            ))
         elif bad and b_frac >= _TOOL_GOOD_FRAC and g_frac < _TOOL_BAD_FRAC:
-            out.append(
-                Proposal(
-                    kind="tool_not_called",
-                    params={"name": name},
-                    applies_to="tool_calls",
-                    name=f"avoids {name}",
-                    rationale=(
-                        f"{name} used in {b_frac:.0%} of bad vs {g_frac:.0%} of good episodes"
-                    ),
-                    support={
-                        "episode_ids": b_ids,
-                        "counts": {"good": len(g_ids), "bad": len(b_ids)},
-                    },
-                )
-            )
+            out.append(_proposal(
+                "tool_not_called", f"avoids {name}",
+                f"{name} used in {b_frac:.0%} of bad vs {g_frac:.0%} of good episodes",
+                b_ids, counts, params={"name": name}, applies_to="tool_calls",
+            ))
     return out
 
 
@@ -194,18 +187,12 @@ def _json_proposal(good: list[_View]) -> list[Proposal]:
     schema = {"type": "object", "properties": {k: {} for k in sorted(keys)}}
     if keys:
         schema["required"] = sorted(keys)
-    return [
-        Proposal(
-            kind="json_schema",
-            params={"schema": schema},
-            name="output is JSON",
-            rationale=f"{len(objs)}/{len(with_output)} good outputs parse as JSON objects",
-            support={
-                "episode_ids": [v.episode.id for v in with_output],
-                "counts": {"json": len(objs)},
-            },
-        )
-    ]
+    return [_proposal(
+        "json_schema", "output is JSON",
+        f"{len(objs)}/{len(with_output)} good outputs parse as JSON objects",
+        [v.episode.id for v in with_output], {"json": len(objs)},
+        params={"schema": schema},
+    )]
 
 
 def _percentile(sorted_values: list[int], q: float) -> int:
@@ -223,19 +210,12 @@ def _length_proposal(good: list[_View]) -> list[Proposal]:
     p99 = _percentile(lengths, 0.99)
     limit = int(math.ceil(p99 * _LENGTH_SLACK)) or 1
     slack_pct = int((_LENGTH_SLACK - 1) * 100)
-    return [
-        Proposal(
-            kind="max_length",
-            params={"max": limit},
-            severity="soft",
-            name="output length bound",
-            rationale=f"p99 good output length {p99} chars, +{slack_pct}% slack",
-            support={
-                "episode_ids": [v.episode.id for v in good if v.final_output],
-                "counts": {"p99": p99},
-            },
-        )
-    ]
+    return [_proposal(
+        "max_length", "output length bound",
+        f"p99 good output length {p99} chars, +{slack_pct}% slack",
+        [v.episode.id for v in good if v.final_output], {"p99": p99},
+        params={"max": limit}, severity="soft",
+    )]
 
 
 def _pii_proposal(views: list[_View]) -> list[Proposal]:
@@ -248,15 +228,11 @@ def _pii_proposal(views: list[_View]) -> list[Proposal]:
             kinds |= set(found)
     if not hit_ids:
         return []
-    return [
-        Proposal(
-            kind="no_pii",
-            params={"kinds": sorted(kinds)},
-            name="no PII in output",
-            rationale=f"{', '.join(sorted(kinds))} leaked in {len(hit_ids)} output(s)",
-            support={"episode_ids": hit_ids, "counts": {"leaks": len(hit_ids)}},
-        )
-    ]
+    return [_proposal(
+        "no_pii", "no PII in output",
+        f"{', '.join(sorted(kinds))} leaked in {len(hit_ids)} output(s)",
+        hit_ids, {"leaks": len(hit_ids)}, params={"kinds": sorted(kinds)},
+    )]
 
 
 def _joined(text: str) -> str:
@@ -310,16 +286,12 @@ def _phrase_proposals(good: list[_View], bad: list[_View]) -> list[Proposal]:
     out: list[Proposal] = []
     for gram, g_frac in chosen[:5]:
         hits = [v.episode.id for v in good if gram in _joined(v.final_output)]
-        out.append(
-            Proposal(
-                kind="contains",
-                params={"values": [gram], "mode": "any"},
-                severity="soft",
-                name=f"says '{gram}'",
-                rationale=f"'{gram}' appears in {g_frac:.0%} of good outputs, rare in bad",
-                support={"episode_ids": hits, "counts": {"good": len(hits)}},
-            )
-        )
+        out.append(_proposal(
+            "contains", f"says '{gram}'",
+            f"'{gram}' appears in {g_frac:.0%} of good outputs, rare in bad",
+            hits, {"good": len(hits)},
+            params={"values": [gram], "mode": "any"}, severity="soft",
+        ))
     return out
 
 
