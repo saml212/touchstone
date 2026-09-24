@@ -14,6 +14,7 @@ DEFAULT_DB = "./.touchstone/touchstone.db"
 class Settings:
     db_path: str = DEFAULT_DB
     provider: str = "scripted"
+    agent_provider: str = "codex-cli"
     keychain_prefix: str = "rockie-"
     keychain_openai: str = "openai-api-key"
     keychain_anthropic: str = "anthropic-api-key"
@@ -45,6 +46,8 @@ def load_settings(path: str | Path | None = None) -> Settings:
         s.db_path = data["db_path"]
     if "provider" in data:
         s.provider = data["provider"]
+    if "agent_provider" in data:
+        s.agent_provider = data["agent_provider"]
     if "keychain_prefix" in data:
         s.keychain_prefix = data["keychain_prefix"]
     keychain = data.get("keychain", {})
@@ -59,6 +62,8 @@ def load_settings(path: str | Path | None = None) -> Settings:
         s.db_path = v
     if v := os.environ.get("TOUCHSTONE_PROVIDER"):
         s.provider = v
+    if v := os.environ.get("TOUCHSTONE_AGENT_PROVIDER"):
+        s.agent_provider = v
     if v := os.environ.get("TOUCHSTONE_KEYCHAIN_PREFIX"):
         s.keychain_prefix = v
     if v := os.environ.get("TOUCHSTONE_STT"):
