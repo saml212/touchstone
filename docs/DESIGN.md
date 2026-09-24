@@ -120,7 +120,11 @@ A room is attached to a task (or a failure set). Participants join `/rooms/<id>`
 display name; messages broadcast over WebSocket. The agent (LLM) opens with a summary of the task and the
 model's output, asks one concrete question at a time ("What should it have done instead?", "Is that a hard
 rule or a preference?", "Would this wording pass?"), maintains a draft check list visible to everyone, and
-commits a check when a participant confirms. Committed checks are `source='interview'`, `enabled=1`,
+commits a check when a participant confirms. The agent prefers a programmatic check kind that states
+the rule exactly and reaches for `judge` only when no programmatic kind can express it. A bare "yes"
+commits the current draft as-is; a confirmation that carries an amendment ("yes, and one L is fine
+too") is revised through the LLM first and only then committed, so the stored check reflects the
+amendment. Committed checks are `source='interview'`, `enabled=1`,
 attached to the task. Multiplayer: no host; any participant can confirm; the agent addresses people by name
 and reconciles disagreement by asking the group.
 Voice: browser push-to-talk (MediaRecorder) → `POST /rooms/{id}/audio` → STT → message. Agent replies →

@@ -24,6 +24,12 @@ _CONFIRM = ("that's right", "thats right", "sounds right", "lgtm", "yes", "yep",
             "agreed", "agree", "correct", "commit")
 _OBJECT = ("disagree", "not right", "wrong", "instead", "actually no", "don't", "dont", "no")
 
+# Words that carry no new rule, so a confirmation built only from these is a plain "yes".
+_AMEND_STOP = set(_CONFIRM) | {
+    "commit", "both", "please", "also", "then", "and", "ok", "okay", "sure", "too",
+    "the", "a", "an", "it", "that", "this", "is", "to", "do", "fine", "good", "great",
+}
+
 _CLARIFY = "What should it have done differently — and is that a hard rule or a preference?"
 
 
@@ -132,9 +138,29 @@ class Interviewer:
 
         explicit = any(_is_cmd(m, "/commit") for m in new)
         if explicit or (affirm and not object_):
+            # "Yes, but with X" — a confirmation carrying a new rule must be revised through the
+            # LLM before it's committed, so the committed check reflects the amendment, not the
+            # stale draft. A bare "yes" commits the draft as-is.
+            if not explicit and self._has_amendment(new):
+                return self._revise_then_commit(history)
             return self._commit_draft()
 
         return self._llm_turn(history)
+
+    def _has_amendment(self, new: list[dict]) -> bool:
+        for m in new:
+            if m.get("role") != "user" or not _has(m.get("text", ""), _CONFIRM):
+                continue
+            words = re.findall(r"[a-z0-9']+", m.get("text", "").lower())
+            if len([w for w in words if w not in _AMEND_STOP]) >= 3:
+                return True
+        return False
+
+    def _revise_then_commit(self, history: list[dict]) -> AgentTurn:
+        if self.provider is None:  # no LLM to revise with: commit what's already drafted
+            return self._commit_draft()
+        self._llm_turn(history)  # persists the revised draft
+        return self._commit_draft()
 
     def _stances(self, new: list[dict]) -> tuple[set[str], set[str]]:
         affirm: set[str] = set()
@@ -199,6 +225,8 @@ class Interviewer:
             '{"say": "one short reply/question", '
             '"draft": [{"kind": ..., "params": {...}, "name": "...", "severity": "hard|soft", '
             '"applies_to": "final|any_turn|tool_calls", "rationale": "..."}], "commit": []}\n'
+            "Prefer a programmatic kind (contains, regex, tool_called, json_schema, expr, …) that "
+            "states the rule exactly; use 'judge' ONLY when no programmatic kind can express it. "
             "Only draft checks; leave commit empty — a human confirms before committing. Ask one "
             "concrete question at a time. Address people by name. Available check kinds and their "
             f"params:\n{spec}"

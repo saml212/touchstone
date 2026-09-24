@@ -156,3 +156,79 @@ def test_open_statement_without_task(conn, bad):
     room = rooms.open(conn, task_id=bad, topic="general quality")
     text = Interviewer(_provider(), conn, room).open_statement()
     assert "general quality" in text
+
+
+def test_prompt_prefers_programmatic_kinds_over_judge(conn):
+    _task, room = _task_room(conn)
+    prompt = Interviewer(_provider(), conn, room)._prompt(_hist(("sam", "user", "hi")))
+    system = prompt[0]["content"]
+    assert "programmatic" in system.lower()
+    assert "judge" in system.lower() and "only" in system.lower()
+
+
+class _CountingProvider:
+    """Wraps a scripted provider and counts how many times the LLM is consulted."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.calls = 0
+
+    def chat(self, messages, tools=None, json=False, timeout=60):
+        self.calls += 1
+        return self.inner.chat(messages, tools, json, timeout)
+
+
+DRAFT1 = json.dumps({"say": "Draft?", "draft": [
+    {"kind": "contains", "params": {"values": ["cancelled"], "mode": "any"},
+     "name": "says cancelled", "severity": "hard"}], "commit": []})
+REVISED = json.dumps({"say": "Revised.", "draft": [
+    {"kind": "contains", "params": {"values": ["canceled"], "mode": "any"},
+     "name": "says canceled (one L)", "severity": "hard"}], "commit": []})
+
+
+def _amend_provider():
+    # The "one L" rule must precede "cancelled": the post-amendment convo contains both, and the
+    # first matching rule wins.
+    return _CountingProvider(ScriptedProvider(rules=[
+        Rule(substring="one L", content=REVISED),
+        Rule(substring="cancelled", content=DRAFT1),
+    ]))
+
+
+def test_bare_yes_commits_the_draft_without_consulting_the_llm(conn):
+    _task, room = _task_room(conn)
+    provider = _amend_provider()
+    agent = Interviewer(provider, conn, room)
+    first = agent.respond(_hist(("sam", "user", "it must say cancelled")))
+    assert len(first.draft) == 1
+    calls_after_draft = provider.calls
+
+    history = _hist(
+        ("sam", "user", "it must say cancelled"),
+        ("agent", "assistant", first.say),
+        ("sam", "user", "yes"),
+    )
+    turn = agent.respond(history)
+    assert len(turn.commit) == 1
+    assert provider.calls == calls_after_draft  # a bare yes never re-consults the LLM
+
+
+def test_confirm_with_amendment_revises_through_llm_then_commits_both(conn):
+    _task, room = _task_room(conn)
+    provider = _amend_provider()
+    agent = Interviewer(provider, conn, room)
+    first = agent.respond(_hist(("sam", "user", "it must say cancelled")))
+    assert len(first.draft) == 1
+    calls_after_draft = provider.calls
+
+    history = _hist(
+        ("sam", "user", "it must say cancelled"),
+        ("agent", "assistant", first.say),
+        ("sam", "user", "yes, canceled with one L is fine too, commit both"),
+    )
+    turn = agent.respond(history)
+    assert provider.calls > calls_after_draft  # the amendment was revised through the LLM
+    assert len(turn.commit) == 2
+    committed = [c for c in store.list_checks(conn, enabled=True) if c.source == "interview"]
+    values = {tuple(c.params["values"]) for c in committed}
+    assert values == {("cancelled",), ("canceled",)}
