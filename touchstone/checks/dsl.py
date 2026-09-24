@@ -198,9 +198,16 @@ class Check:
 
     @classmethod
     def from_toml(cls, block: dict) -> Check:
-        """Read one flat `[[...check]]` block: prose keys plus per-kind param keys."""
+        """Read one flat `[[...check]]` block: prose keys plus per-kind param keys.
+
+        The `name` is the check's stable identity; it becomes `id` so the evaluator keys
+        results by name.
+        """
         params = {_FLAT_TO_PARAM.get(k, k): v for k, v in block.items() if k not in _RESERVED}
-        return cls.from_dict({**{k: block[k] for k in cls._FIELDS if k in block}, "params": params})
+        prose = {k: block[k] for k in cls._FIELDS if k in block}
+        check = cls.from_dict({**prose, "params": params})
+        check.id = check.id or check.name
+        return check
 
     def to_toml(self) -> dict:
         """A flat block: name, rule, kind, params, then severity/source/because/confidence."""
