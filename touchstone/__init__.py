@@ -22,8 +22,12 @@ __all__ = ["trace", "episode", "outcome", "tool", "record_llm_call"]
 _traced = False
 
 
-def trace(db: str | None = None) -> dict:
-    """Idempotent. Point capture at `db` (or configured/default) and patch installed SDKs."""
+def trace(db: str | None = None, otel: bool = False) -> dict:
+    """Idempotent. Point capture at `db` (or configured/default) and patch installed SDKs.
+
+    With `otel=True`, also register the OpenInference OTel span exporter (needs the
+    `touchstone[otel]` extra) so spans from existing OpenInference instrumentation land in the store.
+    """
     global _traced
     settings = load_settings()
     db_path = db or settings.db_path
@@ -33,6 +37,11 @@ def trace(db: str | None = None) -> dict:
         patched.append("openai")
     if _patch_anthropic():
         patched.append("anthropic")
+    if otel:
+        from .capture.openinference import register
+
+        if register():
+            patched.append("openinference")
     _traced = True
     return {"db": db_path, "patched": patched}
 

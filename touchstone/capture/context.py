@@ -176,8 +176,8 @@ def _record_tool(tname, bound, tool_call_id, started, *, result=None, error=None
 
 def tool(fn=None, *, name: str | None = None):
     """Decorator recording a tool span (name/arguments/result/error/tool_call_id). Works sync and
-    async. A caller inside an assistant turn's dispatch may pass `tool_call_id=` to link the span to
-    a specific model tool_call; otherwise it is auto-linked to the latest unresolved call by name."""
+    async. A caller may pass `tool_call_id=` to link the span to a specific model tool_call;
+    otherwise it is auto-linked to the latest unresolved call of the same name."""
 
     def decorate(f):
         tname = name or f.__name__
