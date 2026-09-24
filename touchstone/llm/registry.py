@@ -39,10 +39,12 @@ def _model(name: str, arg: str | None, spec: str) -> str:
 
 def _openai(arg: str | None, spec: str, settings: Settings) -> Provider:
     model = _model("openai", arg, spec)
-    key = secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai))
+    service = settings.keychain_service(settings.keychain_openai)
+    key = secret("OPENAI_API_KEY", service)
     if not key:
         raise ProviderError(
-            "No OpenAI API key found; set OPENAI_API_KEY or add it to the keychain."
+            f"No OpenAI API key found; set OPENAI_API_KEY, or add a Keychain item named "
+            f"'{service}' (keychain_prefix in touchstone.toml)."
         )
     from .openai_compat import OpenAICompatProvider
     return OpenAICompatProvider(OPENAI_BASE, model, key)
@@ -64,10 +66,12 @@ def _openai_compatible(arg: str | None, spec: str, settings: Settings) -> Provid
 
 def _anthropic(arg: str | None, spec: str, settings: Settings) -> Provider:
     model = _model("anthropic", arg, spec)
-    key = secret("ANTHROPIC_API_KEY", settings.keychain_service(settings.keychain_anthropic))
+    service = settings.keychain_service(settings.keychain_anthropic)
+    key = secret("ANTHROPIC_API_KEY", service)
     if not key:
         raise ProviderError(
-            "No Anthropic API key found; set ANTHROPIC_API_KEY or add it to the keychain."
+            f"No Anthropic API key found; set ANTHROPIC_API_KEY, or add a Keychain item named "
+            f"'{service}' (keychain_prefix in touchstone.toml)."
         )
     from .anthropic import AnthropicProvider
     return AnthropicProvider(model, key)
@@ -141,21 +145,25 @@ def provider_statuses(settings: Settings | None = None) -> list[ProviderStatus]:
         ProviderStatus("nop", True, "always available (empty reply — the nop gate)"),
     ]
 
-    openai_key = bool(secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai)))
+    openai_service = settings.keychain_service(settings.keychain_openai)
+    openai_key = bool(secret("OPENAI_API_KEY", openai_service))
     statuses.append(
         ProviderStatus(
-            "openai", openai_key, "key found" if openai_key else "no OPENAI_API_KEY / keychain key"
+            "openai",
+            openai_key,
+            f"key found (Keychain '{openai_service}')" if openai_key
+            else f"no key: set OPENAI_API_KEY or add Keychain item '{openai_service}'",
         )
     )
 
-    anthropic_key = bool(
-        secret("ANTHROPIC_API_KEY", settings.keychain_service(settings.keychain_anthropic))
-    )
+    anthropic_service = settings.keychain_service(settings.keychain_anthropic)
+    anthropic_key = bool(secret("ANTHROPIC_API_KEY", anthropic_service))
     statuses.append(
         ProviderStatus(
             "anthropic",
             anthropic_key,
-            "key found" if anthropic_key else "no ANTHROPIC_API_KEY / keychain key",
+            f"key found (Keychain '{anthropic_service}')" if anthropic_key
+            else f"no key: set ANTHROPIC_API_KEY or add Keychain item '{anthropic_service}'",
         )
     )
 

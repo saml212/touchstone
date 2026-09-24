@@ -48,3 +48,39 @@ def test_registry_scripted_and_unknown():
 def test_registry_rejects_empty_model(spec):
     with pytest.raises(ValueError, match="model"):
         provider_from_spec(spec)
+
+
+def test_openai_missing_key_error_names_service_and_knob(monkeypatch):
+    from touchstone.config import Settings
+    from touchstone.llm import ProviderError, registry
+
+    monkeypatch.setattr(registry, "secret", lambda *a, **k: None)
+    with pytest.raises(ProviderError) as ei:
+        registry.provider_from_spec("openai:gpt-4o", Settings())
+    msg = str(ei.value)
+    assert "OPENAI_API_KEY" in msg
+    assert "touchstone-openai-api-key" in msg  # the exact keychain service it looked for
+    assert "keychain_prefix" in msg
+
+
+def test_anthropic_missing_key_error_names_service_and_knob(monkeypatch):
+    from touchstone.config import Settings
+    from touchstone.llm import ProviderError, registry
+
+    monkeypatch.setattr(registry, "secret", lambda *a, **k: None)
+    with pytest.raises(ProviderError) as ei:
+        registry.provider_from_spec("anthropic:claude-3", Settings())
+    msg = str(ei.value)
+    assert "ANTHROPIC_API_KEY" in msg
+    assert "touchstone-anthropic-api-key" in msg
+    assert "keychain_prefix" in msg
+
+
+def test_doctor_provider_rows_name_the_keychain_service(monkeypatch):
+    from touchstone.config import Settings
+    from touchstone.llm import registry
+
+    monkeypatch.setattr(registry, "secret", lambda *a, **k: None)
+    rows = {s.name: s for s in registry.provider_statuses(Settings())}
+    assert "touchstone-openai-api-key" in rows["openai"].detail
+    assert "touchstone-anthropic-api-key" in rows["anthropic"].detail
