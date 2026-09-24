@@ -42,10 +42,14 @@ SDKs, `faster-whisper`, ART, and TRL are optional extras you add when you need t
 import touchstone; touchstone.trace()   # traces land in ./.touchstone/touchstone.db
 ```
 
-That patches whichever of `openai` / `anthropic` is importable and records every model call and tool
-call. Wrap a run in `with touchstone.episode("name"): ...` and mark the result with
-`touchstone.outcome(score, label)`; `@touchstone.tool` captures a tool, and `record_llm_call(...)`
-captures a turn you make yourself.
+That patches whichever of `openai` (chat completions and the Responses API) / `anthropic` is
+importable and records every model call and tool call — content parts, thinking/reasoning, refusals,
+tool-call ids, stop reasons, cached tokens and per-call cost — without ever raising into your app.
+Wrap a run in `with touchstone.episode("name"): ...` and mark the result with
+`touchstone.outcome(score, label)`; `@touchstone.tool` captures a tool (and links it to the model
+call that requested it), and `record_llm_call(...)` captures a turn you make yourself. Already
+instrumented with OpenInference? `touchstone.trace(otel=True)` (extra `touchstone[otel]`) ingests
+those OTel spans into the same store.
 
 ## The loop
 

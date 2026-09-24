@@ -42,7 +42,8 @@ touchstone/
   __init__.py       trace(), episode(), outcome(), tool(), record_llm_call()  — the public one-liners
   config.py         Settings: db path, providers, speech, keychain prefix; from touchstone.toml + env
   store.py          SQLite (WAL) schema + typed dataclasses + all queries. The only place SQL lives.
-  capture/          patch_openai.py, patch_anthropic.py, litellm.py (callback), context.py (episode ctx),
+  capture/          patch_openai.py (chat + Responses API), patch_anthropic.py, litellm.py (callback),
+                    openinference.py (optional OTel span ingest), context.py (episode ctx + @tool),
                     atif.py (Harbor ATIF export of an episode)
   llm/              Provider protocol `chat(messages, tools=None, json=False) -> Reply`;
                     scripted.py (deterministic, for tests/demo), reference.py (replays a task's
@@ -70,15 +71,24 @@ touchstone/
 ## Data model (store.py)
 
 - `episodes(id, name, source, started_at, ended_at, outcome_score REAL, outcome_label, meta JSON)`
-- `spans(id, episode_id, parent_id, kind ['llm','tool'], name, model, started_at, ended_at,
-   input JSON, output JSON, tokens_in, tokens_out, cost_usd, error)`
-  - llm input = `{messages:[...], tools:[...], params:{}}`; output = `{message:{role,content,tool_calls}}`
-  - tool input = `{name, arguments}`; output = `{result}`
+- `spans(id, episode_id, parent_id, kind ['model','tool'], name, model, started_at, ended_at,
+   input JSON, output JSON, tokens_in, tokens_out, cost_usd, error, tool_call_id)`
+  - model input = `{messages:[...], tools:[...], params:{}}`; output =
+    `{message, stop_reason, usage}` where `stop_reason` is normalized
+    (`stop|tool_calls|length|content_filter|refusal|error`) and `usage` carries `cached_tokens` /
+    `cache_creation_tokens` / `reasoning_tokens` when the provider reports them. `cost_usd` is
+    computed at capture from `bench/pricing.py` when the model is known.
+  - tool input = `{name, arguments}`; output = `{result}`; `tool_call_id` links the span to the
+    model call that requested it (passed to `@tool` or auto-linked to the latest unresolved call).
   - Messages everywhere in the store are the ONE canonical shape (`touchstone/messages.py`):
-    `{role: system|user|assistant|tool, content: str, tool_calls?: [{id, name, arguments: str}],
-    tool_call_id?: str, name?: str}`. `arguments` is always a JSON string. Capture points call
-    `canonical()` (from OpenAI/Anthropic wire or already-canonical); the HTTP providers call
-    `to_openai()` / `to_anthropic()` to convert back to wire shape when replaying.
+    `{role: system|user|assistant|tool, content: str | [{type: text|image|audio|file, ...}],
+    tool_calls?: [{id, name, arguments: str}], reasoning?: [thinking blocks | {type: redacted}],
+    refusal?: str, tool_call_id?: str, name?: str}`. `content` is a string only when every part is
+    text; multimodal parts are never flattened. `arguments` is always a JSON string. `canonical()`
+    accepts dicts and SDK objects (OpenAI chat / Responses items, Anthropic blocks) and is
+    idempotent; `text_of()` flattens to a string for checks/prompts (non-text parts render as
+    `[image]`/`[file]`); the HTTP providers call `to_openai()` / `to_anthropic()` to convert back to
+    wire shape when replaying.
 - `runs(id, target, model_spec, started_at, finished_at, meta JSON)` — `target` is a benchmark
   name, a `tasks/` path, or a glob.
 - `results(run_id, task, passed INT, reward REAL, check_results JSON, output JSON, latency_ms,
