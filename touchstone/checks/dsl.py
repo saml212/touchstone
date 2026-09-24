@@ -309,6 +309,18 @@ def _v_tool_called(params: dict) -> None:
             _require_safe_regex(str(expected["regex"]))
 
 
+def _v_judge(params: dict) -> None:
+    _require_str(params, "rubric")
+    if "samples" in params:
+        s = params["samples"]
+        if not isinstance(s, int) or isinstance(s, bool) or s < 1:
+            raise ValueError("'samples' must be a positive integer")
+    if "min_agreement" in params:
+        ma = params["min_agreement"]
+        if isinstance(ma, bool) or not isinstance(ma, (int, float)) or not 0.0 <= ma <= 1.0:
+            raise ValueError("'min_agreement' must be a number between 0 and 1")
+
+
 def _v_no_pii(params: dict) -> None:
     kinds = params.get("kinds")
     if kinds is not None and not (
@@ -330,7 +342,7 @@ _VALIDATORS = {
     "min_length": lambda p: _require_int(p, "min"),
     "no_pii": _v_no_pii,
     "expr": lambda p: _require_str(p, "expr"),
-    "judge": lambda p: _require_str(p, "rubric"),
+    "judge": _v_judge,
 }
 
 

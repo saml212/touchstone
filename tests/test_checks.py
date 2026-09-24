@@ -384,6 +384,10 @@ def test_validate_rejects_bad_source_and_confidence():
         ("no_pii", {"kinds": ["ssn"]}),
         ("expr", {}),
         ("judge", {}),
+        ("judge", {"rubric": "x", "samples": 0}),
+        ("judge", {"rubric": "x", "samples": -3}),
+        ("judge", {"rubric": "x", "samples": 2.5}),
+        ("judge", {"rubric": "x", "min_agreement": 1.5}),
         ("bogus", {}),
     ],
 )
