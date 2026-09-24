@@ -148,8 +148,36 @@ def _bound_args(fn, args, kwargs) -> dict:
         }
 
 
+def _resolve_tool_call_id(tname: str) -> str | None:
+    """The most recent model span's unresolved tool_call of this name, if any — so a dispatched
+    tool span links back to the call that requested it without the caller passing the id."""
+    try:
+        conn = get_conn()
+        spans = store.list_spans(conn, current_episode().id)
+    except Exception:
+        return None
+    model_spans = [s for s in spans if s.kind == "model"]
+    if not model_spans:
+        return None
+    used = {s.tool_call_id for s in spans if s.kind == "tool" and s.tool_call_id}
+    calls = (model_spans[-1].output or {}).get("message", {}).get("tool_calls") or []
+    for tc in calls:
+        if tc.get("name") == tname and tc.get("id") and tc.get("id") not in used:
+            return tc["id"]
+    return None
+
+
+def _record_tool(tname, bound, tool_call_id, started, *, result=None, error=None) -> None:
+    call_id = tool_call_id if tool_call_id is not None else _resolve_tool_call_id(tname)
+    output = None if error else {"result": jsonable(result)}
+    add_span("tool", tname, input={"name": tname, "arguments": bound}, output=output,
+             error=error, started_at=started, tool_call_id=call_id)
+
+
 def tool(fn=None, *, name: str | None = None):
-    """Decorator recording a tool span (name/arguments/result/error). Works sync and async."""
+    """Decorator recording a tool span (name/arguments/result/error/tool_call_id). Works sync and
+    async. A caller inside an assistant turn's dispatch may pass `tool_call_id=` to link the span to
+    a specific model tool_call; otherwise it is auto-linked to the latest unresolved call by name."""
 
     def decorate(f):
         tname = name or f.__name__
@@ -157,32 +185,30 @@ def tool(fn=None, *, name: str | None = None):
         if inspect.iscoroutinefunction(f):
             @wraps(f)
             async def awrapper(*args, **kwargs):
+                tcid = kwargs.pop("tool_call_id", None)
                 started = store.now()
                 bound = _bound_args(f, args, kwargs)
                 try:
                     result = await f(*args, **kwargs)
                 except Exception as exc:
-                    add_span("tool", tname, input={"name": tname, "arguments": bound},
-                             error=repr(exc), started_at=started)
+                    _record_tool(tname, bound, tcid, started, error=repr(exc))
                     raise
-                add_span("tool", tname, input={"name": tname, "arguments": bound},
-                         output={"result": jsonable(result)}, started_at=started)
+                _record_tool(tname, bound, tcid, started, result=result)
                 return result
 
             return awrapper
 
         @wraps(f)
         def wrapper(*args, **kwargs):
+            tcid = kwargs.pop("tool_call_id", None)
             started = store.now()
             bound = _bound_args(f, args, kwargs)
             try:
                 result = f(*args, **kwargs)
             except Exception as exc:
-                add_span("tool", tname, input={"name": tname, "arguments": bound},
-                         error=repr(exc), started_at=started)
+                _record_tool(tname, bound, tcid, started, error=repr(exc))
                 raise
-            add_span("tool", tname, input={"name": tname, "arguments": bound},
-                     output={"result": jsonable(result)}, started_at=started)
+            _record_tool(tname, bound, tcid, started, result=result)
             return result
 
         return wrapper
