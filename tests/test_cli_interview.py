@@ -26,7 +26,7 @@ def test_doctor_reports_speech(tmp_path, monkeypatch):
 def test_interview_prints_url_and_nudges_when_server_down(tmp_path, monkeypatch):
     db = str(tmp_path / "d.db")
     monkeypatch.setenv("TOUCHSTONE_DB", db)
-    monkeypatch.setattr("touchstone.cli._server_up", lambda host, port: False)
+    monkeypatch.setattr("touchstone.cli.interview._server_up", lambda host, port: False)
     task_id = _seed(db)
     result = runner.invoke(app, ["interview", task_id, "--no-open"])
     assert result.exit_code == 0, result.output
@@ -46,7 +46,7 @@ def test_interview_prints_url_and_nudges_when_server_down(tmp_path, monkeypatch)
 def test_interview_opens_browser_when_server_up(tmp_path, monkeypatch):
     db = str(tmp_path / "d.db")
     monkeypatch.setenv("TOUCHSTONE_DB", db)
-    monkeypatch.setattr("touchstone.cli._server_up", lambda host, port: True)
+    monkeypatch.setattr("touchstone.cli.interview._server_up", lambda host, port: True)
     opened = {}
     monkeypatch.setattr("webbrowser.open", lambda url: opened.setdefault("url", url))
     task_id = _seed(db)
