@@ -264,3 +264,21 @@ def test_reasoning_round_trips_to_anthropic_thinking():
     blocks = turns[0]["content"]
     assert blocks[0] == {"type": "thinking", "thinking": "hmm", "signature": "s"}
     assert {"type": "text", "text": "done"} in blocks
+
+
+def test_bytes_tool_result_is_decoded_not_crashed():
+    # A tool that returns raw bytes must not crash canonical() (capture must never raise).
+    msgs = canonical([
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "name": "fetch", "arguments": "{}"}]},
+        {"role": "tool", "tool_call_id": "c1", "name": "fetch", "content": b"raw \xe2\x98\x95 bytes"},
+    ])
+    tool = next(m for m in msgs if m["role"] == "tool")
+    assert tool["content"] == "raw ☕ bytes"
+
+
+def test_bytes_in_anthropic_tool_result_block_is_decoded():
+    msgs = canonical([{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "c1", "content": b"ok"}]}])
+    tool = next(m for m in msgs if m["role"] == "tool")
+    assert tool["content"] == "ok"

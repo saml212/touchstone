@@ -136,9 +136,11 @@ def _content_value(content):
         return ""
     if isinstance(content, str):
         return content
+    if isinstance(content, bytes):
+        return content.decode("utf-8", "replace")
     if isinstance(content, list):
         return _collapse([_norm_part(p) for p in content])
-    return json.dumps(content, ensure_ascii=False)
+    return json.dumps(content, ensure_ascii=False, default=str)
 
 
 def _norm_tool_call(tc: dict) -> dict:
