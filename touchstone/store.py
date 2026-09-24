@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -73,14 +74,25 @@ CREATE TABLE IF NOT EXISTS room_checks (
 def connect(path: str | Path) -> sqlite3.Connection:
     path = Path(path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=5.0)
+    conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
-    conn.commit()
     return conn
+
+
+@contextmanager
+def write(conn: sqlite3.Connection):
+    """BEGIN IMMEDIATE takes the write lock up front so busy_timeout applies under contention."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
 
 
 # ---- dataclasses -----------------------------------------------------------
@@ -222,8 +234,8 @@ def _insert(conn: sqlite3.Connection, table: str, obj) -> None:
         data[col] = _dumps(data[col])
     cols = ", ".join(data)
     placeholders = ", ".join(f":{c}" for c in data)
-    conn.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders})", data)
-    conn.commit()
+    with write(conn):
+        conn.execute(f"INSERT INTO {table} ({cols}) VALUES ({placeholders})", data)
 
 
 def _update(conn: sqlite3.Connection, table: str, id_col: str, id_val, **fields) -> None:
@@ -231,8 +243,8 @@ def _update(conn: sqlite3.Connection, table: str, id_col: str, id_val, **fields)
     fields = {k: (_dumps(v) if k in json_cols else v) for k, v in fields.items()}
     sets = ", ".join(f"{k}=:{k}" for k in fields)
     fields["_id"] = id_val
-    conn.execute(f"UPDATE {table} SET {sets} WHERE {id_col}=:_id", fields)
-    conn.commit()
+    with write(conn):
+        conn.execute(f"UPDATE {table} SET {sets} WHERE {id_col}=:_id", fields)
 
 
 # ---- episodes --------------------------------------------------------------
@@ -436,7 +448,8 @@ def list_room_messages(conn, room_id: str) -> list[RoomMessage]:
 
 
 def link_room_check(conn, room_id: str, check_id: str) -> None:
-    conn.execute(
-        "INSERT OR IGNORE INTO room_checks (room_id, check_id) VALUES (?, ?)", (room_id, check_id)
-    )
-    conn.commit()
+    with write(conn):
+        conn.execute(
+            "INSERT OR IGNORE INTO room_checks (room_id, check_id) VALUES (?, ?)",
+            (room_id, check_id),
+        )

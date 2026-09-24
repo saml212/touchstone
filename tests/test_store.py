@@ -60,12 +60,15 @@ def test_unicode_and_one_megabyte_output(conn):
 
 def test_concurrent_writers(db):
     writers, per = 8, 50
+    errors = []
 
     def worker():
         c = store.connect(db)
         try:
             for _ in range(per):
                 store.insert_episode(c, store.Episode(name="w"))
+        except Exception as e:
+            errors.append(e)
         finally:
             c.close()
 
@@ -75,6 +78,7 @@ def test_concurrent_writers(db):
     for t in threads:
         t.join()
 
+    assert not errors
     c = store.connect(db)
     try:
         assert len(store.list_episodes(c)) == writers * per
