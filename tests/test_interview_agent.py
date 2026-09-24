@@ -246,3 +246,70 @@ def test_confirm_with_amendment_revises_through_llm_then_commits_both(conn, root
     assert len(turn.commit) == 2
     values = {tuple(c.params["values"]) for c in _committed(root, name)}
     assert values == {("cancelled",), ("canceled",)}
+
+
+# -- the four shared actions (text + realtime tools call the same functions) --
+
+_RULE = {"kind": "contains", "params": {"values": ["refund"], "mode": "any"},
+         "name": "mentions refund", "severity": "hard", "applies_to": "final",
+         "rule": "the reply must mention the refund policy"}
+
+
+def test_draft_check_shows_a_draft_and_returns_a_read_back(conn, root):
+    _name, room = _task_room(conn, root)
+    agent = Interviewer(None, conn, room, root)
+    out = agent.draft_check(_RULE)
+    assert out["check"]["kind"] == "contains"
+    assert "refund policy" in out["read_back"]
+    assert "hard" in out["read_back"] and "commit" in out["read_back"].lower()
+    assert agent.draft() and agent.draft()[0]["name"] == "mentions refund"
+
+
+def test_draft_check_rejects_garbage_without_raising(conn, root):
+    _name, room = _task_room(conn, root)
+    agent = Interviewer(None, conn, room, root)
+    out = agent.draft_check({"kind": "not_a_kind", "params": {}})
+    assert "error" in out
+    assert agent.draft() == []
+
+
+def test_commit_check_writes_to_the_task(conn, root):
+    name, room = _task_room(conn, root)
+    agent = Interviewer(None, conn, room, root)
+    stored = agent.commit_check(_RULE)
+    assert stored["kind"] == "contains"
+    assert [c.kind for c in _committed(root, name)] == ["contains"]
+
+
+def test_show_task_summarizes_and_returns_state(conn, root):
+    name, room = _task_room(conn, root)
+    agent = Interviewer(None, conn, room, root)
+    agent.draft_check(_RULE)
+    out = agent.show_task()
+    assert name in out["summary"]
+    assert out["draft"] and out["committed"] == []
+
+
+def test_next_task_opens_a_room_on_the_next_task_in_the_queue(conn, root):
+    name, room = _task_room(conn, root)
+    ep = store.insert_episode(conn, store.Episode(name="support-2", outcome_label="ok"))
+    tasks.write_task(root, tasks.Task(
+        name="support-2", episode_id=ep.id,
+        context={"messages": [{"role": "user", "content": "hi"}], "tools": []},
+        reference={"content": "sure", "tool_calls": []}))
+    agent = Interviewer(None, conn, room, root)
+    # both tasks share the "active" queue; support-1 is first, support-2 next
+    out = agent.next_task()
+    assert out["task"] == "support-2"
+    assert out["url"] == f"/rooms/{out['room_id']}"
+    new_room = store.get_room(conn, out["room_id"])
+    assert new_room.task_id == "support-2"
+    msgs = store.list_room_messages(conn, out["room_id"])
+    assert msgs and msgs[0].role == "assistant"  # opening statement posted
+
+
+def test_next_task_at_end_of_queue_reports_done(conn, root):
+    name, room = _task_room(conn, root)
+    agent = Interviewer(None, conn, room, root)
+    out = agent.next_task()
+    assert out.get("done") is True

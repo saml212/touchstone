@@ -46,6 +46,16 @@ _AMEND_STOP = set(_CONFIRM) | {
 
 _CLARIFY = "What should it have done differently — and is that a hard rule or a preference?"
 
+_APPLIES = {"final": "final reply", "any_turn": "any turn", "tool_calls": "the tool calls"}
+
+
+def _read_back(check: dict) -> str:
+    """The sentence the agent restates before committing, in plain words."""
+    where = _APPLIES.get(check.get("applies_to", "final"), "final reply")
+    rule = check.get("rule") or check.get("name") or check["kind"]
+    sev = check.get("severity", "hard")
+    return f"So: {rule} — a {sev} check on {where}. Say commit to save it."
+
 
 def _has(text: str, phrases) -> bool:
     low = text.lower()
@@ -182,7 +192,7 @@ class Interviewer:
         draft = self.draft()
         if not draft:
             return AgentTurn(say="There's no draft to commit yet — tell me the rule to draft.")
-        committed = [self._commit(d) for d in draft]
+        committed = [self.commit_check(d) for d in draft]
         committed = [c for c in committed if c]
         self._set_draft([])
         names = ", ".join(c.get("name") or c["kind"] for c in committed)
@@ -202,7 +212,8 @@ class Interviewer:
 
         draft = [d for d in (_normalize(raw) for raw in _as_list(data.get("draft"))) if d]
         self._set_draft(draft)
-        committed = [c for c in (self._commit(raw) for raw in _as_list(data.get("commit"))) if c]
+        committed = [c for c in (self.commit_check(raw)
+                                  for raw in _as_list(data.get("commit"))) if c]
         say = data.get("say") if isinstance(data.get("say"), str) and data["say"] else _CLARIFY
         return AgentTurn(say=say, draft=draft, commit=committed)
 
@@ -228,6 +239,53 @@ class Interviewer:
         return [{"role": "system", "content": system},
                 {"role": "user", "content": f"Conversation so far:\n{convo}\n\nRespond with JSON."}]
 
+    # -- the four actions: one policy, two front doors (text + realtime tools) --
+
+    def draft_check(self, raw: dict) -> dict:
+        """Draft one check (not committed), show it, and return it plus the read-back sentence."""
+        norm = _normalize(raw)
+        if norm is None:
+            return {"error": "That didn't parse into a check — restate the rule."}
+        self._set_draft([norm])
+        return {"check": norm, "read_back": _read_back(norm)}
+
+    def commit_check(self, raw: dict) -> dict:
+        """Write one confirmed check to the task (or to checks.toml when flagged a policy)."""
+        norm = _normalize(raw)
+        if norm is None:
+            return {}
+        check = DslCheck(kind=norm["kind"], params=norm["params"], name=norm["name"],
+                         applies_to=norm["applies_to"], severity=norm["severity"],
+                         rule=norm.get("rule", ""), because=norm.get("because", ""),
+                         source="interview")
+        check.id = check.name
+        if norm.get("policy"):
+            self._commit_policy(check)
+        elif self.room.task_id:
+            tasks_mod.append_check(self.root, self.room.task_id, check)
+        return _check_dict(check, policy=bool(norm.get("policy")))
+
+    def show_task(self) -> dict:
+        """The current task summary the agent narrates, plus the live draft/committed checks."""
+        return {"summary": self.open_statement(), "draft": self.draft(),
+                "committed": self.committed()}
+
+    def next_task(self) -> dict:
+        """Open a room on the next task in the same work queue; return its URL."""
+        task = self._task()
+        if task is None:
+            return {"error": "This room isn't attached to a task."}
+        queue = [t for t in tasks_mod.list_tasks(self.root) if t.status == task.status]
+        names = [t.name for t in queue]
+        idx = names.index(task.name) if task.name in names else -1
+        if idx < 0 or idx + 1 >= len(names):
+            return {"done": True, "message": f"That's the last task in the {task.status} queue."}
+        nxt = names[idx + 1]
+        room = rooms.open(self.conn, task_id=nxt, topic=self.room.topic)
+        opening = Interviewer(None, self.conn, room, self.root).open_statement()
+        rooms.post(self.conn, room.id, "agent", "assistant", opening)
+        return {"task": nxt, "room_id": room.id, "url": f"/rooms/{room.id}"}
+
     # -- draft / commit state ------------------------------------------------
 
     def draft(self) -> list[dict]:
@@ -243,22 +301,6 @@ class Interviewer:
     def _set_draft(self, checks: list[dict]) -> None:
         rooms.post(self.conn, self.room.id, "agent", "draft",
                    json.dumps(checks, ensure_ascii=False))
-
-    def _commit(self, raw: dict) -> dict:
-        """Write one confirmed check to the task (or to checks.toml when flagged a policy)."""
-        norm = _normalize(raw)
-        if norm is None:
-            return {}
-        check = DslCheck(kind=norm["kind"], params=norm["params"], name=norm["name"],
-                         applies_to=norm["applies_to"], severity=norm["severity"],
-                         rule=norm.get("rule", ""), because=norm.get("because", ""),
-                         source="interview")
-        check.id = check.name
-        if norm.get("policy"):
-            self._commit_policy(check)
-        elif self.room.task_id:
-            tasks_mod.append_check(self.root, self.room.task_id, check)
-        return _check_dict(check, policy=bool(norm.get("policy")))
 
     def _commit_policy(self, check: DslCheck) -> None:
         policies = read_policies(self.root)
