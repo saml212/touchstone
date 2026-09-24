@@ -14,7 +14,9 @@ DEFAULT_DB = "./.touchstone/touchstone.db"
 class Settings:
     db_path: str = DEFAULT_DB
     provider: str = "scripted"
-    keychain_prefix: str = "touchstone"
+    keychain_prefix: str = "rockie-"
+    keychain_openai: str = "openai-api-key"
+    keychain_anthropic: str = "anthropic-api-key"
     stt: str = "none"
     tts: str = "browser"
     extra: dict = field(default_factory=dict)
@@ -22,6 +24,10 @@ class Settings:
     @property
     def db(self) -> Path:
         return Path(self.db_path).expanduser()
+
+    def keychain_service(self, name: str) -> str:
+        """Full service for a bare name: 'openai-api-key' -> 'rockie-openai-api-key'."""
+        return f"{self.keychain_prefix}{name}"
 
 
 def _load_toml(path: Path) -> dict:
@@ -41,6 +47,9 @@ def load_settings(path: str | Path | None = None) -> Settings:
         s.provider = data["provider"]
     if "keychain_prefix" in data:
         s.keychain_prefix = data["keychain_prefix"]
+    keychain = data.get("keychain", {})
+    s.keychain_openai = keychain.get("openai", s.keychain_openai)
+    s.keychain_anthropic = keychain.get("anthropic", s.keychain_anthropic)
     speech = data.get("speech", {})
     s.stt = speech.get("stt", s.stt)
     s.tts = speech.get("tts", s.tts)

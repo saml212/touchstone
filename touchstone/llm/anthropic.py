@@ -1,0 +1,200 @@
+"""Anthropic Messages API over httpx (no `anthropic` SDK — see openai_compat for why).
+
+Converts OpenAI-style messages/tools into Anthropic's shape: system text is extracted, tool
+schemas become `input_schema`, assistant tool calls become `tool_use` blocks and tool results
+become `tool_result` blocks in a user turn. Same retry/timeout behaviour as the OpenAI provider.
+"""
+
+from __future__ import annotations
+
+import json
+
+import httpx
+
+from ._http import ProviderError, apost_json, post_json
+from .base import Reply
+
+API_VERSION = "2023-06-01"
+_JSON_INSTRUCTION = "Respond with a single valid JSON object and nothing else."
+
+
+class AnthropicProvider:
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        *,
+        base_url: str = "https://api.anthropic.com",
+        max_tokens: int = 1024,
+        timeout: float = 60.0,
+        retries: int = 2,
+        backoff: float = 0.5,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self.model = model
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.max_tokens = max_tokens
+        self.timeout = timeout
+        self.retries = retries
+        self.backoff = backoff
+        self._transport = transport
+        self.name = f"anthropic:{model}"
+
+    @property
+    def _url(self) -> str:
+        return f"{self.base_url}/v1/messages"
+
+    def _headers(self) -> dict:
+        return {
+            "Content-Type": "application/json",
+            "x-api-key": self.api_key,
+            "anthropic-version": API_VERSION,
+        }
+
+    def _body(self, messages, tools, want_json) -> dict:
+        system, converted = _convert_messages(messages)
+        if want_json:
+            system = (system + "\n\n" + _JSON_INSTRUCTION).strip()
+        body: dict = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": converted,
+        }
+        if system:
+            body["system"] = system
+        if tools:
+            body["tools"] = [_convert_tool(t) for t in tools]
+        return body
+
+    def _parse(self, resp: httpx.Response) -> Reply:
+        try:
+            data = resp.json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ProviderError("Anthropic endpoint returned a non-JSON response.") from exc
+        texts, tool_calls = [], []
+        for block in data.get("content") or []:
+            if block.get("type") == "text":
+                texts.append(block.get("text", ""))
+            elif block.get("type") == "tool_use":
+                tool_calls.append(
+                    {
+                        "id": block.get("id"),
+                        "name": block.get("name"),
+                        "arguments": json.dumps(block.get("input", {}), ensure_ascii=False),
+                    }
+                )
+        usage = data.get("usage") or {}
+        return Reply(
+            content="".join(texts),
+            tool_calls=tool_calls,
+            usage={
+                "tokens_in": usage.get("input_tokens"),
+                "tokens_out": usage.get("output_tokens"),
+            },
+            raw=data,
+        )
+
+    def chat(self, messages, tools=None, json=False, timeout=None) -> Reply:
+        with httpx.Client(transport=self._transport) as client:
+            resp = post_json(
+                client,
+                self._url,
+                headers=self._headers(),
+                body=self._body(messages, tools, json),
+                timeout=timeout or self.timeout,
+                label=f"Anthropic request to {self.model}",
+                retries=self.retries,
+                backoff=self.backoff,
+            )
+        return self._parse(resp)
+
+    async def achat(self, messages, tools=None, json=False, timeout=None) -> Reply:
+        async with httpx.AsyncClient(transport=self._transport) as client:
+            resp = await apost_json(
+                client,
+                self._url,
+                headers=self._headers(),
+                body=self._body(messages, tools, json),
+                timeout=timeout or self.timeout,
+                label=f"Anthropic request to {self.model}",
+                retries=self.retries,
+                backoff=self.backoff,
+            )
+        return self._parse(resp)
+
+
+# ---- conversion ------------------------------------------------------------
+
+
+def _convert_tool(tool: dict) -> dict:
+    if "input_schema" in tool:  # already Anthropic-shaped
+        return tool
+    fn = tool.get("function", tool)
+    return {
+        "name": fn.get("name"),
+        "description": fn.get("description", ""),
+        "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+    }
+
+
+def _parse_args(arguments) -> dict:
+    if isinstance(arguments, dict):
+        return arguments
+    try:
+        parsed = json.loads(arguments)
+        return parsed if isinstance(parsed, dict) else {"value": parsed}
+    except (json.JSONDecodeError, TypeError):
+        return {"raw": arguments}
+
+
+def _blocks_for(message: dict) -> tuple[str, list[dict]]:
+    """Return (role, content-blocks) for one non-system OpenAI message."""
+    role = message.get("role", "user")
+    content = message.get("content")
+    if role == "tool":
+        return "user", [
+            {
+                "type": "tool_result",
+                "tool_use_id": message.get("tool_call_id") or message.get("name") or "",
+                "content": content if isinstance(content, str) else json.dumps(content),
+            }
+        ]
+    blocks: list[dict] = []
+    if isinstance(content, str) and content:
+        blocks.append({"type": "text", "text": content})
+    elif isinstance(content, list):
+        for part in content:
+            text = part.get("text") if isinstance(part, dict) else str(part)
+            if text:
+                blocks.append({"type": "text", "text": text})
+    for tc in message.get("tool_calls") or []:
+        fn = tc.get("function", tc)
+        blocks.append(
+            {
+                "type": "tool_use",
+                "id": tc.get("id") or fn.get("name"),
+                "name": fn.get("name"),
+                "input": _parse_args(fn.get("arguments")),
+            }
+        )
+    return role, blocks
+
+
+def _convert_messages(messages: list[dict]) -> tuple[str, list[dict]]:
+    systems: list[str] = []
+    turns: list[dict] = []
+    for message in messages:
+        if message.get("role") == "system":
+            text = message.get("content")
+            if isinstance(text, str) and text:
+                systems.append(text)
+            continue
+        role, blocks = _blocks_for(message)
+        if not blocks:
+            continue
+        if turns and turns[-1]["role"] == role:  # coalesce adjacent same-role turns
+            turns[-1]["content"].extend(blocks)
+        else:
+            turns.append({"role": role, "content": blocks})
+    return "\n\n".join(systems), turns

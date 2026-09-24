@@ -19,7 +19,7 @@ app = typer.Typer(
 TOML_TEMPLATE = f"""# Touchstone config
 db_path = "{DEFAULT_DB}"
 provider = "scripted"
-keychain_prefix = "touchstone"
+keychain_prefix = "rockie-"
 
 [speech]
 stt = "none"
@@ -47,14 +47,19 @@ def init(path: str = typer.Option("touchstone.toml", help="Config file to write.
 
 @app.command()
 def doctor() -> None:
-    """Report environment: python, db, importable SDKs, available providers."""
+    """Report environment: python, db, importable SDKs, provider availability (no network calls)."""
+    from .llm import provider_statuses
+
     settings = load_settings()
     typer.echo(f"python:    {sys.version.split()[0]}")
     typer.echo(f"db path:   {settings.db}")
     typer.echo(f"db exists: {settings.db.exists()}")
     for name in ("openai", "anthropic", "litellm"):
         typer.echo(f"{name+':':10} {'importable' if _installed(name) else 'not installed'}")
-    typer.echo("providers: scripted")
+    typer.echo("providers:")
+    for st in provider_statuses(settings):
+        mark = "ok" if st.ok else "missing"
+        typer.echo(f"  {st.name:16} {mark:8} {st.detail}")
 
 
 @app.command()

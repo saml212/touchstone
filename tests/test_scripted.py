@@ -41,4 +41,4 @@ def test_json_mode_wraps_content():
 def test_registry_scripted_and_unknown():
     assert isinstance(provider_from_spec("scripted"), ScriptedProvider)
     with pytest.raises(ValueError, match="unknown provider spec"):
-        provider_from_spec("openai:gpt-4o-mini")
+        provider_from_spec("gemini:flash")

@@ -18,7 +18,9 @@ def test_doctor_reports_providers(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "providers: scripted" in result.output
+    assert "providers:" in result.output
+    assert "scripted" in result.output
+    assert "claude-cli" in result.output
     assert "python:" in result.output
 
 
