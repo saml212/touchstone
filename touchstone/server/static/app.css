@@ -110,6 +110,7 @@ button.ghost { background: transparent; color: var(--brick); border: 1px solid v
 button:disabled { opacity: 0.5; cursor: default; }
 #talk.recording { background: #b23a26; animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: 0.6; } }
+.voiceState { align-self: center; font: 500 12px var(--mono, monospace); color: var(--brick); animation: pulse 1s infinite; }
 
 #drafts {
   border-left: 1px solid var(--hair);

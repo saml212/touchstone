@@ -4,6 +4,8 @@ const ROOM_ID = location.pathname.split("/").pop();
 const $ = (id) => document.getElementById(id);
 let speaker = localStorage.getItem("touchstone.name") || "";
 let lastAgentAudioId = null;
+let mode = "local";
+let socket = null;
 
 function esc(s) {
   return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
@@ -23,7 +25,7 @@ function renderMessages(messages) {
   const lastAgent = [...messages].reverse().find((m) => m.role === "assistant");
   if (lastAgent && lastAgent.id !== lastAgentAudioId) {
     lastAgentAudioId = lastAgent.id;
-    speak(lastAgent);
+    if (mode !== "realtime") speak(lastAgent);  // realtime speaks via streamed audio frames
   }
 }
 
@@ -58,6 +60,7 @@ let pollTimer = null;
 function applyState(s) {
   $("topic").textContent = s.room.topic;
   $("closed").classList.toggle("hidden", !s.room.closed_at);
+  if (s.mode) { mode = s.mode; $("talk").textContent = mode === "realtime" ? "● hold to talk" : "● talk"; }
   draftState = s.draft;
   committedState = s.committed;
   messagesState = s.messages;
@@ -81,6 +84,7 @@ function stopPolling() {
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws/rooms/${ROOM_ID}`);
+  socket = ws;
   ws.onopen = stopPolling;
   ws.onmessage = (ev) => {
     const { type, data } = JSON.parse(ev.data);
@@ -88,9 +92,92 @@ function connect() {
     else if (type === "draft") { draftState = data.checks; renderChecks(draftState, committedState); }
     else if (type === "committed") { committedState = committedState.concat(data.checks); renderChecks(draftState, committedState); }
     else if (type === "closed") { $("closed").classList.remove("hidden"); }
+    else if (type === "audio") { playPCM(base64ToInt16(data.b64)); }
     else if (type === "message") { messagesState = messagesState.concat(data); renderMessages(messagesState); }
   };
-  ws.onclose = () => { startPolling(); setTimeout(connect, 1500); };
+  ws.onclose = () => { socket = null; startPolling(); setTimeout(connect, 1500); };
+}
+
+function wsSend(obj) {
+  if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(obj));
+}
+
+function setVoiceState(text) {
+  const el = $("voiceState");
+  if (el) { el.textContent = text; el.classList.toggle("hidden", !text); }
+}
+
+// -- realtime voice (Web Audio PCM16 @ 24kHz over the WebSocket) -------------
+
+let captureCtx = null, procNode = null, micStream = null;
+let playCtx = null, playHead = 0;
+
+function floatToPCM16(f32) {
+  const out = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    const s = Math.max(-1, Math.min(1, f32[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+
+function bytesToBase64(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+function base64ToInt16(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Int16Array(bytes.buffer);
+}
+
+function playPCM(int16) {
+  if (!playCtx) playCtx = new AudioContext({ sampleRate: 24000 });
+  const f32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) f32[i] = int16[i] / 0x8000;
+  const buf = playCtx.createBuffer(1, f32.length, 24000);
+  buf.getChannelData(0).set(f32);
+  const node = playCtx.createBufferSource();
+  node.buffer = buf;
+  node.connect(playCtx.destination);
+  playHead = Math.max(playHead, playCtx.currentTime);
+  node.start(playHead);
+  playHead += buf.duration;
+  setVoiceState("● speaking");
+  node.onended = () => { if (playCtx && playCtx.currentTime >= playHead - 0.05) setVoiceState(""); };
+}
+
+async function startRealtimeTalk() {
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    alert("Microphone not available.");
+    return false;
+  }
+  captureCtx = new AudioContext({ sampleRate: 24000 });
+  const src = captureCtx.createMediaStreamSource(micStream);
+  procNode = captureCtx.createScriptProcessor(4096, 1, 1);
+  procNode.onaudioprocess = (e) => {
+    const pcm = floatToPCM16(e.inputBuffer.getChannelData(0));
+    wsSend({ type: "audio", b64: bytesToBase64(new Uint8Array(pcm.buffer)), speaker });
+  };
+  src.connect(procNode);
+  procNode.connect(captureCtx.destination);  // output left silent; keeps the processor running
+  wsSend({ type: "ptt", state: "down", speaker });
+  setVoiceState("● listening");
+  return true;
+}
+
+function stopRealtimeTalk() {
+  wsSend({ type: "ptt", state: "up", speaker });
+  if (procNode) procNode.disconnect();
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  if (captureCtx) captureCtx.close();
+  procNode = micStream = captureCtx = null;
+  setVoiceState("");
 }
 
 async function send(text) {
@@ -113,12 +200,19 @@ function speak(msg) {
   });
 }
 
-// -- push to talk -----------------------------------------------------------
+// -- local push-to-talk (MediaRecorder -> POST /audio) ----------------------
 
 let recorder = null;
 let chunks = [];
+let realtimeTalking = false;
 
 async function toggleTalk() {
+  if (mode === "realtime") {
+    const btn = $("talk");
+    if (realtimeTalking) { realtimeTalking = false; btn.classList.remove("recording"); stopRealtimeTalk(); }
+    else if (await startRealtimeTalk()) { realtimeTalking = true; btn.classList.add("recording"); }
+    return;
+  }
   const btn = $("talk");
   if (recorder && recorder.state === "recording") {
     recorder.stop();
