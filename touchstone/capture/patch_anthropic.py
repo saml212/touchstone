@@ -2,81 +2,66 @@
 `messages.stream()` context manager) into one span each.
 
 Content blocks and streaming events are read defensively; tool_use inputs are serialized to
-argument strings; usage tokens and errors are recorded on the span.
+argument strings; usage tokens and errors are recorded on the span. The span lifecycle lives in
+`spans`; this module only maps anthropic's wire shapes.
 """
 
 from __future__ import annotations
 
 import functools
-import json
 
-from ..messages import canonical
-from . import context
+from . import spans
+from .spans import as_str, get
 
-
-def _get(obj, key):
-    if obj is None:
-        return None
-    return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
-
-
-def _as_str(value) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    try:
-        return json.dumps(value, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return str(value)
+DEFAULT_NAME = "anthropic.messages"
 
 
 def _extract(message):
     parts, tool_calls = [], []
-    for block in _get(message, "content") or []:
-        btype = _get(block, "type")
+    for block in get(message, "content") or []:
+        btype = get(block, "type")
         if btype == "text":
-            parts.append(_get(block, "text") or "")
+            parts.append(get(block, "text") or "")
         elif btype == "tool_use":
             tool_calls.append({
-                "id": _get(block, "id"),
-                "name": _get(block, "name"),
-                "arguments": _as_str(_get(block, "input")),
+                "id": get(block, "id"),
+                "name": get(block, "name"),
+                "arguments": as_str(get(block, "input")),
             })
-    u = _get(message, "usage")
+    u = get(message, "usage")
     usage = None
     if u is not None:
-        usage = {"tokens_in": _get(u, "input_tokens"), "tokens_out": _get(u, "output_tokens")}
+        usage = {"tokens_in": get(u, "input_tokens"), "tokens_out": get(u, "output_tokens")}
     return "".join(parts), tool_calls, usage
-
-
-def _accumulate(event, st):
-    et = _get(event, "type")
-    if et == "message_start":
-        u = _get(_get(event, "message"), "usage")
-        if u:
-            st["tin"] = _get(u, "input_tokens")
-    elif et == "content_block_start":
-        idx = _get(event, "index") or 0
-        cb = _get(event, "content_block")
-        if _get(cb, "type") == "tool_use":
-            st["meta"][idx] = {"id": _get(cb, "id"), "name": _get(cb, "name")}
-    elif et == "content_block_delta":
-        idx = _get(event, "index") or 0
-        d = _get(event, "delta")
-        dt = _get(d, "type")
-        if dt == "text_delta":
-            st["parts"].append(_get(d, "text") or "")
-        elif dt == "input_json_delta":
-            st["args"][idx] = st["args"].get(idx, "") + (_get(d, "partial_json") or "")
-    elif et == "message_delta":
-        u = _get(event, "usage")
-        if u and _get(u, "output_tokens") is not None:
-            st["tout"] = _get(u, "output_tokens")
 
 
 def _state():
     return {"parts": [], "args": {}, "meta": {}, "tin": None, "tout": None}
+
+
+def _accumulate(event, st):
+    et = get(event, "type")
+    if et == "message_start":
+        u = get(get(event, "message"), "usage")
+        if u:
+            st["tin"] = get(u, "input_tokens")
+    elif et == "content_block_start":
+        idx = get(event, "index") or 0
+        cb = get(event, "content_block")
+        if get(cb, "type") == "tool_use":
+            st["meta"][idx] = {"id": get(cb, "id"), "name": get(cb, "name")}
+    elif et == "content_block_delta":
+        idx = get(event, "index") or 0
+        d = get(event, "delta")
+        dt = get(d, "type")
+        if dt == "text_delta":
+            st["parts"].append(get(d, "text") or "")
+        elif dt == "input_json_delta":
+            st["args"][idx] = st["args"].get(idx, "") + (get(d, "partial_json") or "")
+    elif et == "message_delta":
+        u = get(event, "usage")
+        if u and get(u, "output_tokens") is not None:
+            st["tout"] = get(u, "output_tokens")
 
 
 def _finish(st):
@@ -93,62 +78,7 @@ def _finish(st):
     return content, calls, usage
 
 
-def _record(model, messages, tools, params, content, tool_calls, usage, error, started):
-    tokens_in = usage.get("tokens_in") if usage else None
-    tokens_out = usage.get("tokens_out") if usage else None
-    reply = canonical([{"role": "assistant", "content": content, "tool_calls": tool_calls}])[0]
-    context.add_span(
-        "llm",
-        model or "anthropic.messages",
-        model=model,
-        input={
-            "messages": canonical(messages),
-            "tools": tools or [],
-            "params": {k: context.jsonable(v) for k, v in params.items()},
-        },
-        output={"message": reply},
-        tokens_in=tokens_in,
-        tokens_out=tokens_out,
-        error=error,
-        started_at=started,
-    )
-
-
-def _split(kwargs):
-    model = kwargs.get("model")
-    messages = kwargs.get("messages") or []
-    tools = kwargs.get("tools")
-    stream = kwargs.get("stream", False)
-    params = {k: v for k, v in kwargs.items() if k not in ("messages", "tools", "model")}
-    return model, messages, tools, stream, params
-
-
-def _wrap_stream(resp, model, messages, tools, params, started):
-    st = _state()
-    try:
-        for event in resp:
-            _accumulate(event, st)
-            yield event
-    except Exception as exc:
-        content, calls, usage = _finish(st)
-        _record(model, messages, tools, params, content, calls, usage, repr(exc), started)
-        raise
-    content, calls, usage = _finish(st)
-    _record(model, messages, tools, params, content, calls, usage, None, started)
-
-
-async def _wrap_astream(resp, model, messages, tools, params, started):
-    st = _state()
-    try:
-        async for event in resp:
-            _accumulate(event, st)
-            yield event
-    except Exception as exc:
-        content, calls, usage = _finish(st)
-        _record(model, messages, tools, params, content, calls, usage, repr(exc), started)
-        raise
-    content, calls, usage = _finish(st)
-    _record(model, messages, tools, params, content, calls, usage, None, started)
+_wrap_stream, _wrap_astream = spans.stream_wrappers(_state, _accumulate, _finish)
 
 
 class _StreamProxy:
@@ -182,7 +112,8 @@ class _StreamProxy:
                 usage = fu or usage
             except Exception:
                 pass
-        _record(model, messages, tools, params, content, calls, usage, error, started)
+        spans.record(DEFAULT_NAME, model, messages, tools, params,
+                     content, calls, usage, error, started)
 
     def __exit__(self, exc_type, exc, tb):
         self._record_final(repr(exc) if exc else None)
@@ -199,60 +130,23 @@ def patch() -> bool:
         return False
 
     if not getattr(m.Messages.create, "_touchstone", False):
-        orig = m.Messages.create
-
-        @functools.wraps(orig)
-        def create(self, *args, **kwargs):
-            from .. import store
-            model, messages, tools, stream, params = _split(kwargs)
-            started = store.now()
-            try:
-                resp = orig(self, *args, **kwargs)
-            except Exception as exc:
-                _record(model, messages, tools, params, "", [], None, repr(exc), started)
-                raise
-            if stream:
-                return _wrap_stream(resp, model, messages, tools, params, started)
-            content, calls, usage = _extract(resp)
-            _record(model, messages, tools, params, content, calls, usage, None, started)
-            return resp
-
-        create._touchstone = True
-        m.Messages.create = create
-
+        m.Messages.create = spans.instrument_create(
+            m.Messages.create, DEFAULT_NAME, _extract, _wrap_stream
+        )
     if hasattr(m.Messages, "stream") and not getattr(m.Messages.stream, "_touchstone", False):
         sorig = m.Messages.stream
 
         @functools.wraps(sorig)
         def stream(self, *args, **kwargs):
             from .. import store
-            model, messages, tools, _, params = _split(kwargs)
+            model, messages, tools, _, params = spans.split(kwargs)
             mgr = sorig(self, *args, **kwargs)
             return _StreamProxy(mgr, model, messages, tools, params, store.now())
 
         stream._touchstone = True
         m.Messages.stream = stream
-
     if not getattr(m.AsyncMessages.create, "_touchstone", False):
-        aorig = m.AsyncMessages.create
-
-        @functools.wraps(aorig)
-        async def acreate(self, *args, **kwargs):
-            from .. import store
-            model, messages, tools, stream_flag, params = _split(kwargs)
-            started = store.now()
-            try:
-                resp = await aorig(self, *args, **kwargs)
-            except Exception as exc:
-                _record(model, messages, tools, params, "", [], None, repr(exc), started)
-                raise
-            if stream_flag:
-                return _wrap_astream(resp, model, messages, tools, params, started)
-            content, calls, usage = _extract(resp)
-            _record(model, messages, tools, params, content, calls, usage, None, started)
-            return resp
-
-        acreate._touchstone = True
-        m.AsyncMessages.create = acreate
-
+        m.AsyncMessages.create = spans.instrument_acreate(
+            m.AsyncMessages.create, DEFAULT_NAME, _extract, _wrap_astream
+        )
     return True
