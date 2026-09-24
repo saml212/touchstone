@@ -53,27 +53,48 @@ def init(
     typer.echo(f"initialized db at {settings.db}")
 
 
-@app.command()
-def doctor() -> None:
-    """Report environment: python, db, importable SDKs, provider availability (no network calls)."""
-    from .llm import provider_statuses
-
-    settings = load_settings()
-    typer.echo(f"python:    {sys.version.split()[0]}")
-    typer.echo(f"db path:   {settings.db}")
-    typer.echo(f"db exists: {settings.db.exists()}")
-    for name in ("openai", "anthropic", "litellm"):
-        typer.echo(f"{name+':':10} {'importable' if _installed(name) else 'not installed'}")
-    typer.echo("providers:")
-    for st in provider_statuses(settings):
-        mark = "ok" if st.ok else "missing"
-        typer.echo(f"  {st.name:16} {mark:8} {st.detail}")
+def _doctor_rows(settings) -> list[tuple[str, str, str]]:
+    """One (component, status, detail) row per environment check. No installs, no network calls."""
+    import shutil
 
     from .interview.speech import speech_status
+    from .llm import provider_statuses
 
-    typer.echo("speech:")
+    rows: list[tuple[str, str, str]] = [
+        ("python", "ok", sys.version.split()[0]),
+        ("database", "ok",
+         f"{settings.db} ({'exists' if settings.db.exists() else 'not created'})"),
+    ]
+    for name in ("openai", "anthropic", "litellm"):
+        ok = _installed(name)
+        rows.append((f"sdk: {name}", "ok" if ok else "missing",
+                     "importable" if ok else "not installed"))
+    for st in provider_statuses(settings):
+        rows.append((f"provider: {st.name}", "ok" if st.ok else "missing", st.detail))
     for r in speech_status(settings):
-        typer.echo(f"  {r.kind:4} {r.name:16} {r.detail}")
+        rows.append((f"speech: {r.kind}", "ok", f"{r.name} — {r.detail}"))
+    for tool in ("harbor", "docker", "ffmpeg"):
+        path = shutil.which(tool)
+        rows.append((f"tool: {tool}", "ok" if path else "missing",
+                     path or "not on PATH"))
+    for backend in ("art", "trl"):
+        ok = _installed(backend)
+        rows.append((f"train: {backend}", "ok" if ok else "missing",
+                     "importable" if ok else "not installed"))
+    return rows
+
+
+@app.command()
+def doctor() -> None:
+    """Report the environment as one table: python, db, SDKs, providers, speech, tools, train
+    backends. Never installs anything, never makes a network call, always exits 0."""
+    rows = _doctor_rows(load_settings())
+    widths = [max(len(r[i]) for r in [("component", "status", "detail"), *rows]) for i in range(3)]
+    header = ("component", "status", "detail")
+    typer.echo("  ".join(h.ljust(widths[i]) for i, h in enumerate(header)))
+    typer.echo("  ".join("-" * widths[i] for i in range(3)))
+    for comp, status, detail in rows:
+        typer.echo(f"{comp.ljust(widths[0])}  {status.ljust(widths[1])}  {detail}")
 
 
 @app.command()

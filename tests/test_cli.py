@@ -28,14 +28,27 @@ def test_init_writes_keychain_prefix_when_passed(tmp_path, monkeypatch):
     assert 'keychain_prefix = "rockie-"' in text
 
 
-def test_doctor_reports_providers(tmp_path, monkeypatch):
+def test_doctor_reports_one_table(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "providers:" in result.output
-    assert "scripted" in result.output
-    assert "claude-cli" in result.output
-    assert "python:" in result.output
+    for row in ("component", "python", "database", "provider: scripted", "provider: reference",
+                "provider: claude-cli", "speech: stt", "tool: harbor", "tool: docker",
+                "tool: ffmpeg", "train: art", "train: trl"):
+        assert row in result.output, row
+
+
+def test_doctor_exits_zero_with_all_tools_missing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    import shutil
+
+    import touchstone.cli as cli_mod
+
+    monkeypatch.setattr(shutil, "which", lambda _name: None)  # no harbor/docker/ffmpeg on PATH
+    monkeypatch.setattr(cli_mod, "_installed", lambda _name: False)  # no optional SDKs/backends
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "tool: harbor" in result.output and "missing" in result.output
 
 
 def test_demo_generates_episodes(tmp_path):

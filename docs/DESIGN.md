@@ -177,8 +177,11 @@ API does, and vice versa (both call the same functions).
 
 ## CLI
 
-`touchstone init` (writes `touchstone.toml`, `.touchstone/`), `doctor` (providers, keys, speech, docker,
-harbor), `demo` (runs the built-in scripted support agent: 30 episodes, mixed outcomes), `serve`,
+`touchstone init` (writes `touchstone.toml`, `.touchstone/`; `--keychain-prefix` pins the Keychain
+prefix, else the default `touchstone-` is left implicit), `doctor` (one table: python, db, SDKs,
+providers, speech, `harbor`/`docker`/`ffmpeg` on PATH, and the `art`/`trl` train backends importable —
+never installs, never a network call, always exits 0), `demo` (runs the built-in scripted support
+agent: 30 episodes, mixed outcomes), `serve`,
 `mine [--code PATH] [--provider SPEC]`, `checks list|enable|disable`, `tasks list|show`,
 `interview <task_id>` (prints room URL, opens browser), `bench create|run|report`, `export harbor|atif`,
 `train prepare|submit`. Exit codes non-zero on failure; errors are one clear sentence.
