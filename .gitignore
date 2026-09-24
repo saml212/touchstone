@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.touchstone/
+*.db
+*.db-wal
+*.db-shm
+.pytest_cache/
+.ruff_cache/
+dist/
+harbor-tasks/
+*.egg-info/
+.DS_Store
