@@ -206,3 +206,107 @@ agent: 30 episodes, mixed outcomes), `serve`,
   provider timeout, missing keys, re-running mine/bench idempotently, Harbor export re-run overwriting cleanly.
 - `touchstone demo && touchstone mine --provider scripted && touchstone bench run -m scripted` works with
   no keys, no network, no Docker.
+
+---
+
+# v2 — contracts (decided 2026-09-24)
+
+The four research tracks (capture, voice, task generation, contracts) converged on one change:
+**authored artifacts are files, captured data is rows.** Everything below supersedes the v1 sections
+above where they conflict.
+
+## Files are the source of truth for tasks, checks and benchmarks
+
+```
+touchstone.toml            # project config
+checks.toml                # policies: checks that apply to every task (interview "always" rules, mined safety rules)
+tasks/<name>/              # one Harbor task per directory; `harbor run -p tasks/<name>` runs it unchanged
+  task.toml                # Harbor 1.4 schema + [metadata.touchstone] + [[metadata.touchstone.check]] blocks
+  instruction.md           # human/agent-facing render of the context and "write your reply to /app/output.json"
+  context.json             # canonical messages[] + tools[] to replay
+  reference.json           # the recorded incumbent reply (the oracle answer)
+  environment/Dockerfile
+  solution/solve.sh        # oracle: writes reference.json to /app/output.json
+  tests/test.sh            # runs tests/verify.py -> /logs/verifier/reward.txt + rewards.json
+  tests/verify.py          # vendored evaluator (dsl.py + run.py) reading the checks from task.toml
+benchmarks/<name>.toml     # tasks = ["tasks/a", ...] or glob = "tasks/*" + tags = [...]
+.touchstone/touchstone.db  # traces (episodes, spans), run record (runs, results), interview rooms
+.touchstone/runs/<id>/     # run.json + results.jsonl, the portable copy of what the DB indexes
+```
+
+A check block reads as a sentence and is a template fill for an agent:
+
+```toml
+[[metadata.touchstone.check]]
+name     = "escalates angry customers"
+rule     = "must call the tool escalate_to_human"
+kind     = "tool_called"
+tool     = "escalate_to_human"
+severity = "hard"
+source   = "interview"            # mined | interview | policy | manual
+because  = "Every resolved angry-customer episode escalated; none of the unresolved ones did."
+```
+
+Params are flat per-kind keys (`values`, `mode`, `pattern`, `schema`, `tool`, `arguments_match`,
+`order`, `max`, `min`, `pii`, `expr`, `rubric`); `Check.from_toml`/`to_toml` map them onto the v1
+`(kind, params)` core so the evaluator does not change. `name`, `rule`, `because`, `severity`,
+`source`, `applies_to`, `confidence` (0–1, how sure the miner is) are prose/routing fields.
+
+**Policies.** `checks.toml` holds `[[check]]` blocks with the same shape. When tasks are written
+(mine, generate, interview) every policy whose reference gate passes is copied into the task's
+`task.toml` with `source = "policy"`, so each task directory is self-contained for Harbor. Editing a
+policy and re-running `touchstone tasks sync` re-materializes.
+
+**Reference gate.** A non-safety check is written into a task only if the task's `reference.json`
+passes it; safety kinds (`no_pii`, `not_contains`, `not_regex`, `tool_not_called`) always apply;
+failure tasks (bad outcome) carry safety checks only. Unchanged from v1, now applied at write time.
+
+## SQLite keeps rows for what is captured or measured
+
+- `episodes`, `spans` — traces. `spans.kind` ∈ {`model`, `tool`}; `spans.tool_call_id` links a tool
+  span to its call; a model span's output carries `stop_reason`, `reasoning` (thinking blocks, when
+  the provider returns them), `refusal`; usage carries `cached_tokens`; canonical message `content` is
+  a string or a list of parts (`text`, `image`, `file`, `audio`) — never flattened.
+- `runs` (`target` = benchmark name or tasks path, `model_spec`, timings), `results` (`task` = task
+  dir name, `reward REAL`, `passed`, `check_results` keyed by check name, `output`, `latency_ms`,
+  `cost_usd`, `error`).
+- `rooms`, `room_messages` — interview session state. Committed checks are written to the task's
+  `task.toml` (or to `checks.toml` when the stakeholder says "always"); `git diff` is the audit trail.
+- Deleted: `tasks`, `checks`, `benchmarks`, `room_checks` tables and their CRUD.
+
+## Task generation: verifiable first, then teacher–student
+
+Ranked sources of verifiable checks, mined in this order and marked with `confidence`:
+1. tool-call correctness against recorded tool results; 2. state assertions from tool outputs;
+3. schema validity / structured output; 4. recorded business outcome; 5. deterministic string rules;
+6. judge rubrics (last, soft, sampled N times with agreement reported).
+
+Every task must pass the two gates from the Harbor task-generation RFC before it counts:
+**oracle scores 1** (`reference` replay passes) and **nop scores 0** (an empty reply fails). Tasks
+that fail either gate are kept with `status = "rejected"` and the reason; they never enter a benchmark.
+
+Two buttons:
+- **Sample** — run the student (candidate model) on the benchmark and on perturbed variants the
+  teacher generates from failing tasks; the frontier is every task with `0 < pass_rate < 1` plus the
+  proof table's "only incumbent passes". Writes new task directories with `[metadata.touchstone]
+  parent_task`, `difficulty` (empirical pass rate), and `generation.json` provenance (teacher model,
+  source hashes).
+- **Distill** — `train prepare` restricted to the frontier: teacher-verified demonstrations and
+  preference pairs from exactly those failures. Sample → Distill → Sample until the frontier empties
+  or pass rate stalls. Interview rooms open on contested frontier tasks so a human ruling enters as a
+  check.
+
+## Voice: realtime mode
+
+`[speech] mode = "local" | "realtime"`. `realtime` opens one OpenAI Realtime session per room,
+server-side, with tools `draft_check`, `commit_check`, `show_task`, `next_task` that call the same
+functions as the text interviewer. Browsers stream push-to-talk audio over the room WebSocket and
+receive the agent's audio and panel updates; several stakeholders share one session. `local` is the
+zero-key fallback and never goes away. The agent always reads a check back in plain words before
+committing.
+
+## Distribution
+
+PyPI name `touchstone-bench` (`touchstone` is taken); the CLI stays `touchstone`.
+`uv tool install touchstone-bench` / `uvx touchstone-bench demo` / `pip install touchstone-bench`.
+Releases: tag → GitHub Actions → PyPI trusted publishing. Publishing makes the source public.
