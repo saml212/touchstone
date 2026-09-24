@@ -202,3 +202,18 @@ def test_start_rejects_empty_target(seeded):
     conn, root, _ = seeded
     with pytest.raises(ValueError, match="no active tasks"):
         runner.start(conn, root, "nonexistent", "scripted")
+
+
+def test_resolve_dedupes_a_task_listed_twice(tmp_path):
+    # `create` dedupes, but a hand-edited benchmark.toml can list a task more than once;
+    # resolve must still yield each task once so a run doesn't score it twice.
+    tasks.write_task(tmp_path, tasks.Task(
+        name="a", context={"messages": [{"role": "user", "content": "hi"}], "tools": []},
+        reference={"content": "ok", "tool_calls": []},
+        checks=[Check(kind="contains", params={"values": ["ok"], "mode": "any"},
+                      name="says ok", severity="hard", source="policy")]))
+    bdir = benchmark.benchmarks_dir(tmp_path)
+    bdir.mkdir(parents=True, exist_ok=True)
+    (bdir / "dup.toml").write_text('tasks = ["tasks/a", "tasks/a", "tasks/a"]\n')
+    resolved = [p.name for p in benchmark.resolve(tmp_path, "dup")]
+    assert resolved == ["a"]

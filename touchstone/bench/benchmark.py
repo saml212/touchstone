@@ -55,7 +55,7 @@ def resolve(root: str | Path, target: str) -> list[Path]:
     if spec.exists():
         doc = tomllib.loads(spec.read_text(encoding="utf-8"))
         if "tasks" in doc:
-            return [root / t for t in doc["tasks"] if _active(root / t)]
+            return [root / t for t in _dedupe(doc["tasks"]) if _active(root / t)]
         return _by_glob(root, doc.get("glob", "tasks/*"), doc.get("tags"))
     return _by_glob(root, target, None)
 
