@@ -128,6 +128,8 @@ def start(
     timeout: float = 60,
 ) -> store.Run:
     """Create the Run row (validating the benchmark) and return it without executing anything."""
+    if concurrency < 1:
+        raise ValueError("concurrency must be a positive integer")
     bench = store.get_benchmark(conn, benchmark_id)
     if bench is None:
         raise ValueError(f"no benchmark {benchmark_id!r}")

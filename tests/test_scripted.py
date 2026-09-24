@@ -42,3 +42,9 @@ def test_registry_scripted_and_unknown():
     assert isinstance(provider_from_spec("scripted"), ScriptedProvider)
     with pytest.raises(ValueError, match="unknown provider spec"):
         provider_from_spec("gemini:flash")
+
+
+@pytest.mark.parametrize("spec", ["openai:", "anthropic:", "openai-compatible:http://x/v1:"])
+def test_registry_rejects_empty_model(spec):
+    with pytest.raises(ValueError, match="model"):
+        provider_from_spec(spec)

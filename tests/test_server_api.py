@@ -280,3 +280,12 @@ def test_check_eval_malformed_tool_calls_is_422_not_500(db):
     for bad in (5, "astring", [1, 2, 3], {"name": "x"}):
         r = c.post(f"/api/checks/{ids['check']}/eval", json={"text": "x", "tool_calls": bad})
         assert r.status_code == 422, (bad, r.status_code)
+
+
+def test_create_run_rejects_nonpositive_concurrency(db):
+    ids = _seed(db)
+    c = _client(db)
+    r = c.post("/api/runs", json={"benchmark": ids["bench"], "model_spec": "scripted",
+                                  "concurrency": 0})
+    assert r.status_code == 422
+    assert "concurrency" in r.json()["detail"]

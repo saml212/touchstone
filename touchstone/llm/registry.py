@@ -37,6 +37,8 @@ def provider_from_spec(spec: str, settings: Settings | None = None) -> Provider:
 
     if spec.startswith("openai:"):
         model = spec[len("openai:") :]
+        if not model:
+            raise ValueError("openai spec must name a model: 'openai:<model>'.")
         key = secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai))
         if not key:
             raise ProviderError(
@@ -53,6 +55,10 @@ def provider_from_spec(spec: str, settings: Settings | None = None) -> Provider:
                 "openai-compatible spec must be 'openai-compatible:<base_url>:<model>'."
             )
         base_url, model = rest.rsplit(":", 1)
+        if not model or not base_url:
+            raise ValueError(
+                "openai-compatible spec must be 'openai-compatible:<base_url>:<model>'."
+            )
         key = secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai))
         from .openai_compat import OpenAICompatProvider
 
@@ -60,6 +66,8 @@ def provider_from_spec(spec: str, settings: Settings | None = None) -> Provider:
 
     if spec.startswith("anthropic:"):
         model = spec[len("anthropic:") :]
+        if not model:
+            raise ValueError("anthropic spec must name a model: 'anthropic:<model>'.")
         key = secret("ANTHROPIC_API_KEY", settings.keychain_service(settings.keychain_anthropic))
         if not key:
             raise ProviderError(

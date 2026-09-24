@@ -179,3 +179,10 @@ def test_pricing_unknown_and_longest_match():
     # gpt-4o-mini must win over gpt-4o
     assert pricing.price_for("openai:gpt-4o-mini") == pricing.PRICES["gpt-4o-mini"]
     assert pricing.cost_usd("openai:gpt-4o-mini", None) is None
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_run_rejects_nonpositive_concurrency(seeded, bad):
+    conn, bench = seeded
+    with pytest.raises(ValueError, match="concurrency"):
+        runner.start(conn, bench.id, "scripted", concurrency=bad)
