@@ -352,6 +352,22 @@ def test_to_toml_flat_key_renames():
     assert pii["pii"] == ["email"] and "kinds" not in pii
 
 
+def test_param_spec_and_flat_surface_derive_from_one_table():
+    # The prompt text, the flat TOML aliases and the validators all read _KIND_PARAMS — so every
+    # kind is described exactly once and the three surfaces can never drift apart.
+    from touchstone.checks.dsl import (
+        _KIND_PARAMS,
+        _PARAM_TO_FLAT,
+        _VALIDATORS,
+        KINDS,
+        PARAM_SPEC,
+    )
+    assert set(_KIND_PARAMS) == set(PARAM_SPEC) == set(_VALIDATORS) == KINDS
+    assert _PARAM_TO_FLAT == {"name": "tool", "kinds": "pii"}
+    assert PARAM_SPEC["tool_called"].startswith('{"name": str, "arguments_match":')
+    assert PARAM_SPEC["tool_called"].endswith("?}")  # arguments_match is optional
+
+
 def test_to_toml_omits_empty_prose_and_default_applies_to():
     block = Check(kind="max_length", params={"max": 10}).to_toml()
     assert "rule" not in block and "because" not in block

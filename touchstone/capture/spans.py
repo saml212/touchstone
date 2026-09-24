@@ -18,6 +18,7 @@ import json
 import logging
 
 from ..messages import canonical
+from ..messages import get as get  # shared field accessor, re-exported for the SDK patches
 from . import context
 
 _log = logging.getLogger("touchstone")
@@ -30,12 +31,6 @@ _STOP = {
     "length": "length", "max_tokens": "length", "max_output_tokens": "length",
     "content_filter": "content_filter", "refusal": "refusal", "error": "error",
 }
-
-
-def get(obj, key):
-    if obj is None:
-        return None
-    return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
 
 
 def as_str(value) -> str:

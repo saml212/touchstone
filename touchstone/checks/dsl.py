@@ -163,9 +163,65 @@ _RESERVED = frozenset({
     "name", "rule", "kind", "severity", "source", "because", "confidence",
     "applies_to", "id", "enabled",
 })
-# Params whose file-facing key reads better than the evaluator's key.
-_PARAM_TO_FLAT = {"name": "tool", "kinds": "pii"}
+
+
+@dataclass(frozen=True)
+class _Param:
+    """One parameter of a check kind: its evaluator key, the value shape shown in the prompt, an
+    optional file-facing alias (the flat TOML surface), and whether it may be omitted."""
+
+    key: str
+    shape: str
+    flat: str = ""  # file-facing key when it reads better than `key` (e.g. name -> tool)
+    optional: bool = False
+
+
+@dataclass(frozen=True)
+class _KindSpec:
+    params: tuple[_Param, ...]
+    note: str = ""  # a trailing prompt note, e.g. what an expr evaluates over
+
+
+# The one source of truth for every kind's parameters. The flat TOML surface (_PARAM_TO_FLAT),
+# the prompt/placeholder text (PARAM_SPEC) and the per-kind validators below all read this table —
+# so a param cannot be described one way and validated another.
+_KIND_PARAMS: dict[str, _KindSpec] = {
+    "contains": _KindSpec((_Param("values", "[str, ...]"),
+                           _Param("mode", '"any|all"', optional=True))),
+    "not_contains": _KindSpec((_Param("values", "[str, ...]"),
+                               _Param("mode", '"any|all"', optional=True))),
+    "regex": _KindSpec((_Param("pattern", "str"),)),
+    "not_regex": _KindSpec((_Param("pattern", "str"),)),
+    "json_schema": _KindSpec((_Param("schema", "{json schema object}"),)),
+    "tool_called": _KindSpec((_Param("name", "str", flat="tool"),
+                              _Param("arguments_match", '{field: value | {"regex": str}}',
+                                     optional=True))),
+    "tool_not_called": _KindSpec((_Param("name", "str", flat="tool"),)),
+    "tool_order": _KindSpec((_Param("order", "[str, ...]"),)),
+    "max_length": _KindSpec((_Param("max", "int"),)),
+    "min_length": _KindSpec((_Param("min", "int"),)),
+    "no_pii": _KindSpec((_Param("kinds", '["email"|"phone"|"card", ...]',
+                                flat="pii", optional=True),)),
+    "expr": _KindSpec((_Param("expr", "str"),), note="simpleeval over output, tools, reference"),
+    "judge": _KindSpec((_Param("rubric", "str"),
+                        _Param("samples", "int", optional=True),
+                        _Param("min_agreement", "float", optional=True))),
+}
+
+# Params whose file-facing key differs from the evaluator key — derived from the one table.
+_PARAM_TO_FLAT = {p.key: p.flat
+                  for spec in _KIND_PARAMS.values() for p in spec.params if p.flat}
 _FLAT_TO_PARAM = {v: k for k, v in _PARAM_TO_FLAT.items()}
+
+
+def _spec_str(spec: _KindSpec) -> str:
+    body = ", ".join(f'"{p.key}": {p.shape}' + ("?" if p.optional else "") for p in spec.params)
+    return "{" + body + "}" + (f"  # {spec.note}" if spec.note else "")
+
+
+# The prompt/placeholder text for each kind (LLM proposals, the interviewer, the new-check form),
+# derived from the same table the validators read.
+PARAM_SPEC = {kind: _spec_str(spec) for kind, spec in _KIND_PARAMS.items()}
 
 
 @dataclass
@@ -258,23 +314,6 @@ def _require_int(params: dict, key: str) -> None:
         raise ValueError(f"'{key}' must be an integer")
 
 
-PARAM_SPEC = {
-    "contains": '{"values": [str, ...], "mode": "any|all"}',
-    "not_contains": '{"values": [str, ...], "mode": "any|all"}',
-    "regex": '{"pattern": str}',
-    "not_regex": '{"pattern": str}',
-    "json_schema": '{"schema": {json schema object}}',
-    "tool_called": '{"name": str, "arguments_match": {field: value | {"regex": str}}?}',
-    "tool_not_called": '{"name": str}',
-    "tool_order": '{"order": [str, ...]}',
-    "max_length": '{"max": int}',
-    "min_length": '{"min": int}',
-    "no_pii": '{"kinds": ["email"|"phone"|"card", ...]?}',
-    "expr": '{"expr": str}  # simpleeval over output, tools, reference',
-    "judge": '{"rubric": str}',
-}
-
-
 def _v_contains(params: dict) -> None:
     _require_str_list(params, "values")
     if params.get("mode", "any") not in ("any", "all"):
@@ -344,6 +383,9 @@ _VALIDATORS = {
     "expr": lambda p: _require_str(p, "expr"),
     "judge": _v_judge,
 }
+
+# One kind, one row in each table: the enum, its parameters, and its validator stay in lockstep.
+assert set(_KIND_PARAMS) == set(_VALIDATORS) == KINDS, "check-kind tables are out of sync"
 
 
 def validate_params(kind: str, params: dict) -> None:

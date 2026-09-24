@@ -44,7 +44,8 @@ def _to_plain(obj):
     return obj
 
 
-def _get(obj, key, default=None):
+def get(obj, key, default=None):
+    """Read `key` from a dict or an attribute from an SDK object — the capture patches share it."""
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
@@ -96,11 +97,11 @@ def _norm_part(part) -> dict:
 
 def _norm_reasoning_block(block) -> dict:
     block = _to_plain(block)
-    btype = _get(block, "type")
+    btype = get(block, "type")
     if btype in ("redacted_thinking", "redacted"):
         return {"type": "redacted"}
     if btype == "reasoning":  # OpenAI Responses reasoning item
-        summary, content = _get(block, "summary"), _get(block, "content")
+        summary, content = get(block, "summary"), get(block, "content")
         if not summary and not content:
             return {"type": "redacted"}  # encrypted-only
         item = {"type": "reasoning"}
@@ -109,9 +110,9 @@ def _norm_reasoning_block(block) -> dict:
         if content:
             item["content"] = content
         return item
-    item = {"type": "thinking", "thinking": _get(block, "thinking") or _get(block, "text") or ""}
-    if _get(block, "signature"):
-        item["signature"] = _get(block, "signature")
+    item = {"type": "thinking", "thinking": get(block, "thinking") or get(block, "text") or ""}
+    if get(block, "signature"):
+        item["signature"] = get(block, "signature")
     return item
 
 
@@ -145,10 +146,10 @@ def _content_value(content):
 
 def _norm_tool_call(tc: dict) -> dict:
     tc = _to_plain(tc)
-    fn = _to_plain(_get(tc, "function"))
+    fn = _to_plain(get(tc, "function"))
     fn = fn if fn is not None else tc
-    tcid = _get(tc, "id") or _get(tc, "call_id") or _get(tc, "tool_call_id")
-    return {"id": tcid, "name": _get(fn, "name"), "arguments": _args_str(_get(fn, "arguments"))}
+    tcid = get(tc, "id") or get(tc, "call_id") or get(tc, "tool_call_id")
+    return {"id": tcid, "name": get(fn, "name"), "arguments": _args_str(get(fn, "arguments"))}
 
 
 def _tool_message(tool_call_id, name, content) -> dict:
@@ -173,13 +174,13 @@ def _split_content(content) -> tuple[list, list, list, list]:
         return parts, tool_calls, tool_results, reasoning
     for raw in content if isinstance(content, list) else [content]:
         block = _to_plain(raw)
-        btype = _get(block, "type") if not isinstance(block, str) else "text"
+        btype = get(block, "type") if not isinstance(block, str) else "text"
         if btype == "tool_use":
-            tool_calls.append({"id": _get(block, "id"), "name": _get(block, "name"),
-                               "arguments": _args_str(_get(block, "input"))})
+            tool_calls.append({"id": get(block, "id"), "name": get(block, "name"),
+                               "arguments": _args_str(get(block, "input"))})
         elif btype == "tool_result":
             tool_results.append(
-                _tool_message(_get(block, "tool_use_id"), None, _get(block, "content")))
+                _tool_message(get(block, "tool_use_id"), None, get(block, "content")))
         elif btype in _REASONING_TYPES:
             reasoning.append(_norm_reasoning_block(block))
         else:
@@ -193,7 +194,7 @@ _RESPONSES_ITEMS = frozenset({"function_call", "function_call_output", "reasonin
 def _responses_item(itype: str, item) -> list[dict]:
     """A top-level OpenAI Responses input item (sibling of messages) -> canonical message(s)."""
     if itype == "function_call_output":
-        return [_tool_message(_get(item, "call_id"), None, _get(item, "output"))]
+        return [_tool_message(get(item, "call_id"), None, get(item, "output"))]
     if itype == "reasoning":
         return [{"role": "assistant", "content": "", "reasoning": _norm_reasoning([item])}]
     return [{"role": "assistant", "content": "", "tool_calls": [_norm_tool_call(item)]}]
@@ -201,23 +202,23 @@ def _responses_item(itype: str, item) -> list[dict]:
 
 def _canonical_one(msg) -> list[dict]:
     msg = _to_plain(msg)
-    itype = _get(msg, "type")
-    if _get(msg, "role") is None and itype is not None:
+    itype = get(msg, "type")
+    if get(msg, "role") is None and itype is not None:
         if itype in _RESPONSES_ITEMS:
             return _responses_item(itype, msg)
         # A Responses item of a type we don't model (web_search_call, computer_call, ...)
         # is preserved verbatim so the trace keeps it, rather than flattened to an empty turn.
         return [msg if isinstance(msg, dict) else dict(msg)]
-    role = _get(msg, "role") or "user"
-    content = _get(msg, "content")
+    role = get(msg, "role") or "user"
+    content = get(msg, "content")
     if role == "tool":
-        return [_tool_message(_get(msg, "tool_call_id"), _get(msg, "name"), content)]
+        return [_tool_message(get(msg, "tool_call_id"), get(msg, "name"), content)]
 
     parts, tool_calls, tool_results, reasoning = _split_content(content)
-    for tc in _get(msg, "tool_calls") or []:
+    for tc in get(msg, "tool_calls") or []:
         tool_calls.append(_norm_tool_call(tc))
-    reasoning += _norm_reasoning(_get(msg, "reasoning"))
-    return _assemble(role, parts, tool_calls, tool_results, reasoning, _get(msg, "refusal"))
+    reasoning += _norm_reasoning(get(msg, "reasoning"))
+    return _assemble(role, parts, tool_calls, tool_results, reasoning, get(msg, "refusal"))
 
 
 def _assemble(role, parts, tool_calls, tool_results, reasoning, refusal) -> list[dict]:
