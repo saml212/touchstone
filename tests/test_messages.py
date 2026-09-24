@@ -271,7 +271,8 @@ def test_bytes_tool_result_is_decoded_not_crashed():
     msgs = canonical([
         {"role": "assistant", "content": "", "tool_calls": [
             {"id": "c1", "name": "fetch", "arguments": "{}"}]},
-        {"role": "tool", "tool_call_id": "c1", "name": "fetch", "content": b"raw \xe2\x98\x95 bytes"},
+        {"role": "tool", "tool_call_id": "c1", "name": "fetch",
+         "content": b"raw \xe2\x98\x95 bytes"},
     ])
     tool = next(m for m in msgs if m["role"] == "tool")
     assert tool["content"] == "raw ☕ bytes"
