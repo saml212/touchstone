@@ -178,8 +178,10 @@ download route for the jsonl files. Everything runs off the store; no GPU, no ne
 
 FastAPI + uvicorn, single-page static UI (vanilla JS, no build step). Pages: Overview, Episodes (detail
 with spans), Checks (toggle/edit), Tasks, Rooms (interview), Benchmarks (runs, scoreboard, proof table),
-Train (export buttons). JSON API under `/api/*`, WebSocket `/ws/rooms/{id}`. Everything the CLI does the
-API does, and vice versa (both call the same functions).
+Train (prepare datasets, download the jsonl files, submit to a backend). JSON API under `/api/*`,
+WebSocket `/ws/rooms/{id}`. The room page uses the WebSocket as the live channel and falls back to
+polling `/api/rooms/{id}` only while the socket is down. Everything the CLI does the API does, and vice
+versa (both call the same functions).
 
 ## CLI
 
