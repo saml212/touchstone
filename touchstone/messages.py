@@ -202,8 +202,12 @@ def _responses_item(itype: str, item) -> list[dict]:
 def _canonical_one(msg) -> list[dict]:
     msg = _to_plain(msg)
     itype = _get(msg, "type")
-    if itype in _RESPONSES_ITEMS and _get(msg, "role") is None:
-        return _responses_item(itype, msg)
+    if _get(msg, "role") is None and itype is not None:
+        if itype in _RESPONSES_ITEMS:
+            return _responses_item(itype, msg)
+        # A Responses item of a type we don't model (web_search_call, computer_call, ...)
+        # is preserved verbatim so the trace keeps it, rather than flattened to an empty turn.
+        return [msg if isinstance(msg, dict) else dict(msg)]
     role = _get(msg, "role") or "user"
     content = _get(msg, "content")
     if role == "tool":
@@ -258,9 +262,9 @@ def _match_pending(pending: list[list], name) -> int | None:
 def _link_tool_messages(messages: list[dict]) -> None:
     pending: list[list] = []  # [id, name, consumed]
     for msg in messages:
-        if msg["role"] == "assistant" and msg.get("tool_calls"):
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
             pending = [[tc["id"], tc.get("name"), False] for tc in msg["tool_calls"]]
-        elif msg["role"] == "tool":
+        elif msg.get("role") == "tool":
             existing = msg.get("tool_call_id")
             if existing:  # keep an id the caller already supplied; just consume its pending slot
                 idx = _first_unused(pending, lambda entry, _id=existing: entry[0] == _id)
@@ -314,7 +318,9 @@ def to_openai(messages: list[dict]) -> list[dict]:
     """Canonical messages -> OpenAI chat wire shape (reasoning is capture-only, dropped here)."""
     out = []
     for msg in canonical(messages):
-        role = msg["role"]
+        role = msg.get("role")
+        if role is None:
+            continue  # a preserved passthrough item has no chat-wire equivalent
         if role == "tool":
             wire = {"role": "tool", "content": _openai_content(msg.get("content", "")),
                     "tool_call_id": msg.get("tool_call_id", "")}
@@ -371,7 +377,9 @@ def _anthropic_blocks(msg: dict) -> list[dict]:
 
 
 def _add_anthropic_message(msg: dict, systems: list[str], turns: list[dict]) -> None:
-    role = msg["role"]
+    role = msg.get("role")
+    if role is None:
+        return  # a preserved passthrough item has no chat-wire equivalent
     if role == "system":
         text = msg["content"] if isinstance(msg["content"], str) else text_of(msg)
         if text:

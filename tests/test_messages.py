@@ -282,3 +282,18 @@ def test_bytes_in_anthropic_tool_result_block_is_decoded():
         {"type": "tool_result", "tool_use_id": "c1", "content": b"ok"}]}])
     tool = next(m for m in msgs if m["role"] == "tool")
     assert tool["content"] == "ok"
+
+
+def test_unknown_responses_item_is_preserved_not_dropped():
+    # A Responses API item of a type Touchstone doesn't model (web_search_call,
+    # computer_call, ...) must survive verbatim in the trace, not be flattened into
+    # an empty user turn that both loses the data and corrupts replay.
+    item = {"type": "web_search_call", "id": "ws_1", "status": "completed",
+            "action": {"type": "search", "query": "cats"}}
+    msgs = canonical([{"role": "user", "content": "hi"}, dict(item),
+                      {"role": "assistant", "content": "done"}])
+    assert item in msgs
+    assert not any(m.get("role") == "user" and m.get("content") == "" for m in msgs)
+    assert canonical(msgs) == msgs  # idempotent
+    to_openai(msgs)  # wire converters must not crash on the passthrough item
+    to_anthropic(msgs)
