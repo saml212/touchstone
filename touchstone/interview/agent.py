@@ -21,7 +21,7 @@ from .. import tasks as tasks_mod
 from ..checks import Check as DslCheck
 from ..checks.dsl import PARAM_SPEC
 from ..llm.prompt import extract_json
-from ..policies import Policy, read_policies, write_policies
+from ..policies import Policy, materialize, read_policies, write_policies
 from . import rooms
 
 
@@ -198,12 +198,64 @@ class Interviewer:
         draft = self.draft()
         if not draft:
             return AgentTurn(say="There's no draft to commit yet — tell me the rule to draft.")
-        committed = [self.commit_check(d) for d in draft]
-        committed = [c for c in committed if c]
+        committed = [c for c in (self.commit_check(d) for d in draft) if c]
         self._set_draft([])
+        return AgentTurn(say=self._commit_message(committed), commit=committed)
+
+    def _commit_message(self, committed: list[dict]) -> str:
+        """After committing, reconcile the room's task, propagate policies, report the status."""
         names = ", ".join(c.get("name") or c["kind"] for c in committed)
-        return AgentTurn(say=f"Committed: {names}. Anything else, or /done to close?",
-                         commit=committed)
+        status = self._reconcile_task(committed)
+        policy_names = {c.get("name") or c["kind"] for c in committed if c.get("policy")}
+        applied = ""
+        if policy_names:
+            n = self._sync_other_tasks(policy_names)
+            applied = f" Applied to {n} other task{'' if n == 1 else 's'}."
+        tail = f" {status}" if status else ""
+        return f"Committed: {names}.{applied}{tail} Anything else, or /done to close?"
+
+    def _reconcile_task(self, committed: list[dict]) -> str:
+        """Re-materialise the room's task from current policies, re-validate, write it; return a
+        one-sentence status naming its work queue (empty when the room has no task)."""
+        task = self._task()
+        if task is None:
+            return ""
+        enabled = [p for p in read_policies(self.root) if p.enabled]
+        task.checks = materialize(task, enabled)
+        tasks_mod.write_task(self.root, task)
+        return self._status_line(committed)
+
+    def _status_line(self, committed: list[dict]) -> str:
+        task = self._task()
+        if task is None:
+            return ""
+        attached = {c.name for c in task.checks}
+        missed = next((c for c in committed if (c.get("name") or c["kind"]) not in attached), None)
+        if missed is not None:  # a non-safety policy the reference gate kept off this task
+            nm = missed.get("name") or missed["kind"]
+            return (f"This task still needs a check: the recorded reply does not pass '{nm}', "
+                    "so it was not attached.")
+        names = ", ".join(c.get("name") or c["kind"] for c in committed)
+        if task.status == "active":
+            return f"This task is now active: the empty reply fails '{names}'."
+        if task.status == "needs_checks":
+            return "This task still needs a check: an empty reply already passes every hard check."
+        return f"This task now needs a solution: {task.status_reason}."
+
+    def _sync_other_tasks(self, policy_names: set[str]) -> int:
+        """Re-materialise every task except this room's from current policies (the `tasks sync`
+        semantics); count those that carry one of `policy_names` afterwards."""
+        enabled = [p for p in read_policies(self.root) if p.enabled]
+        count = 0
+        for task in tasks_mod.list_tasks(self.root):
+            if task.name == self.room.task_id:
+                continue
+            task.checks = materialize(task, enabled)
+            tasks_mod.write_task(self.root, task)
+            after = tasks_mod.get_task(self.root, task.name)
+            if after and policy_names & {c.name for c in after.checks}:
+                count += 1
+        return count
 
     def _llm_turn(self, history: list[dict]) -> AgentTurn:
         if self.provider is None:

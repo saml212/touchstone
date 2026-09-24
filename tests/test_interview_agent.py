@@ -182,6 +182,69 @@ def test_always_commits_a_policy_to_checks_toml(conn, root):
     assert any(p.check.name == "no email" and p.enabled for p in pols)
 
 
+def test_policy_commit_activates_room_task_and_names_status(conn, root):
+    from touchstone import policies
+
+    name, room = _task_room(conn, root)
+    policy_json = json.dumps({"say": "ok", "draft": [
+        {"kind": "contains", "params": {"values": ["refund"], "mode": "any"},
+         "name": "mentions refund", "severity": "hard", "policy": True}], "commit": []})
+    provider = ScriptedProvider(rules=[Rule(substring="every task", content=policy_json)])
+    agent = Interviewer(provider, conn, room, root)
+    first = agent.respond(_hist(("sam", "user", "on every task, mention the refund policy")))
+    assert len(first.draft) == 1
+
+    turn = agent.respond(_hist(
+        ("sam", "user", "on every task, mention the refund policy"),
+        ("agent", "assistant", first.say),
+        ("sam", "user", "yes"),
+    ))
+    # policy written to checks.toml
+    assert any(p.check.name == "mentions refund" and p.enabled
+               for p in policies.read_policies(root))
+    # room task re-materialised: the block is attached and the task moved needs_checks -> active
+    task = tasks.get_task(root, name)
+    assert any(c.name == "mentions refund" and c.source == "policy" for c in task.checks)
+    assert task.status == "active"
+    assert "active" in turn.say.lower()
+
+
+def test_policy_commit_syncs_across_all_tasks_and_reports_count(conn, root):
+    name, room = _task_room(conn, root)
+    ep = store.insert_episode(conn, store.Episode(name="support-2", outcome_label="ok"))
+    tasks.write_task(root, tasks.Task(
+        name="support-2", episode_id=ep.id,
+        context={"messages": [{"role": "user", "content": "refund please"}], "tools": []},
+        reference={"content": "your refund is on the way", "tool_calls": []}))
+    policy_json = json.dumps({"say": "ok", "draft": [
+        {"kind": "contains", "params": {"values": ["refund"], "mode": "any"},
+         "name": "mentions refund", "severity": "hard", "policy": True}], "commit": []})
+    provider = ScriptedProvider(rules=[Rule(substring="every task", content=policy_json)])
+    agent = Interviewer(provider, conn, room, root)
+    first = agent.respond(_hist(("sam", "user", "every task must mention refund")))
+    turn = agent.respond(_hist(
+        ("sam", "user", "every task must mention refund"),
+        ("agent", "assistant", first.say),
+        ("sam", "user", "yes"),
+    ))
+    assert "1 other task" in turn.say
+    assert any(c.name == "mentions refund" for c in tasks.get_task(root, "support-2").checks)
+
+
+def test_task_level_commit_activates_and_names_status(conn, root):
+    name, room = _task_room(conn, root)
+    agent = Interviewer(_provider(), conn, room, root)
+    first = agent.respond(_hist(("sam", "user", "it must mention the refund policy")))
+    turn = agent.respond(_hist(
+        ("sam", "user", "it must mention the refund policy"),
+        ("agent", "assistant", first.say),
+        ("sam", "user", "yes, exactly"),
+    ))
+    task = tasks.get_task(root, name)
+    assert task.status == "active"
+    assert "active" in turn.say.lower()
+
+
 def test_prompt_prefers_programmatic_kinds_over_judge(conn, root):
     _name, room = _task_room(conn, root)
     prompt = Interviewer(_provider(), conn, room, root)._prompt(_hist(("sam", "user", "hi")))
