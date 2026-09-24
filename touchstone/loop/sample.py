@@ -146,6 +146,16 @@ def _context_sha256(task: tasks_mod.Task) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _signature(task: tasks_mod.Task) -> str:
+    """A content hash over the whole task (context + reference + checks) — two tasks with the
+    same signature are the same eval, so a variant that matches its parent is a no-op."""
+    checks = sorted((c.to_toml() for c in task.checks),
+                    key=lambda b: json.dumps(b, sort_keys=True, ensure_ascii=False))
+    payload = json.dumps({"context": task.context or {}, "reference": task.reference,
+                          "checks": checks}, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _write_generation(root, variant: tasks_mod.Task, parent: tasks_mod.Task,
                       teacher_spec: str, method: str) -> None:
     provenance = {
@@ -170,6 +180,8 @@ def _make_variant(root, parent, instr, index, teacher_spec) -> str | None:
     variant = _variant_of(parent, f"{parent.name}--v{index}", teacher_spec)
     if not _APPLIERS[method](variant, instr):
         return None
+    if _signature(variant) == _signature(parent):
+        return None  # a no-op perturbation: identical to the parent, reject as a duplicate
     tasks_mod.write_task(root, variant, preserve=False)
     variant = tasks_mod.read_task(tasks_mod.tasks_dir(root) / variant.name)
     _write_generation(root, variant, parent, teacher_spec, method)

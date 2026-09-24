@@ -67,3 +67,27 @@ def test_sample_records_difficulty_and_loop_state(project):
 
     state = read_loop_state(root, "bench")
     assert state["student"] == "scripted" and "last_sample" in state
+
+
+def test_variant_identical_to_parent_is_rejected_as_duplicate(tmp_path):
+    # A teacher perturbation that doesn't actually change the task (a paraphrase that
+    # echoes the same user turn, a rename of a tool that isn't present) yields a variant
+    # identical to its parent; it must be rejected by content hash, not kept as a task.
+    import importlib
+    sample_mod = importlib.import_module("touchstone.loop.sample")
+    from touchstone.checks import Check
+    from touchstone.llm import Rule, ScriptedProvider
+    root = str(tmp_path)
+    tasks.write_task(root, tasks.Task(
+        name="p", context={"messages": [{"role": "user", "content": "where is my order"}],
+                            "tools": []},
+        reference={"content": "your order id is 42", "tool_calls": []},
+        checks=[Check(kind="contains", params={"values": ["order"], "mode": "any"},
+                      name="says order", severity="hard", source="policy")]))
+    assert tasks.get_task(root, "p").status == "active"
+    teacher = ScriptedProvider(rules=[Rule(
+        substring="where is my order",
+        content=json.dumps([{"method": "paraphrase", "user": "where is my order"}]))])
+    created = sample_mod._generate_variants(root, teacher, ["p"], "teacher:x", 1)
+    assert created == []
+    assert tasks.get_task(root, "p--v0") is None
