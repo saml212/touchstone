@@ -29,8 +29,9 @@ benchmarks/<name>.toml     a named set: tasks = […] or glob + tags
 From GitHub (private, over SSH):
 
 ```bash
-uv pip install git+ssh://git@github.com/saml212/touchstone       # into the current environment
-uv tool install git+ssh://git@github.com/saml212/touchstone      # as a standalone `touchstone` CLI
+uv tool install touchstone-bench     # standalone `touchstone` CLI (or: pipx install touchstone-bench)
+uv add touchstone-bench              # into your project (or: pip install touchstone-bench)
+uvx touchstone-bench demo            # try it without installing anything
 ```
 
 Python 3.12+. The only hard dependencies are the web/CLI stack and two tiny check libraries; provider
@@ -242,7 +243,7 @@ Every value also has an env override: `TOUCHSTONE_DB`, `TOUCHSTONE_PROVIDER`,
 Two modes, set by `[speech] mode`:
 
 - **`local`** (default, zero-key, offline): push-to-talk → STT → text interviewer → TTS.
-  STT: `faster-whisper` (local, `pip install 'touchstone[whisper]'`), `openai`
+  STT: `faster-whisper` (local, `pip install 'touchstone-bench[whisper]'`), `openai`
   (`gpt-4o-mini-transcribe`), or `none`. TTS: `browser` (`speechSynthesis`, zero-dep default),
   `say` (macOS), or `openai` (`gpt-4o-mini-tts`). Text-only always works.
 - **`realtime`** (additive, needs `OPENAI_API_KEY`): one server-side OpenAI Realtime

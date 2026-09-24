@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "touchstone"
+name = "touchstone-bench"
 version = "0.1.0"
 description = "Prove whether a cheaper or open LLM is good enough before you switch — capture, benchmark, prove."
 readme = "README.md"
