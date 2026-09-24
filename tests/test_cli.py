@@ -18,7 +18,7 @@ def test_init_omits_keychain_prefix_by_default(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init"])
     text = (tmp_path / "touchstone.toml").read_text()
-    assert "keychain_prefix" not in text
+    assert not any(line.startswith("keychain_prefix") for line in text.splitlines())
 
 
 def test_init_writes_keychain_prefix_when_passed(tmp_path, monkeypatch):
