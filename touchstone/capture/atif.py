@@ -81,33 +81,28 @@ def _observation(tool_spans: list[store.Span], step: dict) -> dict | None:
     return {"results": results}
 
 
-def to_atif(conn, episode_id: str) -> dict:
-    ep = store.get_episode(conn, episode_id)
-    if ep is None:
-        raise ValueError(f"no episode {episode_id!r}")
-    spans = store.list_spans(conn, episode_id)
-    llm_spans = [s for s in spans if s.kind == "llm"]
-    model = llm_spans[0].model if llm_spans else None
+_ROLE_SOURCE = {"system": "system", "user": "user", "assistant": "agent"}
 
+
+def _leading_steps(first_span: store.Span) -> list[dict]:
+    """The system/user/agent steps reconstructed from the first llm call's message history."""
     steps: list[dict] = []
+    for msg in first_span.input.get("messages", []):
+        role = msg.get("role")
+        content = _as_message(msg.get("content", ""))
+        source = _ROLE_SOURCE.get(role)
+        if source:
+            steps.append({"step_id": 0, "source": source, "message": content})
+        elif role in ("tool", "function") and steps and steps[-1]["source"] == "agent":
+            steps[-1].setdefault("observation", {"results": []})["results"].append(
+                {"source_call_id": None, "content": content}
+            )
+    return steps
 
-    # Leading conversation from the first llm call's message history.
-    if llm_spans:
-        for msg in llm_spans[0].input.get("messages", []):
-            role = msg.get("role")
-            content = _as_message(msg.get("content", ""))
-            if role == "system":
-                steps.append({"step_id": 0, "source": "system", "message": content})
-            elif role == "user":
-                steps.append({"step_id": 0, "source": "user", "message": content})
-            elif role == "assistant":
-                steps.append({"step_id": 0, "source": "agent", "message": content})
-            elif role in ("tool", "function") and steps and steps[-1]["source"] == "agent":
-                steps[-1].setdefault("observation", {"results": []})["results"].append(
-                    {"source_call_id": None, "content": content}
-                )
 
-    # Each llm span -> an agent step; tool spans in between -> that step's observation.
+def _body_steps(spans: list[store.Span], llm_spans: list[store.Span], model: str | None) -> list:
+    """Each llm span becomes an agent step; tool spans in between become its observation."""
+    steps: list[dict] = []
     for i, span in enumerate(llm_spans):
         step = _agent_step(0, span, model)
         lo = _span_index(spans, span)
@@ -117,6 +112,21 @@ def to_atif(conn, episode_id: str) -> dict:
         if obs:
             step["observation"] = obs
         steps.append(step)
+    return steps
+
+
+def to_atif(conn, episode_id: str) -> dict:
+    ep = store.get_episode(conn, episode_id)
+    if ep is None:
+        raise ValueError(f"no episode {episode_id!r}")
+    spans = store.list_spans(conn, episode_id)
+    llm_spans = [s for s in spans if s.kind == "llm"]
+    model = llm_spans[0].model if llm_spans else None
+
+    steps: list[dict] = []
+    if llm_spans:
+        steps += _leading_steps(llm_spans[0])
+    steps += _body_steps(spans, llm_spans, model)
 
     # Renumber sequentially from 1 (ATIF requires step_ids 1..N).
     for n, step in enumerate(steps, start=1):

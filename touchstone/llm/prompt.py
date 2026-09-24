@@ -18,18 +18,26 @@ _TOOL_INSTRUCTION = (
 )
 
 
+def _part_text(part) -> str:
+    if isinstance(part, dict):
+        return part.get("text") or part.get("content") or json.dumps(part)
+    return str(part)
+
+
 def _content_text(content) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):  # OpenAI content-parts form
-        parts = []
-        for part in content:
-            if isinstance(part, dict):
-                parts.append(part.get("text") or part.get("content") or json.dumps(part))
-            else:
-                parts.append(str(part))
-        return "\n".join(parts)
+        return "\n".join(_part_text(p) for p in content)
     return "" if content is None else json.dumps(content, ensure_ascii=False)
+
+
+def _chat_turn(msg: dict, role: str) -> str:
+    text = _content_text(msg.get("content"))
+    for tc in msg.get("tool_calls") or []:
+        fn = tc.get("function", tc)
+        text += f"\n[called {fn.get('name')} with {fn.get('arguments')}]"
+    return f"{role.upper()}: {text}".rstrip()
 
 
 def serialize_messages(messages: list[dict], tools: list[dict] | None = None) -> str:
@@ -40,16 +48,11 @@ def serialize_messages(messages: list[dict], tools: list[dict] | None = None) ->
         role = msg.get("role", "user")
         if role == "system":
             systems.append(_content_text(msg.get("content")))
-            continue
-        if role == "tool":
+        elif role == "tool":
             name = msg.get("name") or msg.get("tool_call_id") or "tool"
             turns.append(f"TOOL RESULT ({name}): {_content_text(msg.get('content'))}")
-            continue
-        text = _content_text(msg.get("content"))
-        for tc in msg.get("tool_calls") or []:
-            fn = tc.get("function", tc)
-            text += f"\n[called {fn.get('name')} with {fn.get('arguments')}]"
-        turns.append(f"{role.upper()}: {text}".rstrip())
+        else:
+            turns.append(_chat_turn(msg, role))
 
     blocks: list[str] = []
     if systems:
@@ -96,31 +99,49 @@ def _first_open(text: str) -> int | None:
     return min(positions) if positions else None
 
 
+def _scan_string(ch: str, escape: bool) -> tuple[bool, bool]:
+    """Consume one char inside a JSON string; return (still_in_string, escape_next)."""
+    if escape:
+        return True, False
+    if ch == "\\":
+        return True, True
+    return ch != '"', False
+
+
+def _scan_char(ch: str, in_str: bool, escape: bool, depth: int, open_ch: str, close_ch: str):
+    """Consume one char of the bracket scan; return (in_str, escape, depth)."""
+    if in_str:
+        in_str, escape = _scan_string(ch, escape)
+    elif ch == '"':
+        in_str = True
+    elif ch == open_ch:
+        depth += 1
+    elif ch == close_ch:
+        depth -= 1
+    return in_str, escape, depth
+
+
 def _match_bracket(text: str, start: int) -> int | None:
     open_ch = text[start]
     close_ch = "}" if open_ch == "{" else "]"
-    depth = 0
-    in_str = False
-    escape = False
+    depth, in_str, escape = 0, False, False
     for i in range(start, len(text)):
-        ch = text[i]
-        if in_str:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_str = False
-            continue
-        if ch == '"':
-            in_str = True
-        elif ch == open_ch:
-            depth += 1
-        elif ch == close_ch:
-            depth -= 1
-            if depth == 0:
-                return i
+        in_str, escape, depth = _scan_char(text[i], in_str, escape, depth, open_ch, close_ch)
+        if depth == 0:
+            return i
     return None
+
+
+def _tool_calls_from(items: list) -> list[dict]:
+    calls = []
+    for tc in items:
+        if not isinstance(tc, dict):
+            continue
+        args = tc.get("arguments", tc.get("args", {}))
+        if not isinstance(args, str):
+            args = json.dumps(args, ensure_ascii=False)
+        calls.append({"id": tc.get("id"), "name": tc.get("name"), "arguments": args})
+    return calls
 
 
 def parse_cli_result(text: str, want_json: bool) -> Reply:
@@ -134,14 +155,7 @@ def parse_cli_result(text: str, want_json: bool) -> Reply:
         except json.JSONDecodeError:
             obj = None
     if isinstance(obj, dict) and isinstance(obj.get("tool_calls"), list):
-        calls = []
-        for tc in obj["tool_calls"]:
-            if not isinstance(tc, dict):
-                continue
-            args = tc.get("arguments", tc.get("args", {}))
-            if not isinstance(args, str):
-                args = json.dumps(args, ensure_ascii=False)
-            calls.append({"id": tc.get("id"), "name": tc.get("name"), "arguments": args})
+        calls = _tool_calls_from(obj["tool_calls"])
         return Reply(content=obj.get("content", "") or "", tool_calls=calls, raw=text)
     if want_json and obj_str is not None:
         return Reply(content=obj_str, raw=text)
