@@ -115,27 +115,24 @@ def _parse_args(raw):
     return None
 
 
+def _key_matches(key, expected, parsed, raw_str: str) -> bool:
+    """Whether one field matcher is satisfied against the parsed args (or the raw arg string)."""
+    is_regex = isinstance(expected, dict) and "regex" in expected
+    if is_regex and is_catastrophic_regex(str(expected["regex"])):
+        return False
+    if parsed is not None and key in parsed:
+        actual = parsed[key]
+        return bool(re.search(expected["regex"], str(actual))) if is_regex else actual == expected
+    # unparseable args or missing key: match against the raw string
+    if is_regex:
+        return bool(re.search(expected["regex"], raw_str))
+    return str(expected) in raw_str
+
+
 def _arg_matches(raw, matcher) -> bool:
     parsed = _parse_args(raw)
     raw_str = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
-    for key, expected in matcher.items():
-        is_regex = isinstance(expected, dict) and "regex" in expected
-        if is_regex and is_catastrophic_regex(str(expected["regex"])):
-            return False
-        if parsed is not None and key in parsed:
-            actual = parsed[key]
-            if is_regex:
-                if not re.search(expected["regex"], str(actual)):
-                    return False
-            elif actual != expected:
-                return False
-        else:  # unparseable args or missing key: match against the raw string
-            if is_regex:
-                if not re.search(expected["regex"], raw_str):
-                    return False
-            elif str(expected) not in raw_str:
-                return False
-    return True
+    return all(_key_matches(key, expected, parsed, raw_str) for key, expected in matcher.items())
 
 
 def _tool_called(params, target):

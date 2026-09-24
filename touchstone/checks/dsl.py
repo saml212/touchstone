@@ -32,56 +32,94 @@ APPLIES_TO = frozenset({"final", "any_turn", "tool_calls"})
 SEVERITIES = frozenset({"hard", "soft"})
 
 
+def _open_ended_brace(pattern: str, k: int, n: int) -> tuple[bool, int]:
+    """Is the `{...}` at k an open-ended `{m,}` quantifier, and the index just past it."""
+    j = k + 1
+    while j < n and pattern[j] != "}":
+        j += 1
+    parts = pattern[k + 1 : j].split(",")
+    return len(parts) == 2 and parts[1].strip() == "", j + 1
+
+
+def _skip_char_class(pattern: str, i: int, n: int) -> int:
+    """Index just past the `[...]` character class starting at i."""
+    i += 1
+    i += 1 if i < n and pattern[i] == "^" else 0
+    i += 1 if i < n and pattern[i] == "]" else 0
+    while i < n and pattern[i] != "]":
+        i += 2 if pattern[i] == "\\" else 1
+    return i + 1
+
+
+def _is_quantified(pattern: str, j: int, n: int) -> bool:
+    """Is index j the start of an unbounded quantifier (`*`, `+`, or open-ended `{m,}`)?"""
+    return j < n and (
+        pattern[j] in "*+" or (pattern[j] == "{" and _open_ended_brace(pattern, j, n)[0])
+    )
+
+
+def _mark_enclosing(stack: list[bool]) -> None:
+    if stack:
+        stack[-1] = True
+
+
+# Each handler consumes the token at i and returns (is_catastrophic, next_index); it may mark the
+# group on top of `stack` as "has an unbounded repeat inside". Chars with no handler advance by one.
+def _h_escape(pattern, i, n, stack):
+    return False, i + 2
+
+
+def _h_class(pattern, i, n, stack):
+    return False, _skip_char_class(pattern, i, n)
+
+
+def _h_open(pattern, i, n, stack):
+    stack.append(False)
+    return False, i + 1
+
+
+def _h_close(pattern, i, n, stack):
+    body_has = stack.pop() if stack else False
+    quantified = _is_quantified(pattern, i + 1, n)
+    if quantified and body_has:
+        return True, i + 1
+    if body_has or quantified:
+        _mark_enclosing(stack)
+    return False, i + 1
+
+
+def _h_repeat(pattern, i, n, stack):
+    _mark_enclosing(stack)
+    return False, i + 1
+
+
+def _h_brace(pattern, i, n, stack):
+    open_ended, nxt = _open_ended_brace(pattern, i, n)
+    if open_ended:
+        _mark_enclosing(stack)
+    return False, nxt
+
+
+_REGEX_HANDLERS = {
+    "\\": _h_escape, "[": _h_class, "(": _h_open, ")": _h_close,
+    "*": _h_repeat, "+": _h_repeat, "{": _h_brace,
+}
+
+
 def is_catastrophic_regex(pattern: str) -> bool:
     """True when `pattern` has a quantified group whose body itself repeats unboundedly
     (e.g. `(a+)+`, `([a-z]+)*`), the signature of exponential backtracking that can hang the
     engine. Only `*`, `+`, and open-ended `{m,}` count as unbounded; `{m,n}` and `{k}` do not."""
     stack: list[bool] = []
     i, n = 0, len(pattern)
-
-    def open_ended_brace(k: int) -> tuple[bool, int]:
-        j = k + 1
-        while j < n and pattern[j] != "}":
-            j += 1
-        parts = pattern[k + 1 : j].split(",")
-        return len(parts) == 2 and parts[1].strip() == "", j + 1
-
     while i < n:
-        c = pattern[i]
-        if c == "\\":
-            i += 2
-        elif c == "[":
+        handler = _REGEX_HANDLERS.get(pattern[i])
+        if handler is None:
             i += 1
-            i += 1 if i < n and pattern[i] == "^" else 0
-            i += 1 if i < n and pattern[i] == "]" else 0
-            while i < n and pattern[i] != "]":
-                i += 2 if pattern[i] == "\\" else 1
-            i += 1
-        elif c == "(":
-            stack.append(False)
-            i += 1
-        elif c == ")":
-            body_has = stack.pop() if stack else False
-            j = i + 1
-            quantified = j < n and (
-                pattern[j] in "*+" or (pattern[j] == "{" and open_ended_brace(j)[0])
-            )
-            if quantified and body_has:
-                return True
-            if stack and (body_has or quantified):
-                stack[-1] = True
-            i += 1
-        elif c in "*+":
-            if stack:
-                stack[-1] = True
-            i += 1
-        elif c == "{":
-            open_ended, after = open_ended_brace(i)
-            if open_ended and stack:
-                stack[-1] = True
-            i = after
-        else:
-            i += 1
+            continue
+        catastrophic, i = handler(pattern, i, n, stack)
+        if catastrophic:
+            return True
     return False
 
 
@@ -188,54 +226,69 @@ PARAM_SPEC = {
 }
 
 
+def _v_contains(params: dict) -> None:
+    _require_str_list(params, "values")
+    if params.get("mode", "any") not in ("any", "all"):
+        raise ValueError("'mode' must be 'any' or 'all'")
+
+
+def _v_regex(params: dict) -> None:
+    _require_str(params, "pattern")
+    _require_safe_regex(params["pattern"])
+
+
+def _v_json_schema(params: dict) -> None:
+    if not isinstance(params.get("schema"), dict):
+        raise ValueError("'schema' must be a JSON object")
+    import jsonschema
+
+    try:
+        jsonschema.Draft202012Validator.check_schema(params["schema"])
+    except jsonschema.exceptions.SchemaError as exc:
+        raise ValueError(f"invalid JSON schema: {exc.message}") from exc
+
+
+def _v_tool_called(params: dict) -> None:
+    _require_str(params, "name")
+    matcher = params.get("arguments_match")
+    if matcher is None:
+        return
+    if not isinstance(matcher, dict):
+        raise ValueError("'arguments_match' must be an object of field matchers")
+    for expected in matcher.values():
+        if isinstance(expected, dict) and "regex" in expected:
+            _require_safe_regex(str(expected["regex"]))
+
+
+def _v_no_pii(params: dict) -> None:
+    kinds = params.get("kinds")
+    if kinds is not None and not (
+        isinstance(kinds, list) and all(k in ("email", "phone", "card") for k in kinds)
+    ):
+        raise ValueError("'kinds' must be a list drawn from email/phone/card")
+
+
+_VALIDATORS = {
+    "contains": _v_contains,
+    "not_contains": _v_contains,
+    "regex": _v_regex,
+    "not_regex": _v_regex,
+    "json_schema": _v_json_schema,
+    "tool_called": _v_tool_called,
+    "tool_not_called": lambda p: _require_str(p, "name"),
+    "tool_order": lambda p: _require_str_list(p, "order"),
+    "max_length": lambda p: _require_int(p, "max"),
+    "min_length": lambda p: _require_int(p, "min"),
+    "no_pii": _v_no_pii,
+    "expr": lambda p: _require_str(p, "expr"),
+    "judge": lambda p: _require_str(p, "rubric"),
+}
+
+
 def validate_params(kind: str, params: dict) -> None:
     """Raise ValueError with a clear message if `params` is wrong for `kind`."""
     if kind not in KINDS:
         raise ValueError(f"unknown check kind {kind!r}; valid kinds: {sorted(KINDS)}")
     if not isinstance(params, dict):
         raise ValueError("params must be a JSON object")
-
-    if kind in ("contains", "not_contains"):
-        _require_str_list(params, "values")
-        mode = params.get("mode", "any")
-        if mode not in ("any", "all"):
-            raise ValueError("'mode' must be 'any' or 'all'")
-    elif kind in ("regex", "not_regex"):
-        _require_str(params, "pattern")
-        _require_safe_regex(params["pattern"])
-    elif kind == "json_schema":
-        if not isinstance(params.get("schema"), dict):
-            raise ValueError("'schema' must be a JSON object")
-        import jsonschema
-
-        try:
-            jsonschema.Draft202012Validator.check_schema(params["schema"])
-        except jsonschema.exceptions.SchemaError as exc:
-            raise ValueError(f"invalid JSON schema: {exc.message}") from exc
-    elif kind == "tool_called":
-        _require_str(params, "name")
-        matcher = params.get("arguments_match")
-        if matcher is not None:
-            if not isinstance(matcher, dict):
-                raise ValueError("'arguments_match' must be an object of field matchers")
-            for expected in matcher.values():
-                if isinstance(expected, dict) and "regex" in expected:
-                    _require_safe_regex(str(expected["regex"]))
-    elif kind == "tool_not_called":
-        _require_str(params, "name")
-    elif kind == "tool_order":
-        _require_str_list(params, "order")
-    elif kind == "max_length":
-        _require_int(params, "max")
-    elif kind == "min_length":
-        _require_int(params, "min")
-    elif kind == "no_pii":
-        kinds = params.get("kinds")
-        if kinds is not None and not (
-            isinstance(kinds, list) and all(k in ("email", "phone", "card") for k in kinds)
-        ):
-            raise ValueError("'kinds' must be a list drawn from email/phone/card")
-    elif kind == "expr":
-        _require_str(params, "expr")
-    elif kind == "judge":
-        _require_str(params, "rubric")
+    _VALIDATORS[kind](params)
