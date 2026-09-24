@@ -137,3 +137,25 @@ def test_reexport_removes_stale_task_dirs_but_not_foreign_files(exported, tmp_pa
             assert not d.exists(), f"stale touchstone task dir {d.name} was not removed"
     assert (out / "notes.txt").exists()
     assert (out / "mystuff" / "a.txt").exists()
+
+
+def test_verifier_survives_missing_and_nondict_output(exported, tmp_path):
+    import os
+    _conn, _bench, _out, dirs = exported
+    task_dir = dirs[0]
+    checks_json = str(task_dir / "tests" / "checks.json")
+    reward_dir = tmp_path / "r"
+
+    def run(output_file):
+        env = {"TOUCHSTONE_OUTPUT": str(output_file), "TOUCHSTONE_REWARD_DIR": str(reward_dir),
+               "TOUCHSTONE_CHECKS": checks_json, "PATH": os.environ.get("PATH", "")}
+        return subprocess.run([sys.executable, str(task_dir / "tests" / "test_outputs.py")],
+                              capture_output=True, text=True, env=env)
+
+    missing = run(tmp_path / "nope.json")
+    assert missing.returncode in (0, 1) and (reward_dir / "reward.txt").exists()
+
+    nondict = tmp_path / "arr.json"
+    nondict.write_text("[1, 2, 3]")
+    arr = run(nondict)
+    assert arr.returncode in (0, 1) and (reward_dir / "reward.txt").exists()
