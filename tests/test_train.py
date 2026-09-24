@@ -102,6 +102,18 @@ def test_preference_pairs_from_candidate_disagreement_and_reference(seeded, tmp_
     assert "reference" in sources   # reference chosen over a failing candidate
 
 
+def test_preference_finds_runs_recorded_by_benchmark_name(seeded, tmp_path):
+    """Runs store the benchmark key as passed to `bench run` (the CLI passes the name); preference
+    gathering must still find them, so a name-keyed run yields reference-vs-failed pairs."""
+    conn, bench = seeded
+    runner.run(conn, bench.name, "bad", provider=_FixedProvider("no"))  # keyed by name, not id
+
+    out = tmp_path / "train"
+    train.prepare(conn, bench.id, out)
+    rows = _read_jsonl(out / "preference.jsonl")
+    assert rows and any(r["source"] == "reference" for r in rows)
+
+
 def test_reruns_overwrite_cleanly(seeded, tmp_path):
     conn, bench = seeded
     out = tmp_path / "train"

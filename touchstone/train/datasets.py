@@ -99,12 +99,23 @@ def _output_key(msg: dict) -> str:
                        "tool_calls": msg.get("tool_calls") or []}, sort_keys=True)
 
 
-def _candidate_outcomes(conn, benchmark_id: str) -> dict[str, dict[str, list[dict]]]:
+def _benchmark_runs(conn, bench: store.Benchmark) -> list[store.Run]:
+    """Runs for this benchmark. Runs record the benchmark id/name as it was passed to `bench run`,
+    so resolve each run's stored key back to a benchmark and match on the canonical id."""
+    runs = []
+    for run in store.list_runs(conn):
+        resolved = store.get_benchmark(conn, run.benchmark_id)
+        if resolved is not None and resolved.id == bench.id:
+            runs.append(run)
+    return runs
+
+
+def _candidate_outcomes(conn, bench: store.Benchmark) -> dict[str, dict[str, list[dict]]]:
     """Per task, the distinct candidate replies that passed and that failed, across all runs.
 
     The `reference` model spec is excluded — its reply is the reference, handled separately."""
     out: dict[str, dict[str, list[dict]]] = {}
-    for run in store.list_runs(conn, benchmark_id):
+    for run in _benchmark_runs(conn, bench):
         if run.model_spec == "reference":
             continue
         for r in store.list_results(conn, run.id):
@@ -119,8 +130,8 @@ def _candidate_outcomes(conn, benchmark_id: str) -> dict[str, dict[str, list[dic
     return out
 
 
-def _preference_rows(conn, benchmark_id: str, tasks: list[store.Task]) -> list[dict]:
-    outcomes = _candidate_outcomes(conn, benchmark_id)
+def _preference_rows(conn, bench: store.Benchmark, tasks: list[store.Task]) -> list[dict]:
+    outcomes = _candidate_outcomes(conn, bench)
     rows: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
 
@@ -169,7 +180,7 @@ def prepare(conn, benchmark_id: str, out_dir: str | Path) -> DatasetBundle:
                         "tools": ctx_tools, "reference": task.reference,
                         "checks": _serialized_checks(checks)})
 
-    pref_rows = _preference_rows(conn, bench.id, tasks)
+    pref_rows = _preference_rows(conn, bench, tasks)
 
     paths = {
         "sft": out / "sft.jsonl",

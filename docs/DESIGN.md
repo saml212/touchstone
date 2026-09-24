@@ -87,6 +87,9 @@ touchstone/
   `room_checks(room_id, check_id)`
 IDs are `ulid`-style sortable strings generated in Python (no dependency). All timestamps ISO-8601 UTC.
 SQLite opened with WAL + busy_timeout=5000; safe under concurrent writers (server + instrumented app).
+Connections are opened `check_same_thread=False` and each caller (the CLI, each web request, each
+background run thread) holds its own — created, used, and closed without being shared across threads
+concurrently — so the threadpool and the instrumented app never collide on one connection.
 
 ## Checks DSL
 
@@ -105,12 +108,15 @@ check passes and no hard check errored. Soft checks are reported, never gate.
 Input: episodes (optionally filtered), optional `--code <path>`. Steps:
 1. Statistics (no LLM): tool usage per outcome label, output length distribution, JSON-ness, recurring
    phrases in good vs bad outcomes, PII leaks. Emits candidate checks with evidence counts.
-2. LLM proposals (provider from config, default `claude-cli`): sample of episodes + discovered system prompts
-   and tool schemas → JSON list of checks in the DSL with rationale and supporting episode ids. Invalid
-   proposals are dropped with a logged reason, never crash.
-3. Cutting: every episode → one replay task at its final assistant turn (`--every-turn` for all turns).
-   Context = messages before the cut + tools; reference = recorded assistant message. Tasks from episodes with
-   bad outcomes get tag `failure` and no reference-based checks.
+2. LLM proposals (provider from config `agent_provider`, default `codex-cli`): sample of episodes +
+   discovered system prompts and tool schemas → JSON list of checks in the DSL with rationale and
+   supporting episode ids. Invalid proposals are dropped with a logged reason, never crash.
+3. Cutting: every recorded assistant turn in every episode becomes a replay task (not only the final
+   turn). Context = messages before the cut + tools; reference = recorded assistant message. A check
+   attaches to a task only when the reference passes it (reference-consistent attachment), so a
+   candidate is never asked to satisfy a check the recorded behaviour did not — except safety checks
+   ("avoid this": `no_pii`, `not_contains`, `not_regex`, `tool_not_called`), which always attach.
+   Tasks from episodes with bad outcomes get tag `failure` and only safety checks.
 Everything mined is `enabled=0` until a human (or an interview) enables it. Idempotent: re-mining does not
 duplicate identical checks/tasks.
 
