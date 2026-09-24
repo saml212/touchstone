@@ -151,3 +151,27 @@ def test_v2_llm_spans_migrate_to_model(tmp_path):
         assert "tool_call_id" in cols
     finally:
         conn.close()
+
+
+def test_difficulty_upsert_tracks_running_pass_rate(conn):
+    store.upsert_difficulty(conn, "t1", "openai:gpt-4o-mini", passed=True)
+    store.upsert_difficulty(conn, "t1", "openai:gpt-4o-mini", passed=False)
+    d = store.get_difficulty(conn, "t1", "openai:gpt-4o-mini")
+    assert d.attempts == 2 and d.passes == 1 and d.pass_rate == 0.5
+    # a second (task, model) is independent
+    store.upsert_difficulty(conn, "t2", "openai:gpt-4o-mini", passed=True)
+    assert store.get_difficulty(conn, "t2", "openai:gpt-4o-mini").pass_rate == 1.0
+    assert {d.task for d in store.list_difficulty(conn)} == {"t1", "t2"}
+    assert [d.task for d in store.list_difficulty(conn, task="t1")] == ["t1"]
+
+
+def test_v2_db_gains_difficulty_table(tmp_path):
+    path = tmp_path / "old.db"
+    _v2_spans_table(path)
+    conn = store.connect(path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
+        store.upsert_difficulty(conn, "t1", "scripted", passed=True)
+        assert store.get_difficulty(conn, "t1", "scripted").pass_rate == 1.0
+    finally:
+        conn.close()

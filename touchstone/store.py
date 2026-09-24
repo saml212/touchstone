@@ -34,7 +34,9 @@ def _loads(text):
 # stale run record are dropped, and `mine` rebuilds tasks/checks from the preserved episodes.
 # v3 (2026-09): span `kind` 'llm' renamed to 'model'; `spans.tool_call_id` links a tool span to
 # the model call that requested it. A v1/v2 DB migrates in place, preserving its spans.
-SCHEMA_VERSION = 3
+# v4 (2026-09): `difficulty` table — empirical pass rate per (task, model_spec), the founder's
+# "difficulty measured, not requested". Created via CREATE IF NOT EXISTS on any older DB.
+SCHEMA_VERSION = 4
 
 # Tables the v1 schema created that no longer exist; dropped only on the v1 -> v2 migration.
 _DROPPED = ("checks", "tasks", "benchmarks", "room_checks", "runs", "results")
@@ -58,6 +60,10 @@ CREATE TABLE IF NOT EXISTS results (
   run_id TEXT, task TEXT, passed INTEGER, reward REAL, check_results TEXT, output TEXT,
   latency_ms INTEGER, cost_usd REAL, error TEXT,
   PRIMARY KEY (run_id, task)
+);
+CREATE TABLE IF NOT EXISTS difficulty (
+  task TEXT, model_spec TEXT, attempts INTEGER, passes INTEGER, pass_rate REAL, updated_at TEXT,
+  PRIMARY KEY (task, model_spec)
 );
 CREATE TABLE IF NOT EXISTS rooms (
   id TEXT PRIMARY KEY, task_id TEXT, topic TEXT, created_at TEXT, closed_at TEXT
@@ -183,6 +189,16 @@ class Result:
     latency_ms: int | None = None
     cost_usd: float | None = None
     error: str | None = None
+
+
+@dataclass
+class Difficulty:
+    task: str
+    model_spec: str
+    attempts: int = 0
+    passes: int = 0
+    pass_rate: float = 0.0
+    updated_at: str = field(default_factory=now)
 
 
 @dataclass
@@ -346,6 +362,48 @@ def list_results(conn, run_id: str) -> list[Result]:
         "SELECT * FROM results WHERE run_id=? ORDER BY task", (run_id,)
     ).fetchall()
     return [_row_to(Result, "results", r) for r in rows]
+
+
+# ---- difficulty ------------------------------------------------------------
+
+
+def upsert_difficulty(conn, task: str, model_spec: str, passed: bool) -> Difficulty:
+    """Record one attempt for (task, model_spec) and return the updated running pass rate."""
+    p = 1 if passed else 0
+    params = {"task": task, "model": model_spec, "p": p, "now": now()}
+    with write(conn):
+        conn.execute(
+            "INSERT INTO difficulty (task, model_spec, attempts, passes, pass_rate, updated_at) "
+            "VALUES (:task, :model, 1, :p, :p, :now) "
+            "ON CONFLICT(task, model_spec) DO UPDATE SET "
+            "  attempts = attempts + 1, "
+            "  passes = passes + :p, "
+            "  pass_rate = (passes + :p) * 1.0 / (attempts + 1), "
+            "  updated_at = :now",
+            params,
+        )
+    return get_difficulty(conn, task, model_spec)
+
+
+def get_difficulty(conn, task: str, model_spec: str) -> Difficulty | None:
+    row = conn.execute(
+        "SELECT * FROM difficulty WHERE task=? AND model_spec=?", (task, model_spec)
+    ).fetchone()
+    return _row_to(Difficulty, "difficulty", row)
+
+
+def list_difficulty(conn, *, task: str | None = None,
+                    model_spec: str | None = None) -> list[Difficulty]:
+    clauses, args = [], []
+    if task is not None:
+        clauses.append("task=?")
+        args.append(task)
+    if model_spec is not None:
+        clauses.append("model_spec=?")
+        args.append(model_spec)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = conn.execute(f"SELECT * FROM difficulty{where} ORDER BY task, model_spec", args)
+    return [_row_to(Difficulty, "difficulty", r) for r in rows.fetchall()]
 
 
 # ---- rooms -----------------------------------------------------------------
