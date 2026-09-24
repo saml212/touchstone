@@ -45,10 +45,13 @@ touchstone/
   capture/          patch_openai.py, patch_anthropic.py, litellm.py (callback), context.py (episode ctx),
                     atif.py (Harbor ATIF export of an episode)
   llm/              Provider protocol `chat(messages, tools=None, json=False) -> Reply`;
-                    scripted.py (deterministic, for tests/demo), claude_cli.py (`claude -p`, subscription),
+                    scripted.py (deterministic, for tests/demo), reference.py (replays a task's
+                    recorded reply — the incumbent baseline), claude_cli.py (`claude -p`, subscription),
                     codex_cli.py (`codex exec`), openai_compat.py (OpenAI + any /v1 endpoint), anthropic.py
-                    spec strings: "scripted", "claude-cli:sonnet", "openai:gpt-4o-mini",
-                    "anthropic:claude-sonnet-4-5", "openai-compatible:<base_url>:<model>", "codex-cli:gpt-5.6-sol"
+                    spec strings: "scripted", "reference", "claude-cli:sonnet", "openai:gpt-4o-mini",
+                    "anthropic:claude-sonnet-4-5", "openai-compatible:<base_url>:<model>", "codex-cli:gpt-5.6-sol".
+                    The runner passes the task on its provider call path; only `reference` reads it,
+                    every other provider keeps its unchanged signature and ignores it.
   checks/           dsl.py (Check dataclass + kinds), run.py (evaluate checks against an output), judge.py
   mine/             miner.py (statistical + LLM proposals of checks), cut.py (episodes -> replay tasks),
                     codebase.py (find system prompts / tool schemas in a repo)
@@ -131,7 +134,11 @@ TTS → audio to all clients. Providers: STT `faster-whisper` (local, optional e
 reply as output, evaluates checks, stores results. Async with a semaphore, per-call timeout, 2 retries
 on transport errors, cost from token counts × a small price table (unknown model → null cost, never a guess).
 Report: pass rate per model, per check, per tag; proof table "candidate vs incumbent"; JSON + terminal
-table + UI. Determinism: `scripted` provider yields identical results on rerun.
+table + UI. Determinism: `scripted` provider yields identical results on rerun. The `reference`
+model spec is the honest incumbent: it replays each task's recorded reply, so `bench run -m reference`
+passes every task whose attached checks the reference satisfies (all non-failure tasks by construction,
+since a non-safety check attaches only when the reference already passes it) — the baseline a cheaper
+candidate is proven against, and a way to confirm attached checks are satisfiable.
 
 Harbor export: `touchstone export harbor --benchmark X --out ./harbor-tasks` writes one task dir per
 task in the exact layout Harbor expects (read `~/Pebble/Github/harbor` to confirm: `instruction.md`,

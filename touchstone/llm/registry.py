@@ -2,6 +2,7 @@
 
 Spec strings:
   scripted[:...]                          deterministic, no key
+  reference                               replay each task's recorded reference (incumbent baseline)
   openai:<model>                          api.openai.com/v1, OPENAI_API_KEY | keychain
   openai-compatible:<base_url>:<model>    any /v1 endpoint (base_url may contain colons)
   anthropic:<model>                       Anthropic Messages API, ANTHROPIC_API_KEY | keychain
@@ -28,6 +29,11 @@ def provider_from_spec(spec: str, settings: Settings | None = None) -> Provider:
 
     if spec == "scripted" or spec.startswith("scripted:"):
         return ScriptedProvider()
+
+    if spec == "reference":
+        from .reference import ReferenceProvider
+
+        return ReferenceProvider()
 
     if spec.startswith("openai:"):
         model = spec[len("openai:") :]
@@ -91,7 +97,10 @@ class ProviderStatus:
 def provider_statuses(settings: Settings | None = None) -> list[ProviderStatus]:
     """Availability of each provider family, without any network call."""
     settings = settings or load_settings()
-    statuses = [ProviderStatus("scripted", True, "always available")]
+    statuses = [
+        ProviderStatus("scripted", True, "always available"),
+        ProviderStatus("reference", True, "always available (replays recorded references)"),
+    ]
 
     openai_key = bool(secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai)))
     statuses.append(

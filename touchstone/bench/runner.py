@@ -35,11 +35,31 @@ def _task_checks(conn, task: store.Task) -> list[DslCheck]:
     return checks
 
 
-async def _call(provider, messages, tools, timeout):
-    """Await achat, or run a sync-only provider's chat in a thread. Enforce a per-task timeout."""
+def _accepts_task(fn) -> bool:
+    """Whether a provider method takes the optional `task` kwarg (or **kwargs to absorb it)."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return "task" in params or any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+
+
+async def _call(provider, messages, tools, timeout, task):
+    """Await achat, or run a sync-only provider's chat in a thread. Enforce a per-task timeout.
+
+    `task` reaches only providers that declare it (e.g. `reference`, which replays the task's
+    recorded reply); every other provider is called with its unchanged signature.
+    """
     achat = getattr(provider, "achat", None)
     if achat is not None and inspect.iscoroutinefunction(achat):
-        coro = achat(messages, tools=tools, timeout=timeout)
+        kwargs = {"tools": tools, "timeout": timeout}
+        if _accepts_task(achat):
+            kwargs["task"] = task
+        coro = achat(messages, **kwargs)
+    elif _accepts_task(provider.chat):
+        coro = asyncio.to_thread(provider.chat, messages, tools, False, timeout, task)
     else:
         coro = asyncio.to_thread(provider.chat, messages, tools, False, timeout)
     return await asyncio.wait_for(coro, timeout)
@@ -64,7 +84,7 @@ async def _run_task(conn, run_id, model_spec, provider, task, timeout, judge_pro
     reply = None
     try:
         reply = await _call(provider, (task.context or {}).get("messages", []),
-                            (task.context or {}).get("tools") or None, timeout)
+                            (task.context or {}).get("tools") or None, timeout, task)
     except TimeoutError:
         error = f"timed out after {timeout}s"
     except Exception as exc:  # provider error after its own retries; the run must continue
