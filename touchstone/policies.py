@@ -48,7 +48,7 @@ def write_policies(root: str | Path, policies: list[Policy]) -> Path:
     return path
 
 
-def gate_check(check: Check, reference: dict, messages: list[dict], failure: bool) -> bool:
+def gate_check(check: Check, reference: dict, failure: bool) -> bool:
     """Reference-consistent attachment: a non-safety check attaches only if the reference passes it.
 
     Safety kinds ("avoid this") always attach; a failure task carries safety checks only.
@@ -58,8 +58,7 @@ def gate_check(check: Check, reference: dict, messages: list[dict], failure: boo
     if check.kind in SAFETY_KINDS:
         return True
     target = Target(output_text=text_of(reference),
-                    tool_calls=reference.get("tool_calls") or [], messages=messages,
-                    reference=reference)
+                    tool_calls=reference.get("tool_calls") or [], reference=reference)
     result = evaluate([check], target)[0]
     return bool(result.passed) or (check.kind == "judge" and bool(reference.get("content")))
 
@@ -95,7 +94,6 @@ def materialize(task, policies: list[Policy]) -> list[Check]:
     """The policy checks to write into `task`: every enabled policy the reference gate lets in,
     tagged `source = "policy"`. Interview/manual blocks are preserved separately by write_task."""
     reference = task.reference or {"content": "", "tool_calls": []}
-    messages = (task.context or {}).get("messages", [])
     failure = "failure" in (task.tags or [])
     return [replace(p.check, source="policy")
-            for p in policies if p.enabled and gate_check(p.check, reference, messages, failure)]
+            for p in policies if p.enabled and gate_check(p.check, reference, failure)]

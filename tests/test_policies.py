@@ -58,4 +58,4 @@ def test_materialize_failure_task_gets_safety_only(tmp_path):
 
 def test_gate_check_safety_always_true():
     safety = Check(kind="not_contains", params={"values": ["x"]}, name="s")
-    assert policies.gate_check(safety, {"content": "x present"}, [], failure=False) is True
+    assert policies.gate_check(safety, {"content": "x present"}, failure=False) is True

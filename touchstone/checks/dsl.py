@@ -145,7 +145,6 @@ class Target:
 
     output_text: str = ""
     tool_calls: list[dict] = field(default_factory=list)  # [{"name","arguments"}]
-    messages: list[dict] = field(default_factory=list)
     reference: dict | None = None
 
 

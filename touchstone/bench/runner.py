@@ -62,13 +62,9 @@ def _check_result_row(result, kinds: dict) -> dict:
 
 
 def _target(task: tasks_mod.Task, reply) -> Target:
-    messages = list((task.context or {}).get("messages", []))
-    messages.append({"role": "assistant", "content": reply.content,
-                     "tool_calls": reply.tool_calls})
     return Target(
         output_text=reply.content or "",
         tool_calls=reply.tool_calls or [],
-        messages=messages,
         reference=task.reference,
     )
 

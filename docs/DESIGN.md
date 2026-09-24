@@ -160,7 +160,7 @@ timestamps ISO-8601 UTC. SQLite is WAL with `busy_timeout`; each caller holds it
 
 ## Checks DSL
 
-`Check(kind, params)` is evaluated against `Target(output_text, tool_calls, messages, reference)`.
+`Check(kind, params)` is evaluated against `Target(output_text, tool_calls, reference)`.
 Kinds, programmatic first: `contains`, `not_contains`, `regex`, `not_regex`, `json_schema`,
 `tool_called` (name + optional `arguments_match`), `tool_not_called`, `tool_order`, `max_length`,
 `min_length`, `no_pii`, `expr` (a sandboxed expression over `output`/`tools`/`reference`), and
