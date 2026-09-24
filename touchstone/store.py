@@ -393,8 +393,13 @@ def insert_benchmark(conn, bench: Benchmark) -> Benchmark:
     return bench
 
 
-def get_benchmark(conn, id: str) -> Benchmark | None:
-    row = conn.execute("SELECT * FROM benchmarks WHERE id=?", (id,)).fetchone()
+def get_benchmark(conn, id_or_name: str) -> Benchmark | None:
+    """Look up by id, then by name (newest wins), so CLI users can say `bench run demo`."""
+    row = conn.execute("SELECT * FROM benchmarks WHERE id=?", (id_or_name,)).fetchone()
+    if row is None:
+        row = conn.execute(
+            "SELECT * FROM benchmarks WHERE name=? ORDER BY id DESC LIMIT 1", (id_or_name,)
+        ).fetchone()
     return _row_to(Benchmark, "benchmarks", row)
 
 

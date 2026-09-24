@@ -86,3 +86,13 @@ def test_concurrent_writers(db):
         assert len(store.list_episodes(c)) == writers * per
     finally:
         c.close()
+
+
+def test_get_benchmark_by_name_returns_newest(db):
+    c = store.connect(db)
+    old = store.insert_benchmark(c, store.Benchmark(name="demo", task_ids=["a"]))
+    new = store.insert_benchmark(c, store.Benchmark(name="demo", task_ids=["b"]))
+    assert store.get_benchmark(c, "demo").id == new.id
+    assert store.get_benchmark(c, old.id).id == old.id
+    assert store.get_benchmark(c, "missing") is None
+    c.close()
