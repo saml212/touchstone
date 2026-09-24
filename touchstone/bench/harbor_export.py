@@ -117,6 +117,8 @@ if __name__ == "__main__":
 
 GITIGNORE = "__pycache__/\n*.pyc\n.DS_Store\n"
 
+_MARKER = ".touchstone-task"
+
 
 def _slug(text: str) -> str:
     s = re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-").lower()
@@ -201,6 +203,7 @@ def _export_task(conn, task: store.Task, task_dir: Path) -> None:
         shutil.rmtree(task_dir)
     task_dir.mkdir(parents=True)
 
+    _write(task_dir / _MARKER, task.id + "\n")
     _write(task_dir / "task.toml", TASK_TOML.format(
         name=task.name, episode=task.episode_id or "-", task_id=task.id,
         tags=json.dumps(task.tags or []),
@@ -242,4 +245,9 @@ def export(conn, benchmark_id: str, out_dir: str | Path) -> list[Path]:
         task_dir = out / slug
         _export_task(conn, task, task_dir)
         written.append(task_dir)
+
+    keep = {d.resolve() for d in written}
+    for child in out.iterdir():
+        if child.is_dir() and (child / _MARKER).exists() and child.resolve() not in keep:
+            shutil.rmtree(child)
     return written

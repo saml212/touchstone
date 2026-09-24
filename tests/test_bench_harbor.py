@@ -116,3 +116,24 @@ def test_harbor_run_prints_command_when_docker_missing(monkeypatch, tmp_path):
     assert "harbor run -p" in joined and str(tmp_path) in joined
     assert "-a claude" in joined
     assert any("docker" in line for line in lines)
+
+
+def test_reexport_removes_stale_task_dirs_but_not_foreign_files(exported, tmp_path):
+    conn, _bench, out, dirs = exported
+    tasks = store.list_tasks(conn)
+    # a smaller benchmark whose export should prune the dirs of the tasks it drops
+    smaller = benchmark.create(conn, "smaller", task_ids=[tasks[0].id, tasks[1].id])
+    # a foreign file and dir the export must never touch
+    (out / "notes.txt").write_text("keep me")
+    (out / "mystuff").mkdir()
+    (out / "mystuff" / "a.txt").write_text("keep me too")
+
+    kept = harbor_export.export(conn, smaller.id, out)
+    kept_names = {d.name for d in kept}
+    for d in dirs:
+        if d.name in kept_names:
+            assert d.exists()
+        else:
+            assert not d.exists(), f"stale touchstone task dir {d.name} was not removed"
+    assert (out / "notes.txt").exists()
+    assert (out / "mystuff" / "a.txt").exists()
