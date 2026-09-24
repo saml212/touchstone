@@ -36,7 +36,8 @@ def _mine(settings, code, no_llm, limit, provider_spec) -> dict:
             provider = None
     conn = store.connect(settings.db_path)
     try:
-        summary = run(conn, provider=provider, code_snippets=snippets, no_llm=no_llm, limit=limit)
+        summary = run(conn, settings.root, provider=provider, code_snippets=snippets,
+                      no_llm=no_llm, limit=limit)
     except (OSError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
     finally:

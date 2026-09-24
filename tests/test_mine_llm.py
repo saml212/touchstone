@@ -1,6 +1,7 @@
 import json
 
 from touchstone import store
+from touchstone.checks import Check
 from touchstone.llm import Rule, ScriptedProvider
 from touchstone.mine import Proposal, dedupe, mine_llm
 
@@ -70,7 +71,7 @@ def test_mine_llm_caps_at_25(conn):
 
 
 def test_dedupe_drops_matches_against_existing_checks():
-    existing = [store.Check(name="r", kind="tool_called", params={"name": "refund"})]
+    existing = [Check(name="r", kind="tool_called", params={"name": "refund"})]
     proposals = [
         Proposal(kind="contains", params={"values": ["thanks"]}),
         Proposal(kind="tool_called", params={"name": "refund"}),  # identical to existing
@@ -88,6 +89,6 @@ def test_dedupe_collapses_duplicates_within_batch():
 
 
 def test_dedupe_param_key_order_insensitive():
-    existing = [store.Check(name="j", kind="json_schema", params={"a": 1, "b": 2})]
+    existing = [Check(name="j", kind="json_schema", params={"a": 1, "b": 2})]
     proposals = [Proposal(kind="json_schema", params={"b": 2, "a": 1})]
     assert dedupe(existing, proposals) == []

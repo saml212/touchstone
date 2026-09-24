@@ -4,7 +4,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from touchstone import store
+from touchstone import store, tasks
 from touchstone.config import Settings
 from touchstone.llm import Rule, ScriptedProvider
 from touchstone.server import create_app
@@ -20,18 +20,17 @@ DRAFT_JSON = json.dumps(
 
 
 def _seed_task(db):
+    root = Settings(db_path=db).root
     conn = store.connect(db)
     try:
         ep = store.insert_episode(conn, store.Episode(name="ep1", outcome_label="ok"))
-        task = store.insert_task(
-            conn,
-            store.Task(name="t1", episode_id=ep.id,
-                       context={"messages": [{"role": "user", "content": "help"}], "tools": []},
-                       reference={"content": "sure", "tool_calls": []}),
-        )
-        return task.id
     finally:
         conn.close()
+    tasks.write_task(root, tasks.Task(
+        name="t1", episode_id=ep.id,
+        context={"messages": [{"role": "user", "content": "help"}], "tools": []},
+        reference={"content": "sure", "tool_calls": []}))
+    return "t1"
 
 
 def _app(db, agent_provider="scripted"):

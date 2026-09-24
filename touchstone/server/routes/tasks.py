@@ -1,11 +1,12 @@
-"""Tasks: list (filter + paginate), detail with resolved checks, and attach/detach."""
+"""Tasks: list (filter + paginate), detail with its checks, and add/remove a check block."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from ... import store
-from ._deps import get_conn, paginate, task_detail, task_view
+from ... import tasks as tasks_mod
+from ...checks import Check
+from ._deps import get_root, paginate, task_detail, task_view
 
 router = APIRouter()
 
@@ -15,37 +16,41 @@ def list_tasks(
     tag: str | None = None,
     limit: int | None = Query(None, ge=0),
     offset: int = Query(0, ge=0),
-    conn=Depends(get_conn),
+    root=Depends(get_root),
 ) -> dict:
-    tasks = store.list_tasks(conn, tag)
+    tasks = tasks_mod.list_tasks(root, tag=tag)
     page = paginate(tasks, limit, offset)
-    return {"total": len(tasks), "tasks": [task_view(conn, t) for t in page]}
+    return {"total": len(tasks), "tasks": [task_view(t) for t in page]}
 
 
-@router.get("/api/tasks/{task_id}")
-def get_task(task_id: str, conn=Depends(get_conn)) -> dict:
-    task = store.get_task(conn, task_id)
+@router.get("/api/tasks/{name}")
+def get_task(name: str, root=Depends(get_root)) -> dict:
+    task = tasks_mod.get_task(root, name)
     if task is None:
-        raise HTTPException(404, f"no task with id {task_id}")
-    return task_detail(conn, task)
+        raise HTTPException(404, f"no task {name!r}")
+    return task_detail(task)
 
 
-@router.post("/api/tasks/{task_id}/checks")
-def attach_check(task_id: str, body: dict, conn=Depends(get_conn)) -> dict:
-    check_id = (body.get("check_id") or "").strip()
-    if not check_id:
-        raise HTTPException(422, "check_id is required")
+@router.post("/api/tasks/{name}/checks")
+def add_check(name: str, body: dict, root=Depends(get_root)) -> dict:
+    if tasks_mod.get_task(root, name) is None:
+        raise HTTPException(404, f"no task {name!r}")
     try:
-        task = store.set_task_check(conn, task_id, check_id, attach=True)
+        check = Check(kind=body.get("kind") or "", params=body.get("params") or {},
+                      name=body.get("name") or body.get("kind") or "",
+                      severity=body.get("severity", "hard"),
+                      applies_to=body.get("applies_to", "final"),
+                      rule=body.get("rule", ""), because=body.get("because", ""), source="manual")
+        check.id = check.name
+        check.validate()
     except ValueError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    return task_detail(conn, task)
+        raise HTTPException(422, str(exc)) from exc
+    tasks_mod.append_check(root, name, check)
+    return task_detail(tasks_mod.get_task(root, name))
 
 
-@router.delete("/api/tasks/{task_id}/checks/{check_id}")
-def detach_check(task_id: str, check_id: str, conn=Depends(get_conn)) -> dict:
-    try:
-        task = store.set_task_check(conn, task_id, check_id, attach=False)
-    except ValueError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    return task_detail(conn, task)
+@router.delete("/api/tasks/{name}/checks/{check_name}")
+def remove_check(name: str, check_name: str, root=Depends(get_root)) -> dict:
+    if tasks_mod.get_task(root, name) is None:
+        raise HTTPException(404, f"no task {name!r}")
+    return task_detail(tasks_mod.remove_check(root, name, check_name))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 
 from . import app
-from ._common import _agent_provider, _db
+from ._common import _agent_provider, _db, _root
 
 
 @app.command()
@@ -27,7 +27,7 @@ def mine(
         prov = _agent_provider(provider or settings.agent_provider)
     with _db() as conn:
         summary = run_mine(
-            conn, provider=prov, code_snippets=snippets,
+            conn, _root(), provider=prov, code_snippets=snippets,
             no_llm=no_llm, limit=limit,
         )
 

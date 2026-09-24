@@ -26,6 +26,11 @@ def _fail_on(exc_types, message: str = "{exc}"):
         _fail(message.format(exc=exc))
 
 
+def _root():
+    """The project root that holds tasks/, checks.toml and benchmarks/."""
+    return load_settings().root
+
+
 def _open_db():
     try:
         return store.connect(load_settings().db_path)

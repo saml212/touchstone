@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import typer
 
-from .. import store
+from .. import tasks as tasks_mod
 from . import app
-from ._common import _db, _fail
+from ._common import _db, _fail, _root
 
 
 @app.command()
 def interview(
-    task_id: str,
+    name: str,
     topic: str = typer.Option(None, "--topic", help="Room topic (defaults to the task name)."),
     no_open: bool = typer.Option(False, "--no-open", help="Do not open a browser."),
 ) -> None:
@@ -20,13 +20,14 @@ def interview(
     from ..interview.agent import Interviewer
 
     host, port = "127.0.0.1", 8765
+    root = _root()
+    task = tasks_mod.get_task(root, name)
+    if task is None:
+        _fail(f"no task {name!r}")
     with _db() as conn:
-        task = store.get_task(conn, task_id)
-        if task is None:
-            _fail(f"no task with id {task_id}")
-        room = rooms.open(conn, task_id, topic or f"review of {task.name}")
+        room = rooms.open(conn, name, topic or f"review of {task.name}")
         rooms.post(conn, room.id, "agent", "assistant",
-                   Interviewer(None, conn, room).open_statement())
+                   Interviewer(None, conn, room, root).open_statement())
 
     url = f"http://{host}:{port}/rooms/{room.id}"
     typer.echo(url)

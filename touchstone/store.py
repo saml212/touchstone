@@ -29,7 +29,13 @@ def _loads(text):
     return None if text is None else json.loads(text)
 
 
-SCHEMA_VERSION = 1
+# v2 (2026-09): authored artifacts (tasks, checks, benchmarks) moved to files; the DB keeps only
+# captured traces and the machine run record. A v1 DB opens fine — the old authored tables and the
+# stale run record are dropped, and `mine` rebuilds tasks/checks from the preserved episodes.
+SCHEMA_VERSION = 2
+
+# Tables an earlier schema created that no longer exist; dropped on migration.
+_DROPPED = ("checks", "tasks", "benchmarks", "room_checks", "runs", "results")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
@@ -42,34 +48,20 @@ CREATE TABLE IF NOT EXISTS spans (
   tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spans_episode ON spans(episode_id);
-CREATE TABLE IF NOT EXISTS checks (
-  id TEXT PRIMARY KEY, name TEXT, kind TEXT, params TEXT, applies_to TEXT, severity TEXT,
-  source TEXT, rationale TEXT, enabled INTEGER, created_at TEXT
-);
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY, name TEXT, episode_id TEXT, cut_span_id TEXT, context TEXT,
-  reference TEXT, check_ids TEXT, kind TEXT, tags TEXT, created_at TEXT
-);
-CREATE TABLE IF NOT EXISTS benchmarks (
-  id TEXT PRIMARY KEY, name TEXT, task_ids TEXT, created_at TEXT
-);
 CREATE TABLE IF NOT EXISTS runs (
-  id TEXT PRIMARY KEY, benchmark_id TEXT, model_spec TEXT,
+  id TEXT PRIMARY KEY, target TEXT, model_spec TEXT,
   started_at TEXT, finished_at TEXT, meta TEXT
 );
 CREATE TABLE IF NOT EXISTS results (
-  run_id TEXT, task_id TEXT, passed INTEGER, check_results TEXT, output TEXT,
+  run_id TEXT, task TEXT, passed INTEGER, reward REAL, check_results TEXT, output TEXT,
   latency_ms INTEGER, cost_usd REAL, error TEXT,
-  PRIMARY KEY (run_id, task_id)
+  PRIMARY KEY (run_id, task)
 );
 CREATE TABLE IF NOT EXISTS rooms (
   id TEXT PRIMARY KEY, task_id TEXT, topic TEXT, created_at TEXT, closed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS room_messages (
   id TEXT PRIMARY KEY, room_id TEXT, speaker TEXT, role TEXT, text TEXT, audio_path TEXT, ts TEXT
-);
-CREATE TABLE IF NOT EXISTS room_checks (
-  room_id TEXT, check_id TEXT, PRIMARY KEY (room_id, check_id)
 );
 """
 
@@ -85,8 +77,12 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
-    if conn.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version < SCHEMA_VERSION:
         with write(conn):
+            if version >= 1:  # v1 -> v2: authored artifacts left the DB; the run record is stale
+                for table in _DROPPED:
+                    conn.execute(f"DROP TABLE IF EXISTS {table}")
             for statement in SCHEMA.split(";"):
                 if statement.strip():
                     conn.execute(statement)
@@ -154,44 +150,8 @@ class Span:
 
 
 @dataclass
-class Check:
-    name: str
-    kind: str
-    params: dict = field(default_factory=dict)
-    applies_to: str = "final"
-    severity: str = "hard"
-    source: str = "manual"
-    rationale: str = ""
-    enabled: int = 0
-    created_at: str = field(default_factory=now)
-    id: str = field(default_factory=new_id)
-
-
-@dataclass
-class Task:
-    name: str
-    episode_id: str | None = None
-    cut_span_id: str | None = None
-    context: dict = field(default_factory=dict)
-    reference: dict | None = None
-    check_ids: list = field(default_factory=list)
-    kind: str = "replay"
-    tags: list = field(default_factory=list)
-    created_at: str = field(default_factory=now)
-    id: str = field(default_factory=new_id)
-
-
-@dataclass
-class Benchmark:
-    name: str
-    task_ids: list = field(default_factory=list)
-    created_at: str = field(default_factory=now)
-    id: str = field(default_factory=new_id)
-
-
-@dataclass
 class Run:
-    benchmark_id: str
+    target: str  # a benchmark name, a tasks/ path, or a glob
     model_spec: str
     started_at: str = field(default_factory=now)
     finished_at: str | None = None
@@ -202,9 +162,10 @@ class Run:
 @dataclass
 class Result:
     run_id: str
-    task_id: str
+    task: str  # task directory name
     passed: int
-    check_results: list = field(default_factory=list)
+    reward: float
+    check_results: dict = field(default_factory=dict)  # keyed by check name
     output: dict = field(default_factory=dict)
     latency_ms: int | None = None
     cost_usd: float | None = None
@@ -235,9 +196,6 @@ class RoomMessage:
 _JSON_COLS = {
     "episodes": {"meta"},
     "spans": {"input", "output"},
-    "checks": {"params"},
-    "tasks": {"context", "reference", "check_ids", "tags"},
-    "benchmarks": {"task_ids"},
     "runs": {"meta"},
     "results": {"check_results", "output"},
 }
@@ -335,102 +293,6 @@ def update_span(conn, id: str, **fields) -> None:
     _update(conn, "spans", "id", id, **fields)
 
 
-# ---- checks ----------------------------------------------------------------
-
-
-def insert_check(conn, check: Check) -> Check:
-    _insert(conn, "checks", check)
-    return check
-
-
-def get_check(conn, id: str) -> Check | None:
-    row = conn.execute("SELECT * FROM checks WHERE id=?", (id,)).fetchone()
-    return _row_to(Check, "checks", row)
-
-
-def list_checks(conn, enabled: bool | None = None) -> list[Check]:
-    if enabled is None:
-        rows = conn.execute("SELECT * FROM checks ORDER BY id").fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM checks WHERE enabled=? ORDER BY id", (1 if enabled else 0,)
-        ).fetchall()
-    return [_row_to(Check, "checks", r) for r in rows]
-
-
-def set_check_enabled(conn, id: str, enabled: bool) -> None:
-    _update(conn, "checks", "id", id, enabled=1 if enabled else 0)
-
-
-def update_check(conn, id: str, **fields) -> None:
-    _update(conn, "checks", "id", id, **fields)
-
-
-# ---- tasks -----------------------------------------------------------------
-
-
-def insert_task(conn, task: Task) -> Task:
-    _insert(conn, "tasks", task)
-    return task
-
-
-def get_task(conn, id: str) -> Task | None:
-    row = conn.execute("SELECT * FROM tasks WHERE id=?", (id,)).fetchone()
-    return _row_to(Task, "tasks", row)
-
-
-def list_tasks(conn, tag: str | None = None) -> list[Task]:
-    rows = conn.execute("SELECT * FROM tasks ORDER BY id").fetchall()
-    tasks = [_row_to(Task, "tasks", r) for r in rows]
-    if tag is not None:
-        tasks = [t for t in tasks if tag in (t.tags or [])]
-    return tasks
-
-
-def update_task(conn, id: str, **fields) -> None:
-    _update(conn, "tasks", "id", id, **fields)
-
-
-def set_task_check(conn, task_id: str, check_id: str, attach: bool) -> Task:
-    """Attach or detach a check on a task, idempotently. Raises ValueError for unknown ids."""
-    task = get_task(conn, task_id)
-    if task is None:
-        raise ValueError(f"no task with id {task_id}")
-    if attach and get_check(conn, check_id) is None:
-        raise ValueError(f"no check with id {check_id}")
-    ids = list(task.check_ids or [])
-    if attach:
-        if check_id not in ids:
-            ids.append(check_id)
-    else:
-        ids = [c for c in ids if c != check_id]
-    update_task(conn, task_id, check_ids=ids)
-    return get_task(conn, task_id)
-
-
-# ---- benchmarks ------------------------------------------------------------
-
-
-def insert_benchmark(conn, bench: Benchmark) -> Benchmark:
-    _insert(conn, "benchmarks", bench)
-    return bench
-
-
-def get_benchmark(conn, id_or_name: str) -> Benchmark | None:
-    """Look up by id, then by name (newest wins), so CLI users can say `bench run demo`."""
-    row = conn.execute("SELECT * FROM benchmarks WHERE id=?", (id_or_name,)).fetchone()
-    if row is None:
-        row = conn.execute(
-            "SELECT * FROM benchmarks WHERE name=? ORDER BY id DESC LIMIT 1", (id_or_name,)
-        ).fetchone()
-    return _row_to(Benchmark, "benchmarks", row)
-
-
-def list_benchmarks(conn) -> list[Benchmark]:
-    rows = conn.execute("SELECT * FROM benchmarks ORDER BY id").fetchall()
-    return [_row_to(Benchmark, "benchmarks", r) for r in rows]
-
-
 # ---- runs ------------------------------------------------------------------
 
 
@@ -444,12 +306,12 @@ def get_run(conn, id: str) -> Run | None:
     return _row_to(Run, "runs", row)
 
 
-def list_runs(conn, benchmark_id: str | None = None) -> list[Run]:
-    if benchmark_id is None:
+def list_runs(conn, target: str | None = None) -> list[Run]:
+    if target is None:
         rows = conn.execute("SELECT * FROM runs ORDER BY id").fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM runs WHERE benchmark_id=? ORDER BY id", (benchmark_id,)
+            "SELECT * FROM runs WHERE target=? ORDER BY id", (target,)
         ).fetchall()
     return [_row_to(Run, "runs", r) for r in rows]
 
@@ -468,7 +330,7 @@ def insert_result(conn, result: Result) -> Result:
 
 def list_results(conn, run_id: str) -> list[Result]:
     rows = conn.execute(
-        "SELECT * FROM results WHERE run_id=? ORDER BY task_id", (run_id,)
+        "SELECT * FROM results WHERE run_id=? ORDER BY task", (run_id,)
     ).fetchall()
     return [_row_to(Result, "results", r) for r in rows]
 
@@ -501,21 +363,6 @@ def list_room_messages(conn, room_id: str) -> list[RoomMessage]:
         "SELECT * FROM room_messages WHERE room_id=? ORDER BY id", (room_id,)
     ).fetchall()
     return [_row_to(RoomMessage, "room_messages", r) for r in rows]
-
-
-def link_room_check(conn, room_id: str, check_id: str) -> None:
-    with write(conn):
-        conn.execute(
-            "INSERT OR IGNORE INTO room_checks (room_id, check_id) VALUES (?, ?)",
-            (room_id, check_id),
-        )
-
-
-def list_room_check_ids(conn, room_id: str) -> list[str]:
-    rows = conn.execute(
-        "SELECT check_id FROM room_checks WHERE room_id=? ORDER BY check_id", (room_id,)
-    ).fetchall()
-    return [r["check_id"] for r in rows]
 
 
 def close_room(conn, room_id: str) -> None:

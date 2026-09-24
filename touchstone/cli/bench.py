@@ -8,7 +8,7 @@ from typing import Annotated
 import typer
 
 from .. import store
-from ._common import _agent_provider, _db, _fail_on
+from ._common import _agent_provider, _db, _fail_on, _root
 
 bench_app = typer.Typer(help="Assemble benchmarks, run models, and report results.",
                         no_args_is_help=True)
@@ -18,40 +18,42 @@ bench_app = typer.Typer(help="Assemble benchmarks, run models, and report result
 def bench_create(
     name: str,
     tag: Annotated[list[str], typer.Option("--tag", help="Task tag (repeatable).")] = None,
-    all_tasks: bool = typer.Option(False, "--all", help="Include every task."),
-    task_id: Annotated[list[str], typer.Option("--task", help="Task id (repeatable).")] = None,
+    all_tasks: bool = typer.Option(False, "--all", help="Include every active task."),
+    task: Annotated[list[str], typer.Option("--task", help="Task dir name (repeatable).")] = None,
 ) -> None:
-    """Freeze a named benchmark from explicit task ids, tag filters, or --all."""
+    """Write benchmarks/<name>.toml from explicit task names, tag filters, or --all."""
     from ..bench import benchmark
 
-    with _db() as conn, _fail_on(ValueError):
-        bench = benchmark.create(conn, name, task_ids=task_id or None,
-                                 tags=tag or None, all_tasks=all_tasks)
-    typer.echo(f"created benchmark {bench.id} ({len(bench.task_ids)} tasks)")
+    with _fail_on(ValueError):
+        path = benchmark.create(_root(), name, task_names=task or None,
+                                tags=tag or None, all_tasks=all_tasks)
+    count = len(benchmark.resolve(_root(), name))
+    typer.echo(f"wrote {path} ({count} tasks)")
 
 
 @bench_app.command("run")
 def bench_run(
-    benchmark_id: str,
+    target: str,
     model: Annotated[list[str], typer.Option("-m", "--model", help="Model spec (repeatable).")],
     concurrency: int = typer.Option(4, "--concurrency", help="Parallel replays per model."),
     judge: str = typer.Option(None, "--judge", help="Provider spec for judge checks."),
     timeout: float = typer.Option(60.0, "--timeout", help="Per-task timeout in seconds."),
 ) -> None:
-    """Replay a benchmark against each model spec in turn, then print the scoreboard."""
+    """Replay a benchmark (or tasks path/glob) against each model, then print the scoreboard."""
     from ..bench import render_scoreboard, runner, scoreboard
 
+    root = _root()
     judge_provider = _agent_provider(judge) if judge else None
     with _db() as conn:
         run_ids = []
         for spec in model:
             with _fail_on(Exception, f"run failed for {spec!r}: {{exc}}"):
-                run = runner.run(conn, benchmark_id, spec, concurrency=concurrency,
+                run = runner.run(conn, root, target, spec, concurrency=concurrency,
                                  timeout=timeout, judge_provider=judge_provider)
             run_ids.append(run.id)
             typer.echo(f"ran {spec} -> {run.id}")
         typer.echo("")
-        typer.echo(render_scoreboard(scoreboard(conn, run_ids)))
+        typer.echo(render_scoreboard(scoreboard(conn, root, run_ids)))
 
 
 @bench_app.command("report")
@@ -64,7 +66,7 @@ def bench_report(
 
     with _db() as conn:
         ids = list(run_id) if run_id else [r.id for r in store.list_runs(conn)]
-        board = scoreboard(conn, ids)
+        board = scoreboard(conn, _root(), ids)
     typer.echo(json.dumps(board, ensure_ascii=False, indent=2) if as_json
                else render_scoreboard(board))
 
@@ -86,11 +88,11 @@ def bench_proof(
 
 @bench_app.command("runs")
 def bench_runs() -> None:
-    """List runs with their model, benchmark, and finished state."""
+    """List runs with their model, target, and finished state."""
     with _db() as conn:
         for r in store.list_runs(conn):
             state = "done" if r.finished_at else "unfinished"
-            typer.echo(f"{r.id}  {state:10} {r.model_spec:28} bench={r.benchmark_id}")
+            typer.echo(f"{r.id}  {state:10} {r.model_spec:28} target={r.target}")
 
 
 @bench_app.command("harbor-run")
@@ -98,28 +100,25 @@ def bench_harbor_run(
     task_dir: str,
     agent: str = typer.Option(None, "--agent", "-a", help="Harbor agent name."),
 ) -> None:
-    """Run an exported Harbor task dir via `harbor run` (or explain what's missing)."""
+    """Run a task dir via `harbor run` (or explain what's missing)."""
     from ..bench import harbor_run_task
 
     code = harbor_run_task(task_dir, agent=agent, echo=typer.echo)
     raise typer.Exit(code)
 
 
-export_app = typer.Typer(help="Export tasks to Harbor or an episode to ATIF.",
+export_app = typer.Typer(help="Point at the Harbor tasks, or export an episode to ATIF.",
                          no_args_is_help=True)
 
 
 @export_app.command("harbor")
-def export_harbor(
-    benchmark_id: str,
-    out: str = typer.Option("./harbor-tasks", "--out", help="Output directory."),
-) -> None:
-    """Write one Harbor task directory per task in the benchmark."""
-    from ..bench import export as export_harbor_tasks
+def export_harbor() -> None:
+    """Tasks are already Harbor tasks — print the path and the `harbor run` command."""
+    from ..bench import harbor_tasks_path
 
-    with _db() as conn, _fail_on(ValueError):
-        dirs = export_harbor_tasks(conn, benchmark_id, out)
-    typer.echo(f"exported {len(dirs)} task(s) to {out}")
+    path = harbor_tasks_path(_root())
+    typer.echo(f"your tasks are already Harbor tasks: {path}")
+    typer.echo(f"  harbor run -p {path}")
 
 
 @export_app.command("atif")

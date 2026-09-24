@@ -6,18 +6,22 @@ from collections import Counter
 
 from fastapi import APIRouter, Depends
 
+from ... import policies as policies_mod
 from ... import store
-from ._deps import get_conn
+from ... import tasks as tasks_mod
+from ...bench import benchmark
+from ._deps import get_conn, get_root
 
 router = APIRouter()
 
 
 @router.get("/api/overview")
-def overview(conn=Depends(get_conn)) -> dict:
+def overview(conn=Depends(get_conn), root=Depends(get_root)) -> dict:
     episodes = store.list_episodes(conn)
     outcomes = Counter(e.outcome_label or "unlabeled" for e in episodes)
     spans = sum(len(store.list_spans(conn, e.id)) for e in episodes)
-    checks = store.list_checks(conn)
+    checks = policies_mod.read_policies(root)
+    tasks = tasks_mod.list_tasks(root)
     rooms = store.list_rooms(conn)
     return {
         "episodes": {"total": len(episodes), "outcomes": dict(outcomes)},
@@ -25,10 +29,10 @@ def overview(conn=Depends(get_conn)) -> dict:
         "checks": {
             "total": len(checks),
             "enabled": sum(1 for c in checks if c.enabled),
-            "by_source": dict(Counter(c.source for c in checks)),
+            "by_source": dict(Counter(c.check.source for c in checks)),
         },
-        "tasks": len(store.list_tasks(conn)),
-        "benchmarks": len(store.list_benchmarks(conn)),
+        "tasks": {"total": len(tasks), "active": sum(1 for t in tasks if t.status == "active")},
+        "benchmarks": len(benchmark.list_names(root)),
         "runs": len(store.list_runs(conn)),
         "rooms": {"total": len(rooms), "open": sum(1 for r in rooms if r.closed_at is None)},
     }

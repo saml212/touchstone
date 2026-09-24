@@ -1,38 +1,26 @@
-"""Replay a benchmark's tasks against a candidate model and store per-task results.
+"""Replay a target's tasks against a candidate model and store per-task results.
 
-Each task's recorded context (messages + tools) is replayed to the provider, the reply becomes a
-checks `Target`, the task's enabled checks are evaluated, and a `Result` is stored. Results insert
-as they complete, so a killed run leaves partial data; `finish_run` marks a run done. Provider
-failures (after the provider's own retries) become a result with `error` set and `passed=0` — the
-run continues. Determinism: with the `scripted` provider a rerun yields identical results (latency
-aside, which is wall-clock).
+A target (a benchmark name, a `tasks/` path, or a glob) resolves to task directories; each task's
+recorded context is replayed to the provider, the reply becomes a checks `Target`, the task's checks
+are evaluated, and a `Result` (with the real `reward`) is stored — plus a portable copy under
+`.touchstone/runs/<id>/`. Results insert as they complete, so a killed run leaves partial data.
+Provider failures (after the provider's own retries) become a result with `error` set and reward 0;
+the run continues. Determinism: with the `scripted` provider a rerun yields identical results.
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import time
-from dataclasses import asdict
+from pathlib import Path
 
 from .. import store
-from ..checks import Check as DslCheck
+from .. import tasks as tasks_mod
 from ..checks import Target, evaluate, passes
 from ..llm import provider_from_spec
-from . import pricing
-
-
-def _task_checks(conn, task: store.Task) -> list[DslCheck]:
-    checks = []
-    for cid in task.check_ids or []:
-        row = store.get_check(conn, cid)
-        if row is None or not row.enabled:
-            continue
-        checks.append(DslCheck.from_dict({
-            "kind": row.kind, "params": row.params, "id": row.id, "name": row.name,
-            "applies_to": row.applies_to, "severity": row.severity,
-        }))
-    return checks
+from . import benchmark, pricing
 
 
 def _accepts_task(fn) -> bool:
@@ -65,7 +53,7 @@ async def _call(provider, messages, tools, timeout, task):
     return await asyncio.wait_for(coro, timeout)
 
 
-def _target(task: store.Task, reply) -> Target:
+def _target(task: tasks_mod.Task, reply) -> Target:
     messages = list((task.context or {}).get("messages", []))
     messages.append({"role": "assistant", "content": reply.content,
                      "tool_calls": reply.tool_calls})
@@ -77,8 +65,8 @@ def _target(task: store.Task, reply) -> Target:
     )
 
 
-async def _run_task(conn, run_id, model_spec, provider, task, timeout, judge_provider) -> None:
-    checks = _task_checks(conn, task)
+async def _run_task(run_id, model_spec, provider, task, timeout, judge_provider, results) -> None:
+    checks = task.checks
     started = time.monotonic()
     error = None
     reply = None
@@ -92,69 +80,98 @@ async def _run_task(conn, run_id, model_spec, provider, task, timeout, judge_pro
     latency_ms = int((time.monotonic() - started) * 1000)
 
     if error is not None:
-        result = store.Result(run_id=run_id, task_id=task.id, passed=0, error=error,
-                              latency_ms=latency_ms)
-    else:
-        target = _target(task, reply)
-        results = evaluate(checks, target, judge_provider=judge_provider)
-        result = store.Result(
-            run_id=run_id,
-            task_id=task.id,
-            passed=1 if passes(results, checks) else 0,
-            check_results=[asdict(r) for r in results],
-            output={"content": reply.content, "tool_calls": reply.tool_calls},
-            latency_ms=latency_ms,
-            cost_usd=pricing.cost_usd(model_spec, reply.usage),
-        )
-    store.insert_result(conn, result)
+        results.append(store.Result(run_id=run_id, task=task.name, passed=0, reward=0.0,
+                                    error=error, latency_ms=latency_ms))
+        return
+    outcomes = evaluate(checks, _target(task, reply), judge_provider=judge_provider)
+    ok = passes(outcomes, checks)
+    kinds = {c.id: c.kind for c in checks}
+    results.append(store.Result(
+        run_id=run_id,
+        task=task.name,
+        passed=1 if ok else 0,
+        reward=1.0 if ok else 0.0,
+        check_results={r.check_id: {"passed": r.passed, "evidence": r.evidence,
+                                    "kind": kinds.get(r.check_id, "")} for r in outcomes},
+        output={"content": reply.content, "tool_calls": reply.tool_calls},
+        latency_ms=latency_ms,
+        cost_usd=pricing.cost_usd(model_spec, reply.usage),
+    ))
 
 
-async def _run_async(conn, run, tasks, provider, concurrency, timeout, judge_provider) -> None:
+async def _run_async(model_spec, provider, tasks, concurrency, timeout, judge_provider, results):
     sem = asyncio.Semaphore(max(1, concurrency))
 
     async def guarded(task):
         async with sem:
-            await _run_task(conn, run.id, run.model_spec, provider, task, timeout, judge_provider)
+            await _run_task(results["run_id"], model_spec, provider, task, timeout,
+                            judge_provider, results["rows"])
 
     await asyncio.gather(*(guarded(t) for t in tasks))
 
 
+def _run_dir(root, run_id: str) -> Path:
+    return Path(root) / ".touchstone" / "runs" / run_id
+
+
+def _write_run_files(root, run: store.Run, results: list[store.Result]) -> None:
+    """The portable copy the DB indexes: run.json + results.jsonl under .touchstone/runs/<id>/."""
+    run_dir = _run_dir(root, run.id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "run.json").write_text(json.dumps({
+        "id": run.id, "target": run.target, "model_spec": run.model_spec,
+        "started_at": run.started_at, "finished_at": run.finished_at, "meta": run.meta,
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    lines = [json.dumps({
+        "task": r.task, "reward": r.reward, "passed": bool(r.passed),
+        "check_results": r.check_results, "latency_ms": r.latency_ms,
+        "cost_usd": r.cost_usd, "error": r.error,
+    }, ensure_ascii=False) for r in results]
+    (run_dir / "results.jsonl").write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+
+
 def start(
     conn,
-    benchmark_id: str,
+    root: str,
+    target: str,
     model_spec: str,
     *,
     concurrency: int = 4,
     timeout: float = 60,
 ) -> store.Run:
-    """Create the Run row (validating the benchmark) and return it without executing anything."""
+    """Create the Run row (validating the target resolves to tasks) without executing anything."""
     if concurrency < 1:
         raise ValueError("concurrency must be a positive integer")
-    bench = store.get_benchmark(conn, benchmark_id)
-    if bench is None:
-        raise ValueError(f"no benchmark {benchmark_id!r}")
-    tasks = [t for t in (store.get_task(conn, tid) for tid in bench.task_ids) if t is not None]
+    task_dirs = benchmark.resolve(root, target)
+    if not task_dirs:
+        raise ValueError(f"target {target!r} resolves to no active tasks")
     return store.insert_run(conn, store.Run(
-        benchmark_id=bench.id, model_spec=model_spec,
-        meta={"concurrency": concurrency, "timeout": timeout, "task_count": len(tasks)},
+        target=target, model_spec=model_spec,
+        meta={"concurrency": concurrency, "timeout": timeout, "task_count": len(task_dirs)},
     ))
 
 
-def execute(conn, run: store.Run, *, judge_provider=None, provider=None) -> store.Run:
+def execute(conn, root: str, run: store.Run, *, judge_provider=None, provider=None) -> store.Run:
     """Replay a started run's tasks, storing results as they finish, then mark the run done."""
     provider = provider or provider_from_spec(run.model_spec)
-    bench = store.get_benchmark(conn, run.benchmark_id)
-    tasks = [t for t in (store.get_task(conn, tid) for tid in bench.task_ids) if t is not None]
+    tasks = [tasks_mod.read_task(d) for d in benchmark.resolve(root, run.target)]
     concurrency = run.meta.get("concurrency", 4)
     timeout = run.meta.get("timeout", 60)
-    asyncio.run(_run_async(conn, run, tasks, provider, concurrency, timeout, judge_provider))
+    state = {"run_id": run.id, "rows": []}
+    asyncio.run(_run_async(run.model_spec, provider, tasks, concurrency, timeout,
+                           judge_provider, state))
+    for result in state["rows"]:
+        store.insert_result(conn, result)
     store.finish_run(conn, run.id)
-    return store.get_run(conn, run.id)
+    finished = store.get_run(conn, run.id)
+    _write_run_files(root, finished, store.list_results(conn, run.id))
+    return finished
 
 
 def run(
     conn,
-    benchmark_id: str,
+    root: str,
+    target: str,
     model_spec: str,
     *,
     concurrency: int = 4,
@@ -162,16 +179,17 @@ def run(
     judge_provider=None,
     provider=None,
 ) -> store.Run:
-    """Replay every task in `benchmark_id` against `model_spec` and store a Run + its Results."""
-    run_row = start(conn, benchmark_id, model_spec, concurrency=concurrency, timeout=timeout)
-    return execute(conn, run_row, judge_provider=judge_provider, provider=provider)
+    """Replay every task in `target` against `model_spec` and store a Run + its Results."""
+    run_row = start(conn, root, target, model_spec, concurrency=concurrency, timeout=timeout)
+    return execute(conn, root, run_row, judge_provider=judge_provider, provider=provider)
 
 
 def result_view(result: store.Result) -> dict:
     """A result's deterministic fields (latency excluded) for rerun-equality assertions."""
     return {
-        "task_id": result.task_id,
+        "task": result.task,
         "passed": result.passed,
+        "reward": result.reward,
         "check_results": result.check_results,
         "output": result.output,
         "cost_usd": result.cost_usd,

@@ -1,18 +1,19 @@
+from pathlib import Path
+
 from typer.testing import CliRunner
 
-from touchstone import store
+from touchstone import store, tasks
 from touchstone.cli import app
 
 runner = CliRunner()
 
 
 def _seed(db):
-    conn = store.connect(db)
-    try:
-        task = store.insert_task(conn, store.Task(name="t1"))
-        return task.id
-    finally:
-        conn.close()
+    root = str(Path(db).parent)
+    tasks.write_task(root, tasks.Task(
+        name="t1", context={"messages": [{"role": "user", "content": "hi"}], "tools": []},
+        reference={"content": "hello", "tool_calls": []}))
+    return "t1"
 
 
 def test_doctor_reports_speech(tmp_path, monkeypatch):

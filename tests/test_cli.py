@@ -150,7 +150,7 @@ def test_readonly_db_dir_fails_cleanly(tmp_path, monkeypatch):
     os.chmod(ro, stat.S_IRUSR | stat.S_IXUSR)
     monkeypatch.setenv("TOUCHSTONE_DB", str(ro / "sub" / "t.db"))
     try:
-        result = runner.invoke(app, ["checks", "list"], catch_exceptions=False)
+        result = runner.invoke(app, ["bench", "runs"], catch_exceptions=False)
         assert result.exit_code == 1
         assert "\n" not in result.output.strip()
         init = runner.invoke(app, ["init"], catch_exceptions=False)

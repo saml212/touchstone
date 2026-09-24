@@ -76,7 +76,7 @@ async function overviewPage() {
   const tiles = [
     ["Episodes", o.episodes.total], ["Spans", o.spans],
     ["Checks", `${o.checks.enabled}/${o.checks.total} on`],
-    ["Tasks", o.tasks], ["Benchmarks", o.benchmarks],
+    ["Tasks", o.tasks.total], ["Benchmarks", o.benchmarks],
     ["Runs", o.runs], ["Rooms open", o.rooms.open],
   ].map(([k, v]) => `<div class="tile"><div class="num">${esc(v)}</div><div class="lbl">${esc(k)}</div></div>`).join("");
 
@@ -155,13 +155,13 @@ function bubble(m) {
 async function checksPage() {
   const [{ checks }, { kinds }] = await Promise.all([api("/api/checks"), api("/api/checks/kinds")]);
   const rows = checks.map((c) => [
-    `<input type="checkbox" data-enable="${c.id}" ${c.enabled ? "checked" : ""}>`,
+    `<input type="checkbox" data-enable="${esc(c.name)}" ${c.enabled ? "checked" : ""}>`,
     `<code>${esc(c.kind)}</code>`,
     esc(c.name || ""),
     badge(c.severity, c.severity),
     badge(c.source, "src"),
-    `<div class="rationale">${esc(c.rationale || "")}</div>`,
-    `<button class="ghost" data-try="${c.id}">Try it</button>`,
+    `<div class="rationale">${esc(c.because || "")}</div>`,
+    `<button class="ghost" data-try="${esc(c.name)}">Try it</button>`,
   ]);
   view.innerHTML = `<h2>Checks <span class="count">${checks.length}</span></h2>
     ${newCheckForm(kinds)}
@@ -169,7 +169,7 @@ async function checksPage() {
     ${checks.length ? table(["on", "kind", "name", "severity", "source", "rationale", ""], rows) : `<p class="muted">No checks yet — mine them or add one above.</p>`}`;
 
   view.querySelectorAll("[data-enable]").forEach((box) => {
-    box.onchange = () => api(`/api/checks/${box.dataset.enable}`, "PATCH", { enabled: box.checked });
+    box.onchange = () => api(`/api/checks/${encodeURIComponent(box.dataset.enable)}`, "PATCH", { enabled: box.checked });
   });
   view.querySelectorAll("[data-try]").forEach((b) => {
     b.onclick = () => tryDrawer(b.dataset.try);
@@ -186,7 +186,7 @@ function newCheckForm(kinds) {
       <label>severity <select id="nc-sev"><option>hard</option><option>soft</option></select></label>
       <label>applies to <select id="nc-applies"><option>final</option><option>any_turn</option><option>tool_calls</option></select></label>
       <label class="wide">params <textarea id="nc-params" rows="3"></textarea></label>
-      <label class="wide">rationale <input id="nc-rationale" placeholder="why this matters"></label>
+      <label class="wide">because <input id="nc-rationale" placeholder="why this matters"></label>
       <button id="nc-save">Add check</button>
       <span id="nc-msg" class="msg-inline"></span>
     </div></details>`;
@@ -212,7 +212,7 @@ function wireNewCheck(kinds) {
         name: document.getElementById("nc-name").value,
         severity: document.getElementById("nc-sev").value,
         applies_to: document.getElementById("nc-applies").value,
-        rationale: document.getElementById("nc-rationale").value,
+        because: document.getElementById("nc-rationale").value,
       });
       render();
     } catch (e) {
@@ -236,7 +236,7 @@ function tryDrawer(id) {
     const raw = document.getElementById("try-tools").value.trim();
     if (raw) { try { tools = JSON.parse(raw); } catch (e) { out.textContent = "tool calls is not valid JSON"; return; } }
     try {
-      const r = await api(`/api/checks/${id}/eval`, "POST", { text: document.getElementById("try-text").value, tool_calls: tools });
+      const r = await api(`/api/checks/${encodeURIComponent(id)}/eval`, "POST", { text: document.getElementById("try-text").value, tool_calls: tools });
       const verdict = r.passed === true ? "PASS" : r.passed === false ? "FAIL" : "N/A";
       out.innerHTML = `<b>${verdict}</b> — ${esc(r.evidence)}`;
     } catch (e) { out.textContent = e.message; }
@@ -249,13 +249,13 @@ async function tasksPage(args) {
   if (args[0]) return taskDetail(args[0]);
   const { tasks, total } = await api("/api/tasks?limit=200");
   const rows = tasks.map((t) => [
-    link(`/tasks/${t.id}`, t.name || t.id),
+    link(`/tasks/${t.name}`, t.name),
     (t.tags || []).map((x) => badge(x)).join(" "),
     esc(t.check_count),
-    esc(t.kind),
+    t.status === "active" ? badge("active", "outcome") : badge("rejected"),
   ]);
   view.innerHTML = `<h2>Tasks <span class="count">${total}</span></h2>` +
-    (rows.length ? table(["name", "tags", "checks", "kind"], rows) : `<p class="muted">No tasks yet — run mine to cut replay tasks.</p>`);
+    (rows.length ? table(["name", "tags", "checks", "status"], rows) : `<p class="muted">No tasks yet — run mine to cut replay tasks.</p>`);
 }
 
 async function taskDetail(id) {
@@ -263,19 +263,19 @@ async function taskDetail(id) {
   const ctx = ((t.context || {}).messages || []).map(bubble).join("") || `<p class="muted">no context</p>`;
   const checks = (t.checks || []).map((c) =>
     `<div class="check"><code>${esc(c.kind)}</code> ${esc(c.name || "")} ${badge(c.severity, c.severity)}
-      <button class="ghost" data-detach="${c.id}">detach</button></div>`).join("") || `<p class="muted">no checks attached</p>`;
+      <button class="ghost" data-detach="${esc(c.name)}">detach</button></div>`).join("") || `<p class="muted">no checks attached</p>`;
   view.innerHTML = `<div class="crumb">${link("/tasks", "← Tasks")}</div>
-    <h2>${esc(t.name || t.id)} ${(t.tags || []).map((x) => badge(x)).join(" ")}</h2>
+    <h2>${esc(t.name)} ${(t.tags || []).map((x) => badge(x)).join(" ")}</h2>
     <button id="interview">Interview</button>
     <h3>Context</h3><div class="chat">${ctx}</div>
     <h3>Reference</h3><pre>${pretty(t.reference)}</pre>
     <h3>Checks</h3>${checks}`;
 
   view.querySelectorAll("[data-detach]").forEach((b) => {
-    b.onclick = async () => { await api(`/api/tasks/${id}/checks/${b.dataset.detach}`, "DELETE"); taskDetail(id); };
+    b.onclick = async () => { await api(`/api/tasks/${id}/checks/${encodeURIComponent(b.dataset.detach)}`, "DELETE"); taskDetail(id); };
   });
   document.getElementById("interview").onclick = async () => {
-    const room = await api("/api/rooms", "POST", { task_id: id, topic: `review of ${t.name}` });
+    const room = await api("/api/rooms", "POST", { task_id: t.name, topic: `review of ${t.name}` });
     location.href = `/rooms/${room.room.id}`;
   };
 }
@@ -300,7 +300,7 @@ async function benchmarksPage() {
     api("/api/benchmarks"), api("/api/runs"), api("/api/tasks?limit=1"),
   ]);
   const benchRows = benchmarks.map((b) => [
-    esc(b.name), esc((b.task_ids || []).length), runForm(b),
+    esc(b.name), esc(b.task_count), runForm(b),
   ]);
   const runRows = runs.map((r) => [
     `<code>${esc(r.id.slice(-8))}</code>`, esc(r.model_spec),
@@ -325,7 +325,7 @@ async function benchmarksPage() {
 }
 
 function runForm(b) {
-  return `<form data-runbm="${b.id}" class="runform">
+  return `<form data-runbm="${esc(b.name)}" class="runform">
     <input name="model" placeholder="scripted" required>
     <input name="conc" type="number" min="1" value="4" title="concurrency">
     <button>Run</button></form>`;
@@ -344,7 +344,7 @@ async function startRun(ev) {
   ev.preventDefault();
   const form = ev.currentTarget;
   const body = {
-    benchmark: form.dataset.runbm,
+    target: form.dataset.runbm,
     model_spec: form.model.value.trim(),
     concurrency: Number(form.conc.value) || 4,
   };
@@ -385,7 +385,7 @@ async function trainPage() {
     return;
   }
   const opts = benchmarks.map((b) =>
-    `<option value="${b.id}">${esc(b.name)} (${(b.task_ids || []).length} tasks)</option>`).join("");
+    `<option value="${esc(b.name)}">${esc(b.name)} (${b.task_count} tasks)</option>`).join("");
   view.innerHTML = `<h2>Train</h2>
     <p class="muted">Prepare SFT / preference / RL datasets from a benchmark, then emit a runnable backend config. Nothing trains here — Touchstone hands you the datasets and the exact command to run on GPU infra.</p>
     <div class="form">
@@ -462,7 +462,7 @@ async function showProof() {
     const p = await api(`/api/proof?candidate=${cand}&incumbent=${inc}`);
     const verdict = { both_pass: "= both", only_incumbent: "− lost", only_candidate: "+ gained", both_fail: "× both fail" };
     const rows = p.tasks.map((r) => [
-      esc(r.name), r.incumbent_passed ? "pass" : "fail", r.candidate_passed ? "pass" : "fail", verdict[r.category],
+      esc(r.task), r.incumbent_passed ? "pass" : "fail", r.candidate_passed ? "pass" : "fail", verdict[r.category],
     ]);
     const c = p.counts;
     out.innerHTML = `<p class="muted">both pass ${c.both_pass} · only incumbent ${c.only_incumbent} · only candidate ${c.only_candidate} · both fail ${c.both_fail}</p>` +

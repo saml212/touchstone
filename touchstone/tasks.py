@@ -219,16 +219,23 @@ def _write_tests(task_dir: Path, task: Task) -> None:
         shutil.copyfile(_CHECKS_SRC / name, vendor / name)
 
 
-def write_task(root: str | Path, task: Task) -> Path:
+def preserved_checks(root: str | Path, name: str) -> list[Check]:
+    """The interview/manual check blocks already authored on a task (survive re-materialisation)."""
+    task_dir = tasks_dir(root) / name
+    if not (task_dir / "task.toml").exists():
+        return []
+    return [c for c in read_task(task_dir).checks if c.source in PRESERVE_SOURCES]
+
+
+def write_task(root: str | Path, task: Task, *, preserve: bool = True) -> Path:
     """Write (or re-materialise) `task` under `root/tasks/<name>/`.
 
-    Interview/manual check blocks already on disk are preserved; mined/policy blocks are replaced
-    by whatever `task.checks` now carries. The task is gated (oracle=1, nop=0) at write time.
+    With `preserve` (the default), interview/manual check blocks already on disk are kept and
+    mined/policy blocks are replaced — the sync semantics. Set `preserve=False` to write
+    `task.checks` verbatim (used when removing a check). The task is gated (oracle=1, nop=0).
     """
     task_dir = tasks_dir(root) / task.name
-    kept: list[Check] = []
-    if (task_dir / "task.toml").exists():
-        kept = [c for c in read_task(task_dir).checks if c.source in PRESERVE_SOURCES]
+    kept = preserved_checks(root, task.name) if preserve else []
     task.checks = _dedupe(list(task.checks) + kept)
     task.status, task.reason = gate(task)
 
@@ -249,10 +256,17 @@ def write_task(root: str | Path, task: Task) -> Path:
 
 def append_check(root: str | Path, name: str, check: Check) -> Path:
     """Add one check (e.g. an interview commit) to an existing task, idempotently."""
-    task_dir = tasks_dir(root) / name
-    task = read_task(task_dir)
+    task = read_task(tasks_dir(root) / name)
     task.checks.append(check)
     return write_task(root, task)
+
+
+def remove_check(root: str | Path, name: str, check_name: str) -> Task:
+    """Drop the check block with `check_name` from a task and rewrite it verbatim."""
+    task = read_task(tasks_dir(root) / name)
+    task.checks = [c for c in task.checks if c.name != check_name]
+    write_task(root, task, preserve=False)
+    return read_task(tasks_dir(root) / name)
 
 
 # ---- read -------------------------------------------------------------------

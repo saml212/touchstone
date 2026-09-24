@@ -38,10 +38,10 @@ trl sft --config trl_sft.yaml
 class TrlTrainer:
     backend = "trl"
 
-    def prepare(self, conn, benchmark_id, out_dir):
+    def prepare(self, conn, root, target, out_dir):
         from .datasets import prepare
 
-        return prepare(conn, benchmark_id, out_dir)
+        return prepare(conn, root, target, out_dir)
 
     def submit(self, bundle: DatasetBundle, config: TrainConfig) -> JobHandle:
         yaml_path = bundle.out_dir / "trl_sft.yaml"

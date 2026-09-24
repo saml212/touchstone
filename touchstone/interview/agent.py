@@ -1,11 +1,13 @@
-"""The interview policy: turn a room conversation into committed checks.
+"""The interview policy: turn a room conversation into committed checks written to files.
 
 `Interviewer` opens with a factual summary of the task and asks one concrete question, then on each
 turn either drafts checks (via the LLM, asked for JSON only), commits the current draft when a
 participant confirms, or — when participants disagree — asks the group to settle it before writing
-anything down. Draft checks are stored `enabled=0` and linked to the room; committing flips them to
-`enabled=1` and attaches them to the task. Malformed LLM output never raises: it degrades to a plain
-clarifying question. No state machine framework — just a short, ordered set of rules per turn.
+anything down. The draft lives in room state (a `draft` room message); committing writes a
+`[[metadata.touchstone.check]]` block into the task's `task.toml` (source `interview`), or, when the
+LLM flags a check `policy: true` ("always"/"every task"), an enabled policy in `checks.toml`. A bare
+"yes" commits the current draft as-is; a confirmation carrying an amendment is revised through the
+LLM first. Malformed LLM output never raises: it degrades to a plain clarifying question.
 """
 
 from __future__ import annotations
@@ -15,10 +17,22 @@ import re
 from dataclasses import dataclass, field
 
 from .. import store
+from .. import tasks as tasks_mod
 from ..checks import Check as DslCheck
 from ..checks.dsl import PARAM_SPEC
 from ..llm.prompt import extract_json
+from ..policies import Policy, read_policies, write_policies
 from . import rooms
+
+
+@dataclass
+class AgentTurn:
+    say: str
+    draft: list[dict] = field(default_factory=list)
+    commit: list[dict] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {"say": self.say, "draft": self.draft, "commit": self.commit}
 
 _CONFIRM = ("that's right", "thats right", "sounds right", "lgtm", "yes", "yep", "yeah",
             "agreed", "agree", "correct", "commit")
@@ -33,22 +47,6 @@ _AMEND_STOP = set(_CONFIRM) | {
 _CLARIFY = "What should it have done differently — and is that a hard rule or a preference?"
 
 
-@dataclass
-class AgentTurn:
-    say: str
-    draft: list[dict] = field(default_factory=list)
-    commit: list[dict] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return {"say": self.say, "draft": self.draft, "commit": self.commit}
-
-
-def _check_to_dict(c: store.Check) -> dict:
-    return {"id": c.id, "name": c.name, "kind": c.kind, "params": c.params,
-            "applies_to": c.applies_to, "severity": c.severity,
-            "rationale": c.rationale, "enabled": bool(c.enabled)}
-
-
 def _has(text: str, phrases) -> bool:
     low = text.lower()
     for phrase in phrases:
@@ -60,21 +58,30 @@ def _has(text: str, phrases) -> bool:
     return False
 
 
+def _check_dict(check: DslCheck, *, policy: bool = False) -> dict:
+    return {"name": check.name or check.kind, "kind": check.kind, "params": check.params,
+            "applies_to": check.applies_to, "severity": check.severity, "source": check.source,
+            "rule": check.rule, "because": check.because, "policy": policy}
+
+
 class Interviewer:
-    def __init__(self, provider, conn, room: store.Room) -> None:
+    def __init__(self, provider, conn, room: store.Room, root) -> None:
         self.provider = provider
         self.conn = conn
         self.room = room
+        self.root = root
+
+    def _task(self):
+        if not self.room.task_id:
+            return None
+        return tasks_mod.get_task(self.root, self.room.task_id)
 
     # -- opening -------------------------------------------------------------
 
     def open_statement(self) -> str:
-        task = store.get_task(self.conn, self.room.task_id) if self.room.task_id else None
+        task = self._task()
         if task is None:
-            return (
-                f"Let's define what good looks like for “{self.room.topic}”. "
-                f"{_CLARIFY}"
-            )
+            return f"Let's define what good looks like for “{self.room.topic}”. {_CLARIFY}"
         lines = [f"We're reviewing task {task.name} — topic: {self.room.topic}."]
         last_user = self._last_user_turn(task)
         if last_user:
@@ -83,20 +90,18 @@ class Interviewer:
         outcome = self._outcome(task)
         if outcome:
             lines.append(outcome)
-        attached = self._attached_kinds(task)
-        lines.append(
-            f"Checks already attached: {attached}." if attached else "No checks attached yet."
-        )
+        kinds = ", ".join(c.kind for c in task.checks)
+        lines.append(f"Checks already attached: {kinds}." if kinds else "No checks attached yet.")
         lines.append(_CLARIFY)
         return " ".join(lines)
 
-    def _last_user_turn(self, task: store.Task) -> str:
+    def _last_user_turn(self, task) -> str:
         for msg in reversed((task.context or {}).get("messages", [])):
             if msg.get("role") == "user":
                 return _clip(msg.get("content", ""))
         return ""
 
-    def _what_model_did(self, task: store.Task) -> str:
+    def _what_model_did(self, task) -> str:
         ref = task.reference or {}
         calls = [tc.get("name") for tc in ref.get("tool_calls") or [] if tc.get("name")]
         content = _clip(ref.get("content", ""))
@@ -108,21 +113,13 @@ class Interviewer:
             return f"The model replied: {content}"
         return "The model produced no visible output."
 
-    def _outcome(self, task: store.Task) -> str:
+    def _outcome(self, task) -> str:
         ep = store.get_episode(self.conn, task.episode_id) if task.episode_id else None
         if ep is None or (ep.outcome_label is None and ep.outcome_score is None):
             return ""
         label = ep.outcome_label or "unlabelled"
         score = "" if ep.outcome_score is None else f" (score {ep.outcome_score:g})"
         return f"Outcome: {label}{score}."
-
-    def _attached_kinds(self, task: store.Task) -> str:
-        kinds = []
-        for cid in task.check_ids or []:
-            c = store.get_check(self.conn, cid)
-            if c:
-                kinds.append(c.kind)
-        return ", ".join(kinds)
 
     # -- per-turn policy -----------------------------------------------------
 
@@ -144,10 +141,9 @@ class Interviewer:
 
     def _confirm_turn(self, history: list[dict], new: list[dict], explicit: bool) -> AgentTurn:
         # "Yes, but with X" — a confirmation carrying a new rule must be revised through the LLM
-        # before it's committed, so the committed check reflects the amendment, not the stale
-        # draft. A bare "yes" commits the draft as-is.
-        if not explicit and self._has_amendment(new):
-            return self._revise_then_commit(history)
+        # first, so the committed check reflects the amendment, not the stale draft.
+        if not explicit and self._has_amendment(new) and self.provider is not None:
+            self._llm_turn(history)  # persists the revised draft
         return self._commit_draft()
 
     def _has_amendment(self, new: list[dict]) -> bool:
@@ -158,12 +154,6 @@ class Interviewer:
             if len([w for w in words if w not in _AMEND_STOP]) >= 3:
                 return True
         return False
-
-    def _revise_then_commit(self, history: list[dict]) -> AgentTurn:
-        if self.provider is None:  # no LLM to revise with: commit what's already drafted
-            return self._commit_draft()
-        self._llm_turn(history)  # persists the revised draft
-        return self._commit_draft()
 
     def _stances(self, new: list[dict]) -> tuple[set[str], set[str]]:
         affirm: set[str] = set()
@@ -185,40 +175,36 @@ class Interviewer:
         return AgentTurn(
             say=(f"{who} — you're not agreed yet. Can you settle whether this should be a hard "
                  f"rule before I commit it?"),
-            draft=self._draft_dicts(),
+            draft=self.draft(),
         )
 
     def _commit_draft(self) -> AgentTurn:
-        draft = self._draft_checks()
+        draft = self.draft()
         if not draft:
-            return AgentTurn(
-                say="There's no draft to commit yet — tell me the rule and I'll draft it."
-            )
-        committed = [self._commit(c) for c in draft]
+            return AgentTurn(say="There's no draft to commit yet — tell me the rule to draft.")
+        committed = [self._commit(d) for d in draft]
+        committed = [c for c in committed if c]
+        self._set_draft([])
         names = ", ".join(c.get("name") or c["kind"] for c in committed)
-        return AgentTurn(
-            say=f"Committed: {names}. Anything else, or /done to close?",
-            commit=committed,
-        )
+        return AgentTurn(say=f"Committed: {names}. Anything else, or /done to close?",
+                         commit=committed)
 
     def _llm_turn(self, history: list[dict]) -> AgentTurn:
         if self.provider is None:
-            return AgentTurn(say=_CLARIFY, draft=self._draft_dicts())
+            return AgentTurn(say=_CLARIFY, draft=self.draft())
         try:
             reply = self.provider.chat(self._prompt(history))
             data = json.loads(extract_json(reply.content) or reply.content)
         except Exception:
-            return AgentTurn(say=_CLARIFY, draft=self._draft_dicts())
+            return AgentTurn(say=_CLARIFY, draft=self.draft())
         if not isinstance(data, dict):
-            return AgentTurn(say=_CLARIFY, draft=self._draft_dicts())
+            return AgentTurn(say=_CLARIFY, draft=self.draft())
 
-        for raw in _as_list(data.get("draft")):
-            self._persist(raw, enabled=False)
-        committed = [self._commit(raw) for raw in _as_list(data.get("commit"))
-                     if self._persist(raw, enabled=True)]
+        draft = [d for d in (_normalize(raw) for raw in _as_list(data.get("draft"))) if d]
+        self._set_draft(draft)
+        committed = [c for c in (self._commit(raw) for raw in _as_list(data.get("commit"))) if c]
         say = data.get("say") if isinstance(data.get("say"), str) and data["say"] else _CLARIFY
-        return AgentTurn(say=say, draft=self._draft_dicts(),
-                         commit=[c for c in committed if c])
+        return AgentTurn(say=say, draft=draft, commit=committed)
 
     def _prompt(self, history: list[dict]) -> list[dict]:
         spec = "\n".join(f"  {k}: {v}" for k, v in PARAM_SPEC.items())
@@ -226,8 +212,11 @@ class Interviewer:
             "You are Touchstone's interviewer. You turn stakeholders' opinions about an agent's "
             "behaviour into concrete checks. Reply with JSON ONLY, no prose around it, shaped as:\n"
             '{"say": "one short reply/question", '
-            '"draft": [{"kind": ..., "params": {...}, "name": "...", "severity": "hard|soft", '
-            '"applies_to": "final|any_turn|tool_calls", "rationale": "..."}], "commit": []}\n'
+            '"draft": [{"kind": ..., "params": {...}, "name": "...", "rule": "...", '
+            '"severity": "hard|soft", "applies_to": "final|any_turn|tool_calls", '
+            '"because": "...", "policy": false}], "commit": []}\n'
+            "Set \"policy\": true when the stakeholder says the rule applies to EVERY task "
+            "(\"always\", \"every task\"); otherwise false so it attaches to this task only. "
             "Prefer a programmatic kind (contains, regex, tool_called, json_schema, expr, …) that "
             "states the rule exactly; use 'judge' ONLY when no programmatic kind can express it. "
             "Only draft checks; leave commit empty — a human confirms before committing. Ask one "
@@ -239,77 +228,67 @@ class Interviewer:
         return [{"role": "system", "content": system},
                 {"role": "user", "content": f"Conversation so far:\n{convo}\n\nRespond with JSON."}]
 
-    # -- draft / commit state (store-backed) ---------------------------------
+    # -- draft / commit state ------------------------------------------------
 
-    def _room_checks(self) -> list[store.Check]:
-        ids = store.list_room_check_ids(self.conn, self.room.id)
-        return [c for c in (store.get_check(self.conn, i) for i in ids) if c]
+    def draft(self) -> list[dict]:
+        """The current uncommitted draft, from the latest `draft` room message."""
+        for m in reversed(store.list_room_messages(self.conn, self.room.id)):
+            if m.role == "draft":
+                try:
+                    return json.loads(m.text)
+                except json.JSONDecodeError:
+                    return []
+        return []
 
-    def _draft_checks(self) -> list[store.Check]:
-        return [c for c in self._room_checks() if not c.enabled]
+    def _set_draft(self, checks: list[dict]) -> None:
+        rooms.post(self.conn, self.room.id, "agent", "draft",
+                   json.dumps(checks, ensure_ascii=False))
 
-    def _draft_dicts(self) -> list[dict]:
-        return [_check_to_dict(c) for c in self._draft_checks()]
+    def _commit(self, raw: dict) -> dict:
+        """Write one confirmed check to the task (or to checks.toml when flagged a policy)."""
+        norm = _normalize(raw)
+        if norm is None:
+            return {}
+        check = DslCheck(kind=norm["kind"], params=norm["params"], name=norm["name"],
+                         applies_to=norm["applies_to"], severity=norm["severity"],
+                         rule=norm.get("rule", ""), because=norm.get("because", ""),
+                         source="interview")
+        check.id = check.name
+        if norm.get("policy"):
+            self._commit_policy(check)
+        elif self.room.task_id:
+            tasks_mod.append_check(self.root, self.room.task_id, check)
+        return _check_dict(check, policy=bool(norm.get("policy")))
 
-    def _find_room_check(self, kind: str, params: dict) -> store.Check | None:
-        target = json.dumps(params, sort_keys=True)
-        for c in self._room_checks():
-            if c.kind == kind and json.dumps(c.params, sort_keys=True) == target:
-                return c
+    def _commit_policy(self, check: DslCheck) -> None:
+        policies = read_policies(self.root)
+        key = (check.kind, json.dumps(check.params, sort_keys=True))
+        for p in policies:
+            if (p.check.kind, json.dumps(p.check.params, sort_keys=True)) == key:
+                p.enabled = True
+                write_policies(self.root, policies)
+                return
+        write_policies(self.root, policies + [Policy(check=check, enabled=True)])
+
+    def committed(self) -> list[dict]:
+        """The interview checks written to this room's task (for the room panel)."""
+        task = self._task()
+        return [_check_dict(c) for c in (task.checks if task else []) if c.source == "interview"]
+
+
+def _normalize(raw) -> dict | None:
+    if not isinstance(raw, dict):
         return None
-
-    def _persist(self, raw, enabled: bool) -> store.Check | None:
-        if not isinstance(raw, dict):
-            return None
-        try:
-            dc = DslCheck.from_dict(raw)
-            dc.validate()
-        except (ValueError, TypeError, KeyError):
-            return None
-        existing = self._find_room_check(dc.kind, dc.params)
-        if existing is not None:
-            if enabled and not existing.enabled:
-                return self._enable(existing.id)
-            return existing
-        check = store.insert_check(
-            self.conn,
-            store.Check(
-                name=raw.get("name") or dc.kind,
-                kind=dc.kind,
-                params=dc.params,
-                applies_to=dc.applies_to,
-                severity=dc.severity,
-                source="interview",
-                rationale=raw.get("rationale", "") or "",
-                enabled=1 if enabled else 0,
-            ),
-        )
-        store.link_room_check(self.conn, self.room.id, check.id)
-        if enabled:
-            self._attach_to_task(check.id)
-        return check
-
-    def _commit(self, raw_or_check) -> dict:
-        if isinstance(raw_or_check, store.Check):
-            return _check_to_dict(self._enable(raw_or_check.id))
-        check = self._persist(raw_or_check, enabled=True)
-        return _check_to_dict(check) if check else {}
-
-    def _enable(self, check_id: str) -> store.Check:
-        store.set_check_enabled(self.conn, check_id, True)
-        self._attach_to_task(check_id)
-        return store.get_check(self.conn, check_id)
-
-    def _attach_to_task(self, check_id: str) -> None:
-        if not self.room.task_id:
-            return
-        task = store.get_task(self.conn, self.room.task_id)
-        if task is None:
-            return
-        ids = list(task.check_ids or [])
-        if check_id not in ids:
-            ids.append(check_id)
-            store.update_task(self.conn, task.id, check_ids=ids)
+    try:
+        check = DslCheck.from_dict(raw)
+        check.validate()
+    except (ValueError, TypeError, KeyError):
+        return None
+    return {"name": raw.get("name") or check.kind, "kind": check.kind, "params": check.params,
+            "applies_to": check.applies_to, "severity": check.severity,
+            "rule": raw.get("rule", "") or "",
+            "because": raw.get("because") or raw.get("rationale") or "",
+            "policy": bool(raw.get("policy"))}
 
 
 def _since_agent(history: list[dict]) -> list[dict]:

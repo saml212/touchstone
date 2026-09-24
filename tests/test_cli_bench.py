@@ -10,7 +10,7 @@ _ID = re.compile(r"\b[0-9A-HJKMNP-TV-Z]{26}\b")
 
 
 def _bench_repo(tmp_path, monkeypatch):
-    """A repo with a demo db, two enabled checks, mined tasks, and a benchmark id."""
+    """A repo with a demo db, two enabled checks, mined+materialized tasks, and a benchmark name."""
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init"])
     runner.invoke(app, ["demo", "--n", "12"])
@@ -19,8 +19,8 @@ def _bench_repo(tmp_path, monkeypatch):
                         "--name", "polite"])
     runner.invoke(app, ["checks", "add", "--kind", "no_pii", "--params", "{}", "--name", "clean"])
     runner.invoke(app, ["mine", "--no-llm"])
-    out = runner.invoke(app, ["bench", "create", "demo", "--all"]).output
-    return _ID.search(out).group()
+    runner.invoke(app, ["bench", "create", "demo", "--all"])
+    return "demo"
 
 
 def test_bench_create_run_report_flow(tmp_path, monkeypatch):
@@ -53,13 +53,14 @@ def test_bench_run_bad_benchmark_fails_cleanly(tmp_path, monkeypatch):
     assert "run failed" in result.output
 
 
-def test_export_harbor_and_atif(tmp_path, monkeypatch):
-    bid = _bench_repo(tmp_path, monkeypatch)
-    out = tmp_path / "harbor"
-    result = runner.invoke(app, ["export", "harbor", bid, "--out", str(out)])
+def test_export_harbor_points_at_tasks_and_atif(tmp_path, monkeypatch):
+    _bench_repo(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["export", "harbor"])
     assert result.exit_code == 0, result.output
-    assert "exported" in result.output
-    assert any((d / "task.toml").exists() for d in out.iterdir())
+    assert "harbor run -p" in result.output
+    # tasks are already Harbor task dirs
+    tasks_dir = tmp_path / "tasks"
+    assert any((d / "task.toml").exists() for d in tasks_dir.iterdir())
 
     # atif export of a real captured episode
     from touchstone import store
@@ -77,10 +78,8 @@ def test_export_atif_unknown_episode_fails(tmp_path, monkeypatch):
 
 
 def test_harbor_run_reports_missing_docker(tmp_path, monkeypatch):
-    bid = _bench_repo(tmp_path, monkeypatch)
-    out = tmp_path / "harbor"
-    runner.invoke(app, ["export", "harbor", bid, "--out", str(out)])
-    task_dir = next(out.iterdir())
+    _bench_repo(tmp_path, monkeypatch)
+    task_dir = next((tmp_path / "tasks").iterdir())
     result = runner.invoke(app, ["bench", "harbor-run", str(task_dir), "--agent", "claude"])
     assert result.exit_code == 1
     assert "harbor run -p" in result.output
@@ -97,12 +96,10 @@ def test_bench_proof_bad_run_fails_cleanly(tmp_path, monkeypatch):
 
 def test_checks_eval_malformed_tool_calls_fails_cleanly(tmp_path, monkeypatch):
     _bench_repo(tmp_path, monkeypatch)
-    from touchstone import store
-    conn = store.connect(str(tmp_path / ".touchstone" / "touchstone.db"))
-    cid = store.list_checks(conn)[0].id
-    conn.close()
+    from touchstone import policies
+    name = policies.read_policies(str(tmp_path))[0].check.name
     result = runner.invoke(
-        app, ["checks", "eval", cid, "--tool-calls", "5"], catch_exceptions=False
+        app, ["checks", "eval", name, "--tool-calls", "5"], catch_exceptions=False
     )
     assert result.exit_code == 1
     assert "\n" not in result.output.strip()

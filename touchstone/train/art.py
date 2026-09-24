@@ -91,10 +91,10 @@ def _vendor_checks(out_dir: Path) -> None:
 class ArtTrainer:
     backend = "art"
 
-    def prepare(self, conn, benchmark_id, out_dir):
+    def prepare(self, conn, root, target, out_dir):
         from .datasets import prepare
 
-        return prepare(conn, benchmark_id, out_dir)
+        return prepare(conn, root, target, out_dir)
 
     def submit(self, bundle: DatasetBundle, config: TrainConfig) -> JobHandle:
         _vendor_checks(bundle.out_dir)

@@ -38,7 +38,7 @@ class JobHandle:
 
 
 class Trainer(Protocol):
-    def prepare(self, conn, benchmark_id: str, out_dir: str | Path) -> DatasetBundle: ...
+    def prepare(self, conn, root, target: str, out_dir: str | Path) -> DatasetBundle: ...
 
     def submit(self, bundle: DatasetBundle, config: TrainConfig) -> JobHandle: ...
 
@@ -73,8 +73,8 @@ class NullTrainer:
 
     backend = "null"
 
-    def prepare(self, conn, benchmark_id: str, out_dir: str | Path) -> DatasetBundle:
-        return prepare(conn, benchmark_id, out_dir)
+    def prepare(self, conn, root, target: str, out_dir: str | Path) -> DatasetBundle:
+        return prepare(conn, root, target, out_dir)
 
     def submit(self, bundle: DatasetBundle, config: TrainConfig) -> JobHandle:
         from .datasets import atomic_write

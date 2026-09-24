@@ -63,6 +63,33 @@ def gate_check(check: Check, reference: dict, messages: list[dict], failure: boo
     return bool(result.passed) or (check.kind == "judge" and bool(reference.get("content")))
 
 
+def get_policy(root: str | Path, name: str) -> Policy | None:
+    return next((p for p in read_policies(root) if p.check.name == name), None)
+
+
+def add_policy(root: str | Path, policy: Policy) -> None:
+    write_policies(root, read_policies(root) + [policy])
+
+
+def set_enabled(root: str | Path, name: str, enabled: bool) -> bool:
+    policies = read_policies(root)
+    hit = next((p for p in policies if p.check.name == name), None)
+    if hit is None:
+        return False
+    hit.enabled = enabled
+    write_policies(root, policies)
+    return True
+
+
+def enable_all_mined(root: str | Path) -> int:
+    policies = read_policies(root)
+    changed = [p for p in policies if p.check.source == "mined" and not p.enabled]
+    for p in changed:
+        p.enabled = True
+    write_policies(root, policies)
+    return len(changed)
+
+
 def materialize(task, policies: list[Policy]) -> list[Check]:
     """The policy checks to write into `task`: every enabled policy the reference gate lets in,
     tagged `source = "policy"`. Interview/manual blocks are preserved separately by write_task."""

@@ -1,4 +1,4 @@
-"""Turn a benchmark (its tasks, checks, and run results) into training datasets.
+"""Turn a benchmark (its task directories + stored run results) into training datasets.
 
 Three files plus a manifest, all under `<out_dir>`:
 
@@ -7,9 +7,9 @@ Three files plus a manifest, all under `<out_dir>`:
 - `preference.jsonl`  DPO/ORPO pairs {prompt, chosen, rejected}: a passing candidate reply chosen
                   over a failing one (from stored run results), plus the reference chosen over each
                   failing candidate reply on tasks whose reference is good.
-- `rl_tasks.jsonl`  one row per task: id, context, tools, and the serialized attached checks that a
-                  reward verifier evaluates.
-- `manifest.json`  benchmark id/name, timestamps, and row counts.
+- `rl_tasks.jsonl`  one row per task: name, context, tools, and the serialized attached checks
+                  a reward verifier evaluates.
+- `manifest.json`  target name, timestamps, and row counts.
 
 Every file is written atomically (temp file + `os.replace`), so a reader never sees a half-written
 file and a re-run overwrites cleanly.
@@ -21,17 +21,18 @@ import json
 import os
 import re
 import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import store
-from ..checks import Check as DslCheck
-from ..checks import Target, evaluate, passes
+from .. import tasks as tasks_mod
+from ..bench import benchmark
+from ..checks import Check, Target, evaluate, passes
 
 
 @dataclass
 class DatasetBundle:
-    benchmark_id: str
+    benchmark_id: str  # the target name
     benchmark_name: str
     out_dir: Path
     counts: dict = field(default_factory=dict)
@@ -43,9 +44,9 @@ def _slug(text: str) -> str:
     return s or "benchmark"
 
 
-def default_out_dir(db_path: str | Path, benchmark: store.Benchmark) -> Path:
-    """`<db-dir>/train/<benchmark-slug>` — sits beside the SQLite db under `.touchstone/`."""
-    return Path(db_path).expanduser().parent / "train" / _slug(benchmark.name)
+def default_out_dir(db_path: str | Path, target: str) -> Path:
+    """`<db-dir>/train/<target-slug>` — sits beside the SQLite db under `.touchstone/`."""
+    return Path(db_path).expanduser().parent / "train" / _slug(target)
 
 
 def atomic_write(path: Path, text: str) -> None:
@@ -64,23 +65,15 @@ def _jsonl(rows: list[dict]) -> str:
     return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
 
 
-def _enabled_checks(conn, task: store.Task) -> list[DslCheck]:
-    checks = []
-    for cid in task.check_ids or []:
-        row = store.get_check(conn, cid)
-        if row is not None and row.enabled:
-            checks.append(DslCheck.from_dict(asdict(row)))
-    return checks
-
-
-def _reference_msg(task: store.Task) -> dict:
+def _reference_msg(task: tasks_mod.Task) -> dict:
     ref = task.reference or {}
     return {"role": "assistant", "content": ref.get("content") or "",
             "tool_calls": ref.get("tool_calls") or []}
 
 
-def _reference_passes(task: store.Task, checks: list[DslCheck]) -> bool:
+def _reference_passes(task: tasks_mod.Task) -> bool:
     """Whether the recorded reference satisfies every attached hard check (no judge provider)."""
+    checks = [c for c in task.checks if c.kind != "judge"]
     if not checks:
         return True
     ref = task.reference or {}
@@ -89,8 +82,8 @@ def _reference_passes(task: store.Task, checks: list[DslCheck]) -> bool:
     return passes(evaluate(checks, target), checks)
 
 
-def _serialized_checks(checks: list[DslCheck]) -> list[dict]:
-    return [{"id": c.id, "name": c.name, "kind": c.kind, "params": c.params,
+def _serialized_checks(checks: list[Check]) -> list[dict]:
+    return [{"name": c.name, "kind": c.kind, "params": c.params,
              "applies_to": c.applies_to, "severity": c.severity} for c in checks]
 
 
@@ -99,91 +92,81 @@ def _output_key(msg: dict) -> str:
                        "tool_calls": msg.get("tool_calls") or []}, sort_keys=True)
 
 
-def _benchmark_runs(conn, bench: store.Benchmark) -> list[store.Run]:
-    return [r for r in store.list_runs(conn) if r.benchmark_id == bench.id]
-
-
 def _record_result(r: store.Result, out: dict[str, dict[str, list[dict]]]) -> None:
     if r.error or not r.output:
         return
     reply = {"content": r.output.get("content") or "",
              "tool_calls": r.output.get("tool_calls") or []}
-    side = out.setdefault(r.task_id, {"pass": [], "fail": []})["pass" if r.passed else "fail"]
+    side = out.setdefault(r.task, {"pass": [], "fail": []})["pass" if r.passed else "fail"]
     if all(_output_key(reply) != _output_key(x) for x in side):
         side.append(reply)
 
 
-def _candidate_outcomes(conn, bench: store.Benchmark) -> dict[str, dict[str, list[dict]]]:
+def _candidate_outcomes(conn, target: str) -> dict[str, dict[str, list[dict]]]:
     """Per task, the distinct candidate replies that passed and that failed, across all runs.
 
     The `reference` model spec is excluded — its reply is the reference, handled separately."""
     out: dict[str, dict[str, list[dict]]] = {}
-    for run in _benchmark_runs(conn, bench):
-        if run.model_spec == "reference":
-            continue
+    for run in (r for r in store.list_runs(conn, target) if r.model_spec != "reference"):
         for r in store.list_results(conn, run.id):
             _record_result(r, out)
     return out
 
 
 def _pair_row(task, prompt, tools, chosen, rejected, source) -> dict:
-    return {"task_id": task.id, "prompt": prompt, "tools": tools,
+    return {"task": task.name, "prompt": prompt, "tools": tools,
             "chosen": chosen, "rejected": rejected, "source": source}
 
 
 def _emit_pair(rows: list[dict], seen: set, row: dict) -> None:
     ck, rk = _output_key(row["chosen"]), _output_key(row["rejected"])
-    key = (row["task_id"], ck, rk)
+    key = (row["task"], ck, rk)
     if ck == rk or key in seen:
         return
     seen.add(key)
     rows.append(row)
 
 
-def _task_pairs(conn, task, bucket: dict, rows: list[dict], seen: set) -> None:
+def _task_pairs(task, bucket: dict, rows: list[dict], seen: set) -> None:
     prompt = (task.context or {}).get("messages", [])
     tools = (task.context or {}).get("tools") or []
     for chosen in bucket["pass"]:
         for rejected in bucket["fail"]:
             _emit_pair(rows, seen, _pair_row(task, prompt, tools, chosen, rejected, "candidates"))
     # The reference is a trusted "chosen" only when it passes the task's hard checks.
-    if bucket["fail"] and _reference_passes(task, _enabled_checks(conn, task)):
+    if bucket["fail"] and _reference_passes(task):
         ref = _reference_msg(task)
         for rejected in bucket["fail"]:
             _emit_pair(rows, seen, _pair_row(task, prompt, tools, ref, rejected, "reference"))
 
 
-def _preference_rows(conn, bench: store.Benchmark, tasks: list[store.Task]) -> list[dict]:
-    outcomes = _candidate_outcomes(conn, bench)
+def _preference_rows(conn, target: str, tasks: list[tasks_mod.Task]) -> list[dict]:
+    outcomes = _candidate_outcomes(conn, target)
     rows: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
     for task in tasks:
-        bucket = outcomes.get(task.id, {"pass": [], "fail": []})
-        _task_pairs(conn, task, bucket, rows, seen)
+        _task_pairs(task, outcomes.get(task.name, {"pass": [], "fail": []}), rows, seen)
     return rows
 
 
-def prepare(conn, benchmark_id: str, out_dir: str | Path) -> DatasetBundle:
-    """Write sft/preference/rl datasets + manifest for `benchmark_id` into `out_dir`."""
-    bench = store.get_benchmark(conn, benchmark_id)
-    if bench is None:
-        raise ValueError(f"no benchmark {benchmark_id!r}")
+def prepare(conn, root, target: str, out_dir: str | Path) -> DatasetBundle:
+    """Write sft/preference/rl datasets + manifest for `target` into `out_dir`."""
+    tasks = [tasks_mod.read_task(d) for d in benchmark.resolve(root, target)]
+    if not tasks:
+        raise ValueError(f"target {target!r} resolves to no active tasks")
     out = Path(out_dir).expanduser()
-    tasks = [t for t in (store.get_task(conn, tid) for tid in bench.task_ids) if t is not None]
 
     sft_rows, rl_rows = [], []
     for task in tasks:
-        checks = _enabled_checks(conn, task)
         ctx_messages = (task.context or {}).get("messages", [])
         ctx_tools = (task.context or {}).get("tools") or []
-        if _reference_passes(task, checks):
-            sft_rows.append({"task_id": task.id, "messages": ctx_messages, "tools": ctx_tools,
+        if _reference_passes(task):
+            sft_rows.append({"task": task.name, "messages": ctx_messages, "tools": ctx_tools,
                              "completion": _reference_msg(task)})
-        rl_rows.append({"task_id": task.id, "name": task.name, "messages": ctx_messages,
-                        "tools": ctx_tools, "reference": task.reference,
-                        "checks": _serialized_checks(checks)})
+        rl_rows.append({"task": task.name, "messages": ctx_messages, "tools": ctx_tools,
+                        "reference": task.reference, "checks": _serialized_checks(task.checks)})
 
-    pref_rows = _preference_rows(conn, bench, tasks)
+    pref_rows = _preference_rows(conn, target, tasks)
 
     paths = {
         "sft": out / "sft.jsonl",
@@ -198,14 +181,11 @@ def prepare(conn, benchmark_id: str, out_dir: str | Path) -> DatasetBundle:
     atomic_write(paths["preference"], _jsonl(pref_rows))
     atomic_write(paths["rl_tasks"], _jsonl(rl_rows))
     atomic_write(paths["manifest"], json.dumps({
-        "benchmark_id": bench.id,
-        "benchmark_name": bench.name,
+        "target": target,
         "created_at": store.now(),
         "counts": counts,
         "files": {k: v.name for k, v in paths.items() if k != "manifest"},
     }, ensure_ascii=False, indent=2) + "\n")
 
-    return DatasetBundle(
-        benchmark_id=bench.id, benchmark_name=bench.name, out_dir=out,
-        counts=counts, paths=paths,
-    )
+    return DatasetBundle(benchmark_id=target, benchmark_name=target, out_dir=out,
+                         counts=counts, paths=paths)

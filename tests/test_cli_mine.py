@@ -49,25 +49,20 @@ def test_checks_enable_requires_target(tmp_path, monkeypatch):
     assert result.exit_code == 1
 
 
-def test_tasks_list_show_attach_detach(tmp_path, monkeypatch):
+def test_tasks_list_show_and_sync(tmp_path, monkeypatch):
     _demo_repo(tmp_path, monkeypatch)
     runner.invoke(app, ["mine", "--no-llm"])
+    runner.invoke(app, ["checks", "enable", "--all-mined"])
+    synced = runner.invoke(app, ["tasks", "sync"])
+    assert synced.exit_code == 0 and "synced" in synced.output
 
     listed = runner.invoke(app, ["tasks", "list"])
     assert listed.exit_code == 0
-    task_id = listed.output.strip().splitlines()[0].split()[0]
+    name = listed.output.strip().splitlines()[0].split()[0]
 
-    shown = runner.invoke(app, ["tasks", "show", task_id])
+    shown = runner.invoke(app, ["tasks", "show", name])
     assert shown.exit_code == 0
-    assert "context:" in shown.output and "reference:" in shown.output
-
-    check_id = runner.invoke(app, ["checks", "list"]).output.strip().splitlines()[0].split()[0]
-    attached = runner.invoke(app, ["tasks", "attach", task_id, check_id])
-    assert attached.exit_code == 0
-    assert check_id in runner.invoke(app, ["tasks", "show", task_id]).output
-
-    detached = runner.invoke(app, ["tasks", "detach", task_id, check_id])
-    assert detached.exit_code == 0
+    assert "context:" in shown.output and "reference:" in shown.output and "checks:" in shown.output
 
 
 def test_tasks_list_tag_filter(tmp_path, monkeypatch):
@@ -82,10 +77,3 @@ def test_tasks_list_tag_filter(tmp_path, monkeypatch):
 def test_tasks_show_unknown_id_nonzero(tmp_path, monkeypatch):
     _demo_repo(tmp_path, monkeypatch)
     assert runner.invoke(app, ["tasks", "show", "nope"]).exit_code == 1
-
-
-def test_tasks_attach_unknown_check_nonzero(tmp_path, monkeypatch):
-    _demo_repo(tmp_path, monkeypatch)
-    runner.invoke(app, ["mine", "--no-llm"])
-    task_id = runner.invoke(app, ["tasks", "list"]).output.strip().splitlines()[0].split()[0]
-    assert runner.invoke(app, ["tasks", "attach", task_id, "nope"]).exit_code == 1

@@ -1,13 +1,15 @@
 """Scoreboard and proof reports over stored runs, as data + plain-text tables (no rich dependency).
 
-`scoreboard` aggregates one or more runs into pass rates per model, per check, and per tag. `proof`
-diffs a candidate run against an incumbent run task-by-task into four categories plus cost totals.
-`render_*` turn either into aligned text tables; the dicts themselves are the JSON form.
+`scoreboard` aggregates one or more runs into pass rates per model, per check (keyed by check name),
+and per tag (read from the task directories). `proof` diffs a candidate run against an incumbent run
+task-by-task (keyed by task dir name) into four categories plus cost totals. `render_*` turn either
+into aligned text tables; the dicts themselves are the JSON form.
 """
 
 from __future__ import annotations
 
 from .. import store
+from .. import tasks as tasks_mod
 
 _CATEGORIES = ("both_pass", "only_incumbent", "only_candidate", "both_fail")
 
@@ -16,11 +18,8 @@ def _pct(passed: int, total: int) -> float:
     return round(100.0 * passed / total, 1) if total else 0.0
 
 
-def _check_meta(conn, check_id: str) -> tuple[str, str]:
-    row = store.get_check(conn, check_id)
-    if row is None:
-        return "(deleted)", "?"
-    return row.name or row.kind, row.kind
+def _tags_by_task(root) -> dict[str, list[str]]:
+    return {t.name: (t.tags or []) for t in tasks_mod.list_tasks(root)}
 
 
 def _model_summary(run: store.Run, results: list[store.Result]) -> dict:
@@ -39,23 +38,18 @@ def _model_summary(run: store.Run, results: list[store.Result]) -> dict:
     }
 
 
-def _tally_checks(conn, results: list[store.Result], per_check: dict) -> None:
+def _tally_checks(results: list[store.Result], per_check: dict) -> None:
     for r in results:
-        for cr in r.check_results or []:
-            cid = cr.get("check_id") or ""
-            entry = per_check.setdefault(cid, {"pass": 0, "fail": 0, "skip": 0})
+        for name, cr in (r.check_results or {}).items():
+            entry = per_check.setdefault(name, {"name": name, "kind": cr.get("kind", ""),
+                                                 "pass": 0, "fail": 0, "skip": 0})
             passed = cr.get("passed")
             entry["pass" if passed is True else "skip" if passed is None else "fail"] += 1
-    for cid, entry in per_check.items():
-        name, kind = _check_meta(conn, cid)
-        entry.setdefault("check_id", cid)
-        entry["name"], entry["kind"] = name, kind
 
 
-def _tally_tags(conn, results: list[store.Result], per_tag: dict) -> None:
+def _tally_tags(results: list[store.Result], tags_by_task: dict, per_tag: dict) -> None:
     for r in results:
-        task = store.get_task(conn, r.task_id)
-        for tag in (task.tags or []) if task else []:
+        for tag in tags_by_task.get(r.task, []):
             entry = per_tag.setdefault(tag, {"tag": tag, "total": 0, "passed": 0})
             entry["total"] += 1
             entry["passed"] += 1 if r.passed else 0
@@ -63,8 +57,9 @@ def _tally_tags(conn, results: list[store.Result], per_tag: dict) -> None:
         entry["pass_rate"] = _pct(entry["passed"], entry["total"])
 
 
-def scoreboard(conn, run_ids: list[str]) -> dict:
+def scoreboard(conn, root, run_ids: list[str]) -> dict:
     """Aggregate the given runs: a per-model row, and per-check / per-tag counts keyed by model."""
+    tags_by_task = _tags_by_task(root)
     models, checks, tags = [], [], []
     for run_id in run_ids:
         run = store.get_run(conn, run_id)
@@ -74,12 +69,12 @@ def scoreboard(conn, run_ids: list[str]) -> dict:
         models.append(_model_summary(run, results))
 
         per_check: dict = {}
-        _tally_checks(conn, results, per_check)
+        _tally_checks(results, per_check)
         for entry in per_check.values():
             checks.append({"model_spec": run.model_spec, **entry})
 
         per_tag: dict = {}
-        _tally_tags(conn, results, per_tag)
+        _tally_tags(results, tags_by_task, per_tag)
         for entry in per_tag.values():
             tags.append({"model_spec": run.model_spec, **entry})
 
@@ -101,18 +96,16 @@ def _category(c_pass: bool, i_pass: bool) -> str:
     return "both_fail"
 
 
-def _diff_rows(conn, cand: dict, inc: dict) -> tuple[dict, list[dict]]:
+def _diff_rows(cand: dict, inc: dict) -> tuple[dict, list[dict]]:
     counts = dict.fromkeys(_CATEGORIES, 0)
     rows = []
-    for task_id in sorted(set(cand) & set(inc)):
-        c_pass = bool(cand[task_id].passed)
-        i_pass = bool(inc[task_id].passed)
+    for task in sorted(set(cand) & set(inc)):
+        c_pass = bool(cand[task].passed)
+        i_pass = bool(inc[task].passed)
         category = _category(c_pass, i_pass)
         counts[category] += 1
-        task = store.get_task(conn, task_id)
         rows.append({
-            "task_id": task_id,
-            "name": task.name if task else "(deleted)",
+            "task": task,
             "candidate_passed": c_pass,
             "incumbent_passed": i_pass,
             "category": category,
@@ -126,14 +119,13 @@ def proof(conn, candidate_run: str, incumbent_run: str) -> dict:
     inc_run = store.get_run(conn, incumbent_run)
     _require_run("candidate", candidate_run, cand_run)
     _require_run("incumbent", incumbent_run, inc_run)
-    if cand_run.benchmark_id != inc_run.benchmark_id:
+    if cand_run.target != inc_run.target:
         raise ValueError(
-            "cannot compare runs from different benchmarks "
-            f"({cand_run.benchmark_id} vs {inc_run.benchmark_id})"
+            f"cannot compare runs from different targets ({cand_run.target} vs {inc_run.target})"
         )
-    cand = {r.task_id: r for r in store.list_results(conn, candidate_run)}
-    inc = {r.task_id: r for r in store.list_results(conn, incumbent_run)}
-    counts, rows = _diff_rows(conn, cand, inc)
+    cand = {r.task: r for r in store.list_results(conn, candidate_run)}
+    inc = {r.task: r for r in store.list_results(conn, incumbent_run)}
+    counts, rows = _diff_rows(cand, inc)
     return {
         "candidate_run": candidate_run,
         "incumbent_run": incumbent_run,
@@ -195,7 +187,7 @@ def render_proof(report: dict) -> str:
                "both_fail": "x both fail"}
     table = _table(
         ["task", "incumbent", "candidate", "verdict"],
-        [[r["name"], "pass" if r["incumbent_passed"] else "fail",
+        [[r["task"], "pass" if r["incumbent_passed"] else "fail",
           "pass" if r["candidate_passed"] else "fail", verdict[r["category"]]]
          for r in report["tasks"]],
     )

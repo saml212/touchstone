@@ -1,4 +1,6 @@
+import sqlite3
 import threading
+from pathlib import Path
 
 from touchstone import store
 
@@ -25,27 +27,20 @@ def test_outcome_update_and_label_filter(conn):
     assert store.list_episodes(conn, "nope") == []
 
 
-def test_tasks_by_tag_and_results_by_run(conn):
-    store.insert_task(conn, store.Task(name="t1", tags=["failure", "x"]))
-    store.insert_task(conn, store.Task(name="t2", tags=["x"]))
-    assert [t.name for t in store.list_tasks(conn, "failure")] == ["t1"]
-    assert len(store.list_tasks(conn)) == 2
+def test_runs_and_results_by_target_and_run(conn):
+    r1 = store.insert_run(conn, store.Run(target="demo", model_spec="scripted"))
+    store.insert_run(conn, store.Run(target="other", model_spec="scripted"))
+    assert [r.id for r in store.list_runs(conn, "demo")] == [r1.id]
+    assert len(store.list_runs(conn)) == 2
 
-    b = store.insert_benchmark(conn, store.Benchmark(name="b"))
-    r = store.insert_run(conn, store.Run(benchmark_id=b.id, model_spec="scripted"))
-    store.insert_result(conn, store.Result(run_id=r.id, task_id="t1", passed=1))
-    store.insert_result(conn, store.Result(run_id=r.id, task_id="t2", passed=0))
-    store.insert_result(conn, store.Result(run_id="other", task_id="t3", passed=1))
-    res = store.list_results(conn, r.id)
-    assert len(res) == 2 and {x.task_id for x in res} == {"t1", "t2"}
-
-
-def test_check_enable_disable(conn):
-    c = store.insert_check(conn, store.Check(name="c", kind="contains"))
-    assert c.enabled == 0
-    store.set_check_enabled(conn, c.id, True)
-    assert store.get_check(conn, c.id).enabled == 1
-    assert [x.id for x in store.list_checks(conn, enabled=True)] == [c.id]
+    store.insert_result(conn, store.Result(run_id=r1.id, task="t1", passed=1, reward=1.0,
+                                           check_results={"c": {"passed": True}}))
+    store.insert_result(conn, store.Result(run_id=r1.id, task="t2", passed=0, reward=0.0))
+    store.insert_result(conn, store.Result(run_id="other", task="t3", passed=1, reward=1.0))
+    res = store.list_results(conn, r1.id)
+    assert len(res) == 2 and {x.task for x in res} == {"t1", "t2"}
+    assert next(x for x in res if x.task == "t1").check_results == {"c": {"passed": True}}
+    assert next(x for x in res if x.task == "t1").reward == 1.0
 
 
 def test_unicode_and_one_megabyte_output(conn):
@@ -88,11 +83,39 @@ def test_concurrent_writers(db):
         c.close()
 
 
-def test_get_benchmark_by_name_returns_newest(db):
-    c = store.connect(db)
-    old = store.insert_benchmark(c, store.Benchmark(name="demo", task_ids=["a"]))
-    new = store.insert_benchmark(c, store.Benchmark(name="demo", task_ids=["b"]))
-    assert store.get_benchmark(c, "demo").id == new.id
-    assert store.get_benchmark(c, old.id).id == old.id
-    assert store.get_benchmark(c, "missing") is None
-    c.close()
+def test_v1_db_migrates_cleanly(db):
+    """A v1 DB opens fine: episodes/spans are preserved; the authored tables are dropped, and the
+    run record is recreated with the new columns (target, reward, task)."""
+    Path(db).parent.mkdir(parents=True, exist_ok=True)
+    raw = sqlite3.connect(db)
+    raw.executescript(
+        "CREATE TABLE episodes (id TEXT PRIMARY KEY, name TEXT, source TEXT, started_at TEXT,"
+        " ended_at TEXT, outcome_score REAL, outcome_label TEXT, meta TEXT);"
+        "CREATE TABLE spans (id TEXT PRIMARY KEY, episode_id TEXT, parent_id TEXT, kind TEXT,"
+        " name TEXT, model TEXT, started_at TEXT, ended_at TEXT, input TEXT, output TEXT,"
+        " tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, error TEXT);"
+        "CREATE TABLE checks (id TEXT PRIMARY KEY);"
+        "CREATE TABLE tasks (id TEXT PRIMARY KEY);"
+        "CREATE TABLE benchmarks (id TEXT PRIMARY KEY);"
+        "CREATE TABLE room_checks (room_id TEXT, check_id TEXT);"
+        "CREATE TABLE runs (id TEXT PRIMARY KEY, benchmark_id TEXT, model_spec TEXT,"
+        " started_at TEXT, finished_at TEXT, meta TEXT);"
+        "CREATE TABLE results (run_id TEXT, task_id TEXT, passed INTEGER);"
+        "PRAGMA user_version=1;"
+    )
+    raw.execute("INSERT INTO episodes (id, name) VALUES ('e1', 'kept')")
+    raw.commit()
+    raw.close()
+
+    conn = store.connect(db)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
+        assert store.get_episode(conn, "e1").name == "kept"  # trace data preserved
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert not ({"tasks", "checks", "benchmarks", "room_checks"} & tables)
+        run_cols = {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
+        assert "target" in run_cols and "benchmark_id" not in run_cols
+        result_cols = {r[1] for r in conn.execute("PRAGMA table_info(results)")}
+        assert {"task", "reward"} <= result_cols and "task_id" not in result_cols
+    finally:
+        conn.close()

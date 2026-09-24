@@ -1,73 +1,66 @@
+"""Task directories are Harbor tasks: verify their layout, the vendored verifier, and harbor-run."""
+
 import json
+import os
 import subprocess
 import sys
 
 import pytest
 
-from touchstone import store
-from touchstone.bench import benchmark, harbor_export, harbor_run
-from touchstone.mine import cut_tasks
+from touchstone import tasks
+from touchstone.bench import harbor_run, harbor_tasks_path
+from touchstone.checks import Check
 
-# The files this export matches from harbor/src/harbor/cli/template-task/.
+# The files a task dir carries, matching harbor/src/harbor/cli/template-task/.
 EXPECTED_FILES = ["task.toml", "instruction.md", ".gitignore",
-                  "environment/Dockerfile", "tests/test.sh", "tests/test_outputs.py",
+                  "environment/Dockerfile", "tests/test.sh", "tests/verify.py",
                   "solution/solve.sh"]
 
 
 @pytest.fixture
-def exported(demo_db, tmp_path):
-    conn = demo_db(6)
-    store.insert_check(conn, store.Check(
-        name="polite", kind="contains",
-        params={"values": ["sorted", "escalat"], "mode": "any"}, enabled=1))
-    store.insert_check(conn, store.Check(name="clean", kind="no_pii", params={}, enabled=1))
-    store.insert_check(conn, store.Check(
-        name="judgey", kind="judge", params={"rubric": "nice?"}, severity="soft", enabled=1))
-    cut_tasks(conn, store.list_episodes(conn))
-    for t in store.list_tasks(conn):  # attach the judge check so we can prove it's dropped
-        ids = list(t.check_ids or [])
-        jid = next(c.id for c in store.list_checks(conn) if c.kind == "judge")
-        if jid not in ids:
-            ids.append(jid)
-        store.update_task(conn, t.id, check_ids=ids)
-    bench = benchmark.create(conn, "all", all_tasks=True)
-    out = tmp_path / "harbor"
-    dirs = harbor_export.export(conn, bench.id, out)
-    return conn, bench, out, dirs
+def task_dir(project):
+    """One written active task dir from a demo project."""
+    _conn, root = project(6)
+    active = tasks.list_tasks(root, active_only=True)
+    assert active
+    return tasks.tasks_dir(root) / active[0].name
 
 
-def test_layout_matches_harbor_template(exported):
-    _conn, bench, _out, dirs = exported
-    assert len(dirs) == len(bench.task_ids)
-    for d in dirs:
-        for rel in EXPECTED_FILES:
-            assert (d / rel).exists(), f"missing {rel} in {d.name}"
-        assert (d / "tests" / "touchstone_checks" / "dsl.py").exists()
-        assert (d / "tests" / "touchstone_checks" / "run.py").exists()
+def test_layout_matches_harbor_template(task_dir):
+    for rel in EXPECTED_FILES:
+        assert (task_dir / rel).exists(), f"missing {rel}"
+    assert (task_dir / "tests" / "touchstone_checks" / "dsl.py").exists()
+    assert (task_dir / "tests" / "touchstone_checks" / "run.py").exists()
 
 
-def test_task_toml_has_template_fields(exported):
-    _conn, _bench, _out, dirs = exported
-    toml = (dirs[0] / "task.toml").read_text()
+def test_task_toml_is_harbor_superset(task_dir):
+    toml = (task_dir / "task.toml").read_text()
     assert 'schema_version = "1.4"' in toml
-    for section in ("[metadata]", "[verifier]", "[agent]", "[environment]"):
+    for section in ("[task]", "[metadata.touchstone]", "[verifier]", "[agent]", "[environment]"):
         assert section in toml
-    assert "build_timeout_sec" in toml
+    assert "[[metadata.touchstone.check]]" in toml
+    assert 'name = "touchstone/' in toml
 
 
-def test_judge_checks_dropped_from_export(exported):
-    _conn, _bench, _out, dirs = exported
-    for d in dirs:
-        spec = json.loads((d / "tests" / "checks.json").read_text())
-        assert all(c["kind"] != "judge" for c in spec["checks"])
+def test_judge_checks_excluded_from_container_copy(project):
+    _conn, root = project(6)
+    task = tasks.Task(name="judge-01",
+                      reference={"content": "sorted", "tool_calls": []},
+                      checks=[Check(kind="contains", params={"values": ["sorted"]}, name="c",
+                                    source="manual"),
+                              Check(kind="judge", params={"rubric": "?"}, name="j", severity="soft",
+                                    source="manual")])
+    d = tasks.write_task(root, task)
+    root_names = {b["kind"] for b in _blocks(d / "task.toml")}
+    tests_names = {b["kind"] for b in _blocks(d / "tests" / "task.toml")}
+    assert "judge" in root_names  # authored source of truth keeps it
+    assert "judge" not in tests_names  # the container verifier can't run judge (no LLM)
 
 
-def test_reexport_overwrites_cleanly(exported):
-    conn, bench, out, dirs = exported
-    stale = dirs[0] / "STALE.txt"
-    stale.write_text("x")
-    harbor_export.export(conn, bench.id, out)
-    assert not stale.exists()  # the task dir was rebuilt from scratch
+def _blocks(toml_path):
+    import tomllib
+    doc = tomllib.loads(toml_path.read_text())
+    return doc.get("metadata", {}).get("touchstone", {}).get("check", [])
 
 
 def _run_verifier(task_dir, output_obj, tmp_path):
@@ -75,33 +68,46 @@ def _run_verifier(task_dir, output_obj, tmp_path):
     out_json = tmp_path / "output.json"
     out_json.write_text(json.dumps(output_obj))
     reward_dir = tmp_path / "reward"
-    env = {
-        "TOUCHSTONE_OUTPUT": str(out_json),
-        "TOUCHSTONE_REWARD_DIR": str(reward_dir),
-        "TOUCHSTONE_CHECKS": str(task_dir / "tests" / "checks.json"),
-        "PATH": __import__("os").environ.get("PATH", ""),
-    }
-    proc = subprocess.run(
-        [sys.executable, str(task_dir / "tests" / "test_outputs.py")],
-        capture_output=True, text=True, env=env,
-    )
+    env = {"TOUCHSTONE_OUTPUT": str(out_json), "TOUCHSTONE_REWARD_DIR": str(reward_dir),
+           "PATH": os.environ.get("PATH", "")}
+    proc = subprocess.run([sys.executable, str(task_dir / "tests" / "verify.py")],
+                          capture_output=True, text=True, env=env)
     reward = (reward_dir / "reward.txt").read_text().strip()
     return proc, reward
 
 
-def test_test_outputs_runs_standalone_and_writes_reward(exported, tmp_path):
-    _conn, _bench, _out, dirs = exported
-    task_dir = next(d for d in dirs if "contains" in (d / "tests" / "checks.json").read_text())
-
-    passing, reward_pass = _run_verifier(
-        task_dir, {"content": "All sorted, thanks!", "tool_calls": []}, tmp_path / "a")
+def test_verify_runs_standalone_scoring_reference_and_nop(task_dir, tmp_path):
+    reference = json.loads((task_dir / "reference.json").read_text())
+    passing, reward_pass = _run_verifier(task_dir, reference, tmp_path / "a")
     assert passing.returncode == 0, passing.stderr
     assert reward_pass == "1.0"
 
-    failing, reward_fail = _run_verifier(
-        task_dir, {"content": "nope", "tool_calls": []}, tmp_path / "b")
+    empty = {"content": "", "tool_calls": []}
+    failing, reward_fail = _run_verifier(task_dir, empty, tmp_path / "b")
     assert failing.returncode == 1
     assert reward_fail == "0.0"
+
+
+def test_verify_survives_missing_and_nondict_output(task_dir, tmp_path):
+    reward_dir = tmp_path / "r"
+
+    def run(output_file):
+        env = {"TOUCHSTONE_OUTPUT": str(output_file), "TOUCHSTONE_REWARD_DIR": str(reward_dir),
+               "PATH": os.environ.get("PATH", "")}
+        return subprocess.run([sys.executable, str(task_dir / "tests" / "verify.py")],
+                              capture_output=True, text=True, env=env)
+
+    missing = run(tmp_path / "nope.json")
+    assert missing.returncode in (0, 1) and (reward_dir / "reward.txt").exists()
+
+    nondict = tmp_path / "arr.json"
+    nondict.write_text("[1, 2, 3]")
+    arr = run(nondict)
+    assert arr.returncode in (0, 1) and (reward_dir / "reward.txt").exists()
+
+
+def test_harbor_tasks_path_points_at_tasks_dir(root):
+    assert harbor_tasks_path(root).name == "tasks"
 
 
 def test_harbor_run_prints_command_when_docker_missing(monkeypatch, tmp_path):
@@ -113,46 +119,3 @@ def test_harbor_run_prints_command_when_docker_missing(monkeypatch, tmp_path):
     assert "harbor run -p" in joined and str(tmp_path) in joined
     assert "-a claude" in joined
     assert any("docker" in line for line in lines)
-
-
-def test_reexport_removes_stale_task_dirs_but_not_foreign_files(exported, tmp_path):
-    conn, _bench, out, dirs = exported
-    tasks = store.list_tasks(conn)
-    # a smaller benchmark whose export should prune the dirs of the tasks it drops
-    smaller = benchmark.create(conn, "smaller", task_ids=[tasks[0].id, tasks[1].id])
-    # a foreign file and dir the export must never touch
-    (out / "notes.txt").write_text("keep me")
-    (out / "mystuff").mkdir()
-    (out / "mystuff" / "a.txt").write_text("keep me too")
-
-    kept = harbor_export.export(conn, smaller.id, out)
-    kept_names = {d.name for d in kept}
-    for d in dirs:
-        if d.name in kept_names:
-            assert d.exists()
-        else:
-            assert not d.exists(), f"stale touchstone task dir {d.name} was not removed"
-    assert (out / "notes.txt").exists()
-    assert (out / "mystuff" / "a.txt").exists()
-
-
-def test_verifier_survives_missing_and_nondict_output(exported, tmp_path):
-    import os
-    _conn, _bench, _out, dirs = exported
-    task_dir = dirs[0]
-    checks_json = str(task_dir / "tests" / "checks.json")
-    reward_dir = tmp_path / "r"
-
-    def run(output_file):
-        env = {"TOUCHSTONE_OUTPUT": str(output_file), "TOUCHSTONE_REWARD_DIR": str(reward_dir),
-               "TOUCHSTONE_CHECKS": checks_json, "PATH": os.environ.get("PATH", "")}
-        return subprocess.run([sys.executable, str(task_dir / "tests" / "test_outputs.py")],
-                              capture_output=True, text=True, env=env)
-
-    missing = run(tmp_path / "nope.json")
-    assert missing.returncode in (0, 1) and (reward_dir / "reward.txt").exists()
-
-    nondict = tmp_path / "arr.json"
-    nondict.write_text("[1, 2, 3]")
-    arr = run(nondict)
-    assert arr.returncode in (0, 1) and (reward_dir / "reward.txt").exists()

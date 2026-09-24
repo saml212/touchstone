@@ -26,6 +26,12 @@ class Settings:
     def db(self) -> Path:
         return Path(self.db_path).expanduser()
 
+    @property
+    def root(self) -> Path:
+        """Project root holding tasks/, checks.toml, benchmarks/ — beside `.touchstone/`."""
+        db = self.db
+        return db.parent.parent if db.parent.name == ".touchstone" else db.parent
+
     def keychain_service(self, name: str) -> str:
         """Full service for a bare name: 'openai-api-key' -> 'touchstone-openai-api-key'."""
         return f"{self.keychain_prefix}{name}"

@@ -18,6 +18,8 @@ from .. import store
 from ..checks import Check as DslCheck
 from ..checks import find_pii
 from ..checks.dsl import PARAM_SPEC
+from ..policies import Policy, materialize, read_policies, write_policies
+from ..tasks import Task, write_task
 from . import cut as cut_mod
 from .codebase import Snippet
 
@@ -47,26 +49,21 @@ class Proposal:
     origin: str = "stats"  # stats | llm
     support: dict = field(default_factory=dict)
 
-    def dsl(self) -> DslCheck:
-        return DslCheck(
+    def check(self) -> DslCheck:
+        c = DslCheck(
             kind=self.kind,
             params=self.params,
-            name=self.name,
-            applies_to=self.applies_to,
-            severity=self.severity,
-        )
-
-    def store_check(self) -> store.Check:
-        return store.Check(
             name=self.name or self.kind,
-            kind=self.kind,
-            params=self.params,
             applies_to=self.applies_to,
             severity=self.severity,
+            because=self.rationale,
             source="mined",
-            rationale=self.rationale,
-            enabled=0,
         )
+        c.id = c.name
+        return c
+
+    def policy(self) -> Policy:
+        return Policy(check=self.check(), enabled=False)
 
     @property
     def support_count(self) -> int:
@@ -453,8 +450,24 @@ def dedupe(existing_checks, proposals: list[Proposal]) -> list[Proposal]:
     return out
 
 
+def _materialize(root: str, conn, episodes: list[store.Episode]) -> list[Task]:
+    """Rebuild every task directory from `episodes` and the currently enabled policies."""
+    enabled = [p for p in read_policies(root) if p.enabled]
+    built = cut_mod.build_tasks(conn, episodes)
+    for task in built:
+        task.checks = materialize(task, enabled)
+        write_task(root, task)
+    return built
+
+
+def sync(conn, root: str) -> int:
+    """Re-materialise every task from the captured episodes + current policies."""
+    return len(_materialize(root, conn, store.list_episodes(conn)))
+
+
 def mine(
     conn,
+    root: str,
     *,
     provider=None,
     code_snippets: list[Snippet] | None = None,
@@ -467,11 +480,11 @@ def mine(
 
     stats = mine_stats(conn, episodes)
     llm = [] if no_llm else mine_llm(conn, provider, episodes, code_snippets or [])
-    fresh = dedupe(store.list_checks(conn), stats + llm)
-    for proposal in fresh:
-        store.insert_check(conn, proposal.store_check())
+    existing = read_policies(root)
+    fresh = dedupe([p.check for p in existing], stats + llm)
+    write_policies(root, existing + [p.policy() for p in fresh])
 
-    tasks = cut_mod.cut_tasks(conn, episodes)
+    tasks = _materialize(root, conn, episodes)
     return {
         "proposals": fresh,
         "stats": len(stats),

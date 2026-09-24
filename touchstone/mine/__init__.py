@@ -1,13 +1,14 @@
 from .codebase import Snippet, scan_codebase
-from .cut import cut_tasks
-from .miner import Proposal, dedupe, mine, mine_llm, mine_stats
+from .cut import build_tasks
+from .miner import Proposal, dedupe, mine, mine_llm, mine_stats, sync
 
 __all__ = [
     "Snippet",
     "scan_codebase",
-    "cut_tasks",
+    "build_tasks",
     "Proposal",
     "mine",
+    "sync",
     "mine_stats",
     "mine_llm",
     "dedupe",
