@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ... import store
 from ...checks import Check as DslCheck
-from ...checks import Target, evaluate
+from ...checks import Target, coerce_tool_calls, evaluate
 from ...checks.dsl import PARAM_SPEC
 from ._deps import check_view, get_conn
 
@@ -75,7 +75,11 @@ def eval_check(check_id: str, body: dict, request: Request, conn=Depends(get_con
     row = store.get_check(conn, check_id)
     if row is None:
         raise HTTPException(404, f"no check with id {check_id}")
-    target = Target(output_text=body.get("text", "") or "", tool_calls=body.get("tool_calls") or [])
+    try:
+        calls = coerce_tool_calls(body.get("tool_calls"))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    target = Target(output_text=body.get("text", "") or "", tool_calls=calls)
     provider = _judge_provider(request) if row.kind == "judge" else None
     check = DslCheck.from_dict({
         "kind": row.kind, "params": row.params, "id": row.id, "name": row.name,

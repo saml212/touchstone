@@ -272,3 +272,11 @@ def test_train_submit_unknown_backend_422(db):
     c = _client(db)
     assert c.post("/api/train/submit",
                   json={"benchmark": ids["bench"], "backend": "nope"}).status_code == 422
+
+
+def test_check_eval_malformed_tool_calls_is_422_not_500(db):
+    ids = _seed(db)
+    c = _client(db)
+    for bad in (5, "astring", [1, 2, 3], {"name": "x"}):
+        r = c.post(f"/api/checks/{ids['check']}/eval", json={"text": "x", "tool_calls": bad})
+        assert r.status_code == 422, (bad, r.status_code)

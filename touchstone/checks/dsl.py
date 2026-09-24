@@ -107,6 +107,15 @@ class Target:
     reference: dict | None = None
 
 
+def coerce_tool_calls(value) -> list[dict]:
+    """Validate an untrusted tool_calls payload (CLI/API boundary) into a list of dict calls."""
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list) or not all(isinstance(tc, dict) for tc in value):
+        raise ValueError("tool_calls must be a JSON list of {name, arguments} objects")
+    return value
+
+
 @dataclass
 class Check:
     kind: str

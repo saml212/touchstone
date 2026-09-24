@@ -93,3 +93,16 @@ def test_bench_proof_bad_run_fails_cleanly(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "\n" not in result.output.strip()
     assert "run" in result.output.lower()
+
+
+def test_checks_eval_malformed_tool_calls_fails_cleanly(tmp_path, monkeypatch):
+    _bench_repo(tmp_path, monkeypatch)
+    from touchstone import store
+    conn = store.connect(str(tmp_path / ".touchstone" / "touchstone.db"))
+    cid = store.list_checks(conn)[0].id
+    conn.close()
+    result = runner.invoke(
+        app, ["checks", "eval", cid, "--tool-calls", "5"], catch_exceptions=False
+    )
+    assert result.exit_code == 1
+    assert "\n" not in result.output.strip()

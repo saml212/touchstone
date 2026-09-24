@@ -311,7 +311,7 @@ def checks_eval(
 ) -> None:
     """Evaluate one stored check against a supplied output for quick manual testing."""
     from .checks import Check as DslCheck
-    from .checks import Target, evaluate
+    from .checks import Target, coerce_tool_calls, evaluate
 
     conn = _open_db()
     try:
@@ -323,9 +323,11 @@ def checks_eval(
     calls = []
     if tool_calls:
         try:
-            calls = json.loads(tool_calls)
+            calls = coerce_tool_calls(json.loads(tool_calls))
         except json.JSONDecodeError as exc:
             _fail(f"--tool-calls is not valid JSON: {exc}")
+        except ValueError as exc:
+            _fail(f"--tool-calls {exc}")
     target = Target(output_text=text, tool_calls=calls)
     provider = _judge_provider() if row.kind == "judge" else None
     check = DslCheck.from_dict(
