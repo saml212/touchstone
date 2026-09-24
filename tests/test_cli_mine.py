@@ -58,7 +58,10 @@ def test_tasks_list_show_and_sync(tmp_path, monkeypatch):
 
     listed = runner.invoke(app, ["tasks", "list"])
     assert listed.exit_code == 0
-    name = listed.output.strip().splitlines()[0].split()[0]
+    # grouped by queue: headers are flush-left, task rows are indented.
+    task_lines = [ln for ln in listed.output.splitlines() if ln.startswith("  ")]
+    assert task_lines, listed.output
+    name = task_lines[0].split()[0]
 
     shown = runner.invoke(app, ["tasks", "show", name])
     assert shown.exit_code == 0
@@ -70,8 +73,9 @@ def test_tasks_list_tag_filter(tmp_path, monkeypatch):
     runner.invoke(app, ["mine", "--no-llm"])
     result = runner.invoke(app, ["tasks", "list", "--tag", "failure"])
     assert result.exit_code == 0
-    for line in result.output.strip().splitlines():
-        assert "failure" in line
+    for line in result.output.splitlines():
+        if line.startswith("  "):  # a task row, not a queue header
+            assert "failure" in line
 
 
 def test_tasks_show_unknown_id_nonzero(tmp_path, monkeypatch):

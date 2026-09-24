@@ -7,9 +7,13 @@ everything Touchstone-specific under the free-form `[metadata.touchstone]` table
 container verifier needs under `tests/` (which is the only tree Harbor mounts into the verifier),
 so each directory is self-contained.
 
-`write_task` re-materialises a task in place: interview/manual check blocks already on disk are
-preserved, mined/policy blocks are replaced. A task is gated at write time — its reference must
-score 1 (oracle) and an empty reply must score 0 (nop) — and marked `status = "rejected"` otherwise.
+`write_task` re-materialises a task in place: interview/manual check blocks and the measured
+difficulty cache already on disk are preserved, mined/policy blocks are replaced. A task is a work
+queue, not a pass/fail flag — `validate` sorts it into one of three statuses at write time:
+`active` (its reference scores 1 as the oracle and an empty reply scores 0 as the nop),
+`needs_checks` (an empty reply already passes every hard check, so the task measures nothing yet),
+or `needs_solution` (the recorded reply fails its own hard checks — a failure with no oracle, so a
+teacher or a human must supply one). Only `active` tasks enter a benchmark.
 """
 
 from __future__ import annotations
@@ -54,12 +58,16 @@ class Task:
     cut_span_id: str | None = None
     kind: str = "replay"
     tags: list = field(default_factory=list)
-    status: str = "active"  # active | rejected
-    reason: str = ""  # why a task was rejected
+    status: str = "active"  # active | needs_checks | needs_solution
+    status_reason: str = ""  # why the task landed in its queue
     description: str = ""
     context: dict = field(default_factory=dict)  # {messages, tools}
     reference: dict | None = None
     checks: list[Check] = field(default_factory=list)
+    parent_task: str | None = None  # the task a Sample variant was generated from
+    generated_by: str | None = None  # the teacher spec that generated a variant
+    reference_from: str | None = None  # a teacher spec, when the oracle is a teacher demo
+    difficulty: dict = field(default_factory=dict)  # measured pass rate per model_spec (cache)
 
 
 def _slug(text: str) -> str:
@@ -89,15 +97,19 @@ def _reward(checks: list[Check], output_text: str, tool_calls: list[dict], refer
     return 1.0 if passes(evaluate(gradable, target), gradable) else 0.0
 
 
-def gate(task: Task) -> tuple[str, str]:
-    """(status, reason): a task counts only if its reference scores 1 and an empty reply 0."""
+def validate(task: Task) -> tuple[str, str]:
+    """(status, reason): sort a task into its work queue by the oracle/nop gate.
+
+    `needs_solution` — the recorded reply fails its own hard checks (no oracle yet).
+    `needs_checks`   — an empty reply already passes every hard check (measures nothing yet).
+    `active`         — oracle scores 1 and nop scores 0. Only these enter a benchmark.
+    """
     ref = task.reference or {"content": "", "tool_calls": []}
-    content = text_of(ref)
     calls = ref.get("tool_calls") or []
-    if _reward(task.checks, content, calls, ref) < 1.0:
-        return "rejected", "oracle: the reference does not satisfy its own hard checks"
+    if _reward(task.checks, text_of(ref), calls, ref) < 1.0:
+        return "needs_solution", "the recorded reply fails its own hard checks"
     if _reward(task.checks, "", [], ref) >= 1.0:
-        return "rejected", "nop: an empty reply already passes every hard check"
+        return "needs_checks", "an empty reply already passes every hard check"
     return "active", ""
 
 
@@ -115,7 +127,11 @@ def _dedupe(checks: list[Check]) -> list[Check]:
     return out
 
 
-def _task_toml(task: Task) -> str:
+_OPTIONAL_TS_KEYS = ("episode_id", "cut_span_id", "status_reason",
+                     "parent_task", "generated_by", "reference_from")
+
+
+def _touchstone_meta(task: Task) -> dict:
     ts: dict = {
         "kind": task.kind,
         "tags": list(task.tags or []),
@@ -123,14 +139,16 @@ def _task_toml(task: Task) -> str:
         "context_file": "context.json",
         "reference_file": "reference.json",
     }
-    if task.episode_id:
-        ts["episode_id"] = task.episode_id
-    if task.cut_span_id:
-        ts["cut_span_id"] = task.cut_span_id
-    if task.reason:
-        ts["reason"] = task.reason
+    for key in _OPTIONAL_TS_KEYS:
+        if getattr(task, key):
+            ts[key] = getattr(task, key)
+    if task.difficulty:
+        ts["difficulty"] = dict(task.difficulty)
     ts["check"] = [c.to_toml() for c in task.checks]
+    return ts
 
+
+def _task_toml(task: Task) -> str:
     doc = {
         "schema_version": "1.4",
         "task": {
@@ -139,7 +157,7 @@ def _task_toml(task: Task) -> str:
             "description": task.description or f"Replay task {task.name}.",
             "keywords": list(task.tags or []),
         },
-        "metadata": {"touchstone": ts},
+        "metadata": {"touchstone": _touchstone_meta(task)},
         "verifier": {"timeout_sec": 900.0},
         "agent": {"timeout_sec": 900.0},
         "environment": {"build_timeout_sec": 600.0},
@@ -224,6 +242,14 @@ def preserved_checks(root: str | Path, name: str) -> list[Check]:
     return [c for c in read_task(task_dir).checks if c.source in PRESERVE_SOURCES]
 
 
+def preserved_difficulty(root: str | Path, name: str) -> dict:
+    """The measured difficulty cache already on a task (survives re-materialisation)."""
+    task_dir = tasks_dir(root) / name
+    if not (task_dir / "task.toml").exists():
+        return {}
+    return dict(read_task(task_dir).difficulty)
+
+
 def write_task(root: str | Path, task: Task, *, preserve: bool = True) -> Path:
     """Write (or re-materialise) `task` under `root/tasks/<name>/`.
 
@@ -234,7 +260,9 @@ def write_task(root: str | Path, task: Task, *, preserve: bool = True) -> Path:
     task_dir = tasks_dir(root) / task.name
     kept = preserved_checks(root, task.name) if preserve else []
     task.checks = _dedupe(list(task.checks) + kept)
-    task.status, task.reason = gate(task)
+    if preserve:
+        task.difficulty = {**preserved_difficulty(root, task.name), **(task.difficulty or {})}
+    task.status, task.status_reason = validate(task)
 
     task_dir.mkdir(parents=True, exist_ok=True)
     _write(task_dir / "task.toml", _task_toml(task))
@@ -290,11 +318,15 @@ def read_task(task_dir: str | Path) -> Task:
         kind=ts.get("kind", "replay"),
         tags=list(ts.get("tags", [])),
         status=ts.get("status", "active"),
-        reason=ts.get("reason", ""),
+        status_reason=ts.get("status_reason", ts.get("reason", "")),
         description=doc.get("task", {}).get("description", ""),
         context=_load_json(task_dir, ts.get("context_file", "context.json"), {}),
         reference=_load_json(task_dir, ts.get("reference_file", "reference.json"), None),
         checks=[Check.from_toml(b) for b in ts.get("check", [])],
+        parent_task=ts.get("parent_task"),
+        generated_by=ts.get("generated_by"),
+        reference_from=ts.get("reference_from"),
+        difficulty=dict(ts.get("difficulty", {})),
     )
 
 

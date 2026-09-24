@@ -11,13 +11,24 @@ from ._common import _db, _fail, _root
 
 tasks_app = typer.Typer(help="Inspect and rebuild replay tasks.", no_args_is_help=True)
 
+_QUEUES = ("active", "needs_checks", "needs_solution")
+_QUEUE_HINT = {
+    "active": "ready for benchmarks",
+    "needs_checks": "interview to add a check that measures the work",
+    "needs_solution": "ask a teacher (or a human) for a passing reply",
+}
+
 
 @tasks_app.command("list")
 def tasks_list(tag: str = typer.Option(None, "--tag", help="Filter by tag.")) -> None:
-    """List tasks with their status, check count, and tags."""
-    for t in tasks_mod.list_tasks(_root(), tag=tag):
-        flag = "ok " if t.status == "active" else "rej"
-        typer.echo(f"{t.name}  [{flag}] {len(t.checks)} checks  ({','.join(t.tags or [])})")
+    """List tasks grouped by work queue (active / needs_checks / needs_solution) with counts."""
+    tasks = tasks_mod.list_tasks(_root(), tag=tag)
+    by_status = {q: [t for t in tasks if t.status == q] for q in _QUEUES}
+    for status in _QUEUES:
+        group = by_status[status]
+        typer.echo(f"{status}  ({len(group)}) — {_QUEUE_HINT[status]}")
+        for t in group:
+            typer.echo(f"  {t.name}  {len(t.checks)} checks  ({','.join(t.tags or [])})")
 
 
 @tasks_app.command("show")
@@ -27,7 +38,8 @@ def tasks_show(name: str) -> None:
     if task is None:
         _fail(f"no task {name!r}")
     typer.echo(f"name:   {task.name}")
-    typer.echo(f"status: {task.status}{f' — {task.reason}' if task.reason else ''}")
+    reason = f" — {task.status_reason}" if task.status_reason else ""
+    typer.echo(f"status: {task.status}{reason}")
     typer.echo(f"tags:   {', '.join(task.tags or [])}")
     typer.echo("context:")
     for m in (task.context or {}).get("messages", []):

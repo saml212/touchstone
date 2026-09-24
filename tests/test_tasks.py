@@ -90,22 +90,37 @@ def test_gate_active_when_reference_passes_and_nop_fails(tmp_path):
     assert tasks.read_task(tmp_path / "tasks" / "ok-01").status == "active"
 
 
-def test_gate_rejects_when_empty_reply_passes(tmp_path):
-    # only a safety check: an empty reply satisfies it, so the task is not a real task.
+def test_gate_needs_checks_when_empty_reply_passes(tmp_path):
+    # only a safety check: an empty reply satisfies it, so the task measures nothing yet.
     safety = Check(kind="no_pii", params={"kinds": ["email"]}, name="no email", source="policy")
     tasks.write_task(tmp_path, _task(name="nop-01", checks=[safety]))
     got = tasks.read_task(tmp_path / "tasks" / "nop-01")
-    assert got.status == "rejected" and "nop" in got.reason
+    assert got.status == "needs_checks" and "empty reply" in got.status_reason
 
 
-def test_gate_rejects_when_reference_fails_its_own_check(tmp_path):
+def test_gate_needs_solution_when_reference_fails_its_own_check(tmp_path):
     leak = Check(kind="no_pii", params={"kinds": ["email"]}, name="no email", source="policy")
     ref = {"content": "email me at a@b.com", "tool_calls": []}
     hard = Check(kind="tool_called", params={"name": "order_status"}, name="calls it",
                  source="policy")
     tasks.write_task(tmp_path, _task(name="bad-ref", reference=ref, checks=[leak, hard]))
     got = tasks.read_task(tmp_path / "tasks" / "bad-ref")
-    assert got.status == "rejected" and "oracle" in got.reason
+    assert got.status == "needs_solution" and "recorded reply" in got.status_reason
+
+
+def test_difficulty_cache_and_provenance_survive_rematerialisation(tmp_path):
+    t = _task(name="diff-01")
+    t.difficulty = {"openai:gpt-4o-mini": 0.5}
+    t.parent_task = "diff-parent"
+    t.generated_by = "claude-cli"
+    tasks.write_task(tmp_path, t)
+    # re-materialise from a fresh Task carrying no difficulty; the cache must survive.
+    tasks.write_task(tmp_path, _task(name="diff-01"))
+    got = tasks.read_task(tmp_path / "tasks" / "diff-01")
+    assert got.difficulty == {"openai:gpt-4o-mini": 0.5}
+    assert got.parent_task is None  # provenance is not preserved, only the measured cache
+    # writing provenance persists it
+    assert tasks.read_task(tmp_path / "tasks" / "diff-01").difficulty["openai:gpt-4o-mini"] == 0.5
 
 
 def test_sync_preserves_interview_blocks_replaces_policy(tmp_path):

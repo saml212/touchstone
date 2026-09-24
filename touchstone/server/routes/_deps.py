@@ -43,7 +43,7 @@ def task_view(t: Task) -> dict:
 def task_detail(t: Task) -> dict:
     return {
         "name": t.name, "kind": t.kind, "tags": t.tags or [], "episode_id": t.episode_id,
-        "cut_span_id": t.cut_span_id, "status": t.status, "reason": t.reason,
+        "cut_span_id": t.cut_span_id, "status": t.status, "status_reason": t.status_reason,
         "context": t.context, "reference": t.reference,
         "checks": [check_view(c) for c in t.checks],
     }
