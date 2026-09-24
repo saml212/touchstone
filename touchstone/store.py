@@ -486,3 +486,14 @@ def link_room_check(conn, room_id: str, check_id: str) -> None:
             "INSERT OR IGNORE INTO room_checks (room_id, check_id) VALUES (?, ?)",
             (room_id, check_id),
         )
+
+
+def list_room_check_ids(conn, room_id: str) -> list[str]:
+    rows = conn.execute(
+        "SELECT check_id FROM room_checks WHERE room_id=? ORDER BY check_id", (room_id,)
+    ).fetchall()
+    return [r["check_id"] for r in rows]
+
+
+def close_room(conn, room_id: str) -> None:
+    _update(conn, "rooms", "id", room_id, closed_at=now())

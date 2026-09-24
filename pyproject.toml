@@ -18,7 +18,12 @@ dependencies = [
     "pydantic>=2.6",
     "simpleeval>=0.9.13",
     "jsonschema>=4.21",
+    "python-multipart>=0.0.9",
+    "websockets>=12",
 ]
+
+[project.optional-dependencies]
+whisper = ["faster-whisper>=1.0"]
 
 [project.scripts]
 touchstone = "touchstone.cli:app"
