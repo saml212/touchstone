@@ -328,3 +328,20 @@ def test_teach_task_endpoint(db):
     r = c.post("/api/tasks/t1/teach", json={})
     assert r.status_code == 200 and "status" in r.json() and "teacher" in r.json()
     assert c.post("/api/tasks/nope/teach", json={}).status_code == 404
+
+
+def test_no_api_route_500s_on_an_empty_project(db):
+    # `touchstone init` then `serve` with zero episodes: every read route must answer
+    # (200 with empty data, or a clean 404/422), never a 500.
+    store.connect(db).close()  # schema only, no episodes/tasks/benchmarks
+    c = TestClient(create_app(Settings(db_path=db, provider="scripted",
+                                       agent_provider="scripted")),
+                   raise_server_exceptions=False)
+    gets = ["/api/overview", "/api/episodes", "/api/episodes/nope", "/api/checks",
+            "/api/checks/kinds", "/api/tasks", "/api/tasks/nope", "/api/benchmarks",
+            "/api/runs", "/api/runs/nope", "/api/rooms", "/api/rooms/nope", "/api/report",
+            "/api/loop/nope"]
+    for path in gets:
+        assert c.get(path).status_code < 500, path
+    assert c.post("/api/export/harbor", json={}).status_code < 500
+    assert c.post("/api/rooms", json={"topic": "x"}).status_code < 500
