@@ -100,14 +100,7 @@ def _output_key(msg: dict) -> str:
 
 
 def _benchmark_runs(conn, bench: store.Benchmark) -> list[store.Run]:
-    """Runs for this benchmark. Runs record the benchmark id/name as it was passed to `bench run`,
-    so resolve each run's stored key back to a benchmark and match on the canonical id."""
-    runs = []
-    for run in store.list_runs(conn):
-        resolved = store.get_benchmark(conn, run.benchmark_id)
-        if resolved is not None and resolved.id == bench.id:
-            runs.append(run)
-    return runs
+    return [r for r in store.list_runs(conn) if r.benchmark_id == bench.id]
 
 
 def _candidate_outcomes(conn, bench: store.Benchmark) -> dict[str, dict[str, list[dict]]]:

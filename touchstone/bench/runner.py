@@ -133,7 +133,7 @@ def start(
         raise ValueError(f"no benchmark {benchmark_id!r}")
     tasks = [t for t in (store.get_task(conn, tid) for tid in bench.task_ids) if t is not None]
     return store.insert_run(conn, store.Run(
-        benchmark_id=benchmark_id, model_spec=model_spec,
+        benchmark_id=bench.id, model_spec=model_spec,
         meta={"concurrency": concurrency, "timeout": timeout, "task_count": len(tasks)},
     ))
 
