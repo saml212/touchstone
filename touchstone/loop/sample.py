@@ -177,7 +177,7 @@ def _write_generation(root, variant: tasks_mod.Task, parent: tasks_mod.Task,
 def _make_variant(root, parent, instr, index, teacher_spec) -> str | None:
     """Build, gate and persist one variant; return its name when active, else discard it."""
     method = instr["method"]
-    variant = _variant_of(parent, f"{parent.name}--v{index}", teacher_spec)
+    variant = _variant_of(parent, f"{parent.name}-v{index}", teacher_spec)
     if not _APPLIERS[method](variant, instr):
         return None
     if _signature(variant) == _signature(parent):

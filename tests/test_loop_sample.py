@@ -90,4 +90,4 @@ def test_variant_identical_to_parent_is_rejected_as_duplicate(tmp_path):
         content=json.dumps([{"method": "paraphrase", "user": "where is my order"}]))])
     created = sample_mod._generate_variants(root, teacher, ["p"], "teacher:x", 1)
     assert created == []
-    assert tasks.get_task(root, "p--v0") is None
+    assert tasks.get_task(root, "p-v0") is None

@@ -29,7 +29,7 @@ from ..checks import SAFETY_KINDS, find_pii
 from ..checks import Check as DslCheck
 from ..checks.dsl import PARAM_SPEC
 from ..policies import Policy, materialize, read_policies, write_policies
-from ..tasks import Task, write_task
+from ..tasks import Task, migrate_names, write_task
 from . import cut as cut_mod
 from .codebase import Snippet
 
@@ -567,6 +567,7 @@ def _materialize(root: str, conn, episodes: list[store.Episode]) -> list[Task]:
     """Rebuild every task directory from `episodes` and the currently enabled policies."""
     enabled = [p for p in read_policies(root) if p.enabled]
     built = cut_mod.build_tasks(conn, episodes)
+    migrate_names(root, {(t.episode_id, t.cut_span_id): t.name for t in built})
     for task in built:
         task.checks = materialize(task, enabled)
         write_task(root, task)

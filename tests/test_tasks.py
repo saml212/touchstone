@@ -38,10 +38,58 @@ def _task(name="support-a1-01xyz", **kw):
 def test_task_name_is_deterministic_and_filesystem_safe():
     ep = _Ep(name="Support / A1094 #4")
     span = _Span(id="01M38QQRHS8S3KV4W0VKW82DBA")
-    n1 = tasks.task_name(ep, span)
-    n2 = tasks.task_name(ep, span)
-    assert n1 == n2 == "support-a1094-4-01m38qqrhs8s3kv4w0vkw82dba"
+    n1 = tasks.task_name(ep, span, turn=1)
+    n2 = tasks.task_name(ep, span, turn=1)
+    assert n1 == n2 == "support-a1094-4-turn-1"
     assert "/" not in n1 and " " not in n1
+
+
+def test_task_name_numbers_turns_and_disambiguates_recurring_episodes():
+    ep = _Ep(name="checkout")
+    span = _Span(id="01M38QQRHS8S3KV4W0VKW82DBA")
+    # Turn index makes each cut within one episode a distinct, readable name.
+    assert tasks.task_name(ep, span, turn=2) == "checkout-turn-2"
+    # Two episodes sharing a slug would collide, so the span id disambiguates.
+    assert tasks.task_name(ep, span, turn=1, disambiguate=True) == "checkout-turn-1-01m38q"
+
+
+def test_migrate_names_renames_dirs_variants_and_benchmarks(tmp_path):
+    from touchstone.checks import Check as _Check
+
+    # An old-scheme replay dir with an authored interview check + a measured difficulty cache,
+    # a variant of it, and a benchmark that lists the replay by its old name.
+    parent = _task(name="support-a1-01old", episode_id="ep1", cut_span_id="01SPAN",
+                   difficulty={"scripted": {"pass_rate": 0.5}})
+    parent.checks.append(_Check(kind="contains", params={"values": ["sorted"], "mode": "any"},
+                                name="says sorted", severity="hard", source="interview"))
+    tasks.write_task(tmp_path, parent)
+    variant = tasks.Task(name="support-a1-01old--v0", kind="variant",
+                         parent_task="support-a1-01old",
+                         context=parent.context, reference=parent.reference)
+    tasks.write_task(tmp_path, variant, preserve=False)
+    (tasks.tasks_dir(tmp_path) / variant.name / "generation.json").write_text(
+        json.dumps({"parent_task": "support-a1-01old", "teacher": "t"}), encoding="utf-8")
+    bench = tmp_path / "benchmarks" / "demo.toml"
+    bench.parent.mkdir(parents=True)
+    bench.write_text('tasks = ["tasks/support-a1-01old", "tasks/support-a1-01old--v0"]\n')
+
+    moved = tasks.migrate_names(tmp_path, {("ep1", "01SPAN"): "support-a1-turn-1"})
+
+    assert moved["support-a1-01old"] == "support-a1-turn-1"
+    assert not (tasks.tasks_dir(tmp_path) / "support-a1-01old").exists()  # old removed
+    got = tasks.get_task(tmp_path, "support-a1-turn-1")
+    assert got is not None
+    assert "says sorted" in {c.name for c in got.checks}  # interview check preserved
+    assert got.difficulty == {"scripted": {"pass_rate": 0.5}}  # difficulty cache preserved
+    moved_variant = tasks.get_task(tmp_path, "support-a1-turn-1-v0")  # -- collapsed to -
+    assert moved_variant is not None and moved_variant.parent_task == "support-a1-turn-1"
+    gen = json.loads(
+        (tasks.tasks_dir(tmp_path) / "support-a1-turn-1-v0" / "generation.json").read_text())
+    assert gen["parent_task"] == "support-a1-turn-1"
+    assert 'tasks/support-a1-turn-1"' in bench.read_text()
+    assert 'tasks/support-a1-turn-1-v0"' in bench.read_text()
+    # Idempotent: a second pass with the same target finds nothing to move.
+    assert tasks.migrate_names(tmp_path, {("ep1", "01SPAN"): "support-a1-turn-1"}) == {}
 
 
 def test_write_creates_full_harbor_layout(tmp_path):
@@ -218,9 +266,8 @@ def test_task_name_caps_length_for_a_very_long_episode(tmp_path):
     # filesystem's 255-byte limit and crashes `mine`/`sync` mid-run.
     ep = _Ep(name="Order dispute " + "A" * 400)
     span = _Span(id="01M38QQRHS8S3KV4W0VKW82DBA")
-    name = tasks.task_name(ep, span)
-    assert len(name.encode()) <= 255
-    assert name == tasks.task_name(ep, span)  # deterministic
-    assert name.endswith("-01m38qqrhs8s3kv4w0vkw82dba")  # span id still anchors it
+    name = tasks.task_name(ep, span, turn=3, disambiguate=True)
+    assert len(name) <= 100
+    assert name == tasks.task_name(ep, span, turn=3, disambiguate=True)  # deterministic
     d = tasks.write_task(tmp_path, _task(name=name))
     assert d.exists()

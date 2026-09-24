@@ -8,8 +8,10 @@ just builds the `Task` objects — writing them to directories is `write_task`'s
 
 from __future__ import annotations
 
+from collections import Counter
+
 from .. import store
-from ..tasks import Task, task_name
+from ..tasks import Task, _slug, task_name
 
 
 def _is_failure(ep: store.Episode) -> bool:
@@ -22,7 +24,12 @@ def _reference(span: store.Span) -> dict:
 
 
 def build_tasks(conn, episodes: list[store.Episode]) -> list[Task]:
-    """One Task per recorded assistant turn across `episodes` (no checks, no I/O)."""
+    """One Task per recorded assistant turn across `episodes` (no checks, no I/O).
+
+    Task names are `<episode-slug>-turn-<n>`; episodes that share a slug are disambiguated by a
+    short span-id suffix so directory names stay unique yet readable.
+    """
+    slug_counts = Counter(_slug(ep.name) for ep in episodes)
     tasks: list[Task] = []
     for ep in episodes:
         spans = store.list_spans(conn, ep.id)
@@ -33,10 +40,12 @@ def build_tasks(conn, episodes: list[store.Episode]) -> list[Task]:
             + tool_names
             + (["failure"] if failure else [])
         )
-        for span in (s for s in spans if s.kind == "model"):
+        disambiguate = slug_counts[_slug(ep.name)] > 1
+        model_spans = [s for s in spans if s.kind == "model"]
+        for turn, span in enumerate(model_spans, start=1):
             ctx = span.input or {}
             tasks.append(Task(
-                name=task_name(ep, span),
+                name=task_name(ep, span, turn=turn, disambiguate=disambiguate),
                 episode_id=ep.id,
                 cut_span_id=span.id,
                 kind="replay",

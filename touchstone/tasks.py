@@ -70,20 +70,27 @@ class Task:
     difficulty: dict = field(default_factory=dict)  # measured pass rate per model_spec (cache)
 
 
+_SLUG_CAP = 80  # leaves room for "-turn-<n>[-<span6>]" under the 100-char cap
+
+
 def _slug(text: str) -> str:
     s = re.sub(r"[^A-Za-z0-9]+", "-", text or "").strip("-").lower()
     return s or "task"
 
 
-def task_name(episode, span) -> str:
-    """Stable, sortable, filesystem-safe name for the task cut at `span` of `episode`.
+def task_name(episode, span, *, turn: int, disambiguate: bool = False) -> str:
+    """Human-readable, deterministic, ≤100-char, filesystem-safe name for a cut task.
 
-    Deterministic for a given episode/span: the span id (a sortable ULID) anchors it, so
-    re-mining and `tasks sync` rebuild the identical directory name. The episode slug is
-    capped so a very long name cannot push the directory component past the filesystem's
-    255-byte limit (the span id keeps every cut unique regardless).
+    `<episode-slug>-turn-<n>`, where `n` is the 1-based assistant-turn index within the episode —
+    a name a human can read and a benchmark can list. When several episodes share the same slug
+    the bare name would collide across them, so `disambiguate` appends the first six characters of
+    the span id to keep every directory unique. Deterministic for a given episode/turn, so
+    re-mining and `tasks sync` rebuild the identical name.
     """
-    return f"{_slug(episode.name)[:100]}-{span.id.lower()}"
+    name = f"{_slug(episode.name)[:_SLUG_CAP]}-turn-{turn}"
+    if disambiguate:
+        name = f"{name}-{span.id.lower()[:6]}"
+    return name[:100]
 
 
 def tasks_dir(root: str | Path) -> Path:
@@ -356,3 +363,106 @@ def list_tasks(
 def get_task(root: str | Path, name: str) -> Task | None:
     task_dir = tasks_dir(root) / name
     return read_task(task_dir) if (task_dir / "task.toml").exists() else None
+
+
+# ---- migration --------------------------------------------------------------
+
+_VARIANT_SUFFIX = re.compile(r"-+v(\d+)$")
+
+
+def _replay_renames(existing: list[Task], new_by_key: dict[tuple, str]) -> dict[str, str]:
+    """Replay dirs whose scheme changed, matched to their new name by (episode, span)."""
+    out: dict[str, str] = {}
+    for task in existing:
+        new = new_by_key.get((task.episode_id, task.cut_span_id))
+        if task.kind != "variant" and new and new != task.name:
+            out[task.name] = new
+    return out
+
+
+def _variant_renames(existing: list[Task], parents: dict[str, str]) -> dict[str, str]:
+    """Variant dirs follow their parent's new name and drop the legacy `--v` separator."""
+    out: dict[str, str] = {}
+    for task in existing:
+        m = _VARIANT_SUFFIX.search(task.name)
+        if task.kind != "variant" or not task.parent_task or not m:
+            continue
+        new = f"{parents.get(task.parent_task, task.parent_task)}-v{m.group(1)}"
+        if new != task.name:
+            out[task.name] = new
+    return out
+
+
+def _plan_renames(existing: list[Task], new_by_key: dict[tuple, str]) -> dict[str, str]:
+    """old dir name -> new dir name for every replay task and its variants."""
+    renames = _replay_renames(existing, new_by_key)
+    renames.update(_variant_renames(existing, renames))
+    return renames
+
+
+def _retarget_one_variant(root: str | Path, task_dir: Path, task: Task, parents: dict[str, str]):
+    """Point one moved variant at its parent's new name, on disk and in generation.json."""
+    new_parent = parents.get(task.parent_task or "", task.parent_task)
+    if task.kind != "variant" or new_parent == task.parent_task:
+        return
+    task.parent_task = new_parent
+    write_task(root, task, preserve=False)
+    data = _load_json(task_dir, "generation.json", None)
+    if isinstance(data, dict):
+        data["parent_task"] = new_parent
+        (task_dir / "generation.json").write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _retarget_variants(root: str | Path, renames: dict[str, str]) -> None:
+    base = tasks_dir(root)
+    for new in renames.values():
+        task_dir = base / new
+        if (task_dir / "task.toml").exists():
+            _retarget_one_variant(root, task_dir, read_task(task_dir), renames)
+
+
+def _rewrite_benchmarks(root: str | Path, renames: dict[str, str]) -> None:
+    """Rewrite the `tasks = [...]` list in every benchmark that names a renamed task."""
+    bdir = Path(root) / "benchmarks"
+    for spec in sorted(bdir.glob("*.toml")) if bdir.exists() else []:
+        try:
+            doc = tomllib.loads(spec.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        listed = doc.get("tasks")
+        if not isinstance(listed, list):
+            continue
+        updated = [
+            f"tasks/{renames[entry.removeprefix('tasks/')]}"
+            if entry.removeprefix("tasks/") in renames
+            else entry
+            for entry in listed
+        ]
+        if updated != listed:
+            doc["tasks"] = updated
+            spec.write_text(tomli_w.dumps(doc), encoding="utf-8")
+
+
+def migrate_names(root: str | Path, new_by_key: dict[tuple, str]) -> dict[str, str]:
+    """Rename task dirs that predate the `<episode-slug>-turn-<n>` scheme, in place.
+
+    `new_by_key` maps (episode_id, cut_span_id) -> the new replay-task name (the freshly cut
+    tasks already carry it). Each old dir is moved to its new name — git sees a rename, so the
+    history stays legible — variants are retargeted at their parents, and benchmark task lists are
+    rewritten. Idempotent: once every dir already carries its new name the map is empty and
+    nothing is touched.
+    """
+    base = tasks_dir(root)
+    if not base.exists():
+        return {}
+    renames = _plan_renames(list_tasks(root), new_by_key)
+    if not renames:
+        return {}
+    for old, new in renames.items():
+        old_dir, new_dir = base / old, base / new
+        if old_dir.exists() and not new_dir.exists():
+            old_dir.rename(new_dir)
+    _retarget_variants(root, renames)
+    _rewrite_benchmarks(root, renames)
+    return renames
