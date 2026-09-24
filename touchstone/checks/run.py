@@ -20,19 +20,21 @@ from .dsl import Target, is_catastrophic_regex
 @dataclass
 class CheckResult:
     check_id: str
-    passed: bool | None  # None = errored / skipped
+    passed: bool | None  # None = errored / skipped / low agreement
     evidence: str = ""
+    agreement: float | None = None  # judge-sampling agreement, when the check was sampled
 
 
 def evaluate(checks, target: Target, judge_provider=None) -> list[CheckResult]:
     results = []
     for check in checks:
+        agreement = None
         try:
-            passed, evidence = _run_one(check, target, judge_provider)
+            passed, evidence, agreement = _run_one(check, target, judge_provider)
         except Exception as exc:  # one check must never crash a whole benchmark run
             passed, evidence = None, f"check error: {type(exc).__name__}: {exc}"
         results.append(CheckResult(check_id=getattr(check, "id", "") or "", passed=passed,
-                                   evidence=evidence))
+                                   evidence=evidence, agreement=agreement))
     return results
 
 
@@ -47,7 +49,7 @@ def passes(results: list[CheckResult], checks) -> bool:
 # ---- dispatch --------------------------------------------------------------
 
 
-def _run_one(check, target: Target, judge_provider) -> tuple[bool | None, str]:
+def _run_one(check, target: Target, judge_provider) -> tuple[bool | None, str, float | None]:
     kind = check.kind
     if kind == "judge":
         from . import judge as judge_mod  # keeps vendored run.py free of the llm subpackage
@@ -55,8 +57,9 @@ def _run_one(check, target: Target, judge_provider) -> tuple[bool | None, str]:
         return judge_mod.judge(check, target, judge_provider)
     fn = _EVALUATORS.get(kind)
     if fn is None:
-        return None, f"no evaluator for kind {kind!r}"
-    return fn(check.params or {}, target)
+        return None, f"no evaluator for kind {kind!r}", None
+    passed, evidence = fn(check.params or {}, target)
+    return passed, evidence, None
 
 
 def _contains(params, target):

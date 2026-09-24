@@ -53,6 +53,14 @@ async def _call(provider, messages, tools, timeout, task):
     return await asyncio.wait_for(coro, timeout)
 
 
+def _check_result_row(result, kinds: dict) -> dict:
+    row = {"passed": result.passed, "evidence": result.evidence,
+           "kind": kinds.get(result.check_id, "")}
+    if result.agreement is not None:  # only judge-sampled checks carry agreement
+        row["agreement"] = result.agreement
+    return row
+
+
 def _target(task: tasks_mod.Task, reply) -> Target:
     messages = list((task.context or {}).get("messages", []))
     messages.append({"role": "assistant", "content": reply.content,
@@ -91,8 +99,7 @@ async def _run_task(run_id, model_spec, provider, task, timeout, judge_provider,
         task=task.name,
         passed=1 if ok else 0,
         reward=1.0 if ok else 0.0,
-        check_results={r.check_id: {"passed": r.passed, "evidence": r.evidence,
-                                    "kind": kinds.get(r.check_id, "")} for r in outcomes},
+        check_results={r.check_id: _check_result_row(r, kinds) for r in outcomes},
         output={"content": reply.content, "tool_calls": reply.tool_calls},
         latency_ms=latency_ms,
         cost_usd=pricing.cost_usd(model_spec, reply.usage),

@@ -141,6 +141,8 @@ def test_judge_check_is_evaluated_but_does_not_gate(conn, root):
     run = runner.run(conn, root, "one", "scripted", judge_provider=_CannedJudge())
     result = store.list_results(conn, run.id)[0]
     assert result.check_results["j"]["passed"] is True
+    # the judge is sampled, so its per-check agreement is recorded (canned -> unanimous).
+    assert result.check_results["j"]["agreement"] == 1.0
 
 
 def test_replay_tool_context_to_openai_is_valid_wire_and_no_errors(conn, root):

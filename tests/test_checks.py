@@ -210,6 +210,37 @@ def test_judge_skipped_without_provider():
     assert "skipped" in r.evidence
 
 
+class _AlternatingJudge:
+    """Yields the given verdicts in order across successive chat calls (cycling)."""
+
+    def __init__(self, verdicts):
+        self.verdicts = list(verdicts)
+        self.i = 0
+
+    def chat(self, messages, tools=None, json=False, timeout=None):
+        import json as _json
+
+        from touchstone.llm import Reply
+
+        v = self.verdicts[self.i % len(self.verdicts)]
+        self.i += 1
+        return Reply(content=_json.dumps({"pass": v, "reason": "r"}))
+
+
+def test_judge_sampling_reports_majority_and_agreement():
+    prov = _AlternatingJudge([True, True, True, False])
+    r = _one("judge", {"rubric": "x", "samples": 4}, "hi", provider=prov)
+    assert r.passed is True
+    assert r.agreement == 0.75
+
+
+def test_judge_low_agreement_is_demoted_to_none():
+    prov = _AlternatingJudge([True, False])  # a perfect split over 4 samples
+    r = _one("judge", {"rubric": "x", "samples": 4}, "hi", provider=prov)
+    assert r.passed is None
+    assert "low agreement" in r.evidence and r.agreement == 0.5
+
+
 def test_judge_provider_exception_is_none():
     class Boom:
         def chat(self, *a, **k):
