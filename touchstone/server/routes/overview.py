@@ -6,6 +6,7 @@ from collections import Counter
 
 from fastapi import APIRouter, Depends
 
+from ... import overview as overview_mod
 from ... import policies as policies_mod
 from ... import store
 from ... import tasks as tasks_mod
@@ -26,6 +27,13 @@ def overview(conn=Depends(get_conn), root=Depends(get_root)) -> dict:
     tasks = tasks_mod.list_tasks(root)
     by_status = {q: sum(1 for t in tasks if t.status == q) for q in _TASK_QUEUES}
     rooms = store.list_rooms(conn)
+    runs = store.list_runs(conn)
+    sampled, frontier = overview_mod.loop_signals(root)
+    signals = {
+        "episodes": len(episodes), "tasks": len(tasks), "runs": len(runs),
+        "active": by_status["active"], "needs_checks": by_status["needs_checks"],
+        "needs_solution": by_status["needs_solution"], "sampled": sampled, "frontier": frontier,
+    }
     return {
         "episodes": {"total": len(episodes), "outcomes": dict(outcomes)},
         "spans": spans,
@@ -36,6 +44,7 @@ def overview(conn=Depends(get_conn), root=Depends(get_root)) -> dict:
         },
         "tasks": {"total": len(tasks), "active": by_status["active"], "by_status": by_status},
         "benchmarks": len(benchmark.list_names(root)),
-        "runs": len(store.list_runs(conn)),
+        "runs": len(runs),
         "rooms": {"total": len(rooms), "open": sum(1 for r in rooms if r.closed_at is None)},
+        "next_step": overview_mod.next_step(signals),
     }

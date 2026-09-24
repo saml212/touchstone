@@ -89,29 +89,7 @@ async function overviewPage() {
     <div class="tiles">${tiles}</div>
     <h3>Outcomes</h3>
     <div class="outcome-bar">${bar || `<span class="muted">no episodes yet</span>`}</div>
-    <div class="hint">${nextStep(o)}</div>`;
-}
-
-function nextStep(o) {
-  if (!o.episodes.total)
-    return `Capture traces first: add <code>import touchstone; touchstone.trace()</code> to your agent, or run <code>touchstone demo</code>.`;
-  if (!o.checks.total)
-    return `You have episodes but no checks. ${link("/checks", "Mine or add checks")} to describe what good looks like.`;
-  if (!o.checks.enabled)
-    return `Checks exist but none are enabled. ${link("/checks", "Enable a check")} so it gates the benchmark.`;
-  const queues = (o.tasks && o.tasks.by_status) || {};
-  if (queues.needs_solution || queues.needs_checks) {
-    const biggest = (queues.needs_solution || 0) >= (queues.needs_checks || 0) ? "needs_solution" : "needs_checks";
-    const hint = biggest === "needs_solution"
-      ? `${queues.needs_solution} task(s) need a solution — open ${link("/tasks", "Tasks")} and ask a teacher, or record one.`
-      : `${queues.needs_checks} task(s) need a check — open ${link("/tasks", "Tasks")} and interview to say what good looks like.`;
-    return hint;
-  }
-  if (!o.benchmarks)
-    return `Ready to prove a model. ${link("/benchmarks", "Create a benchmark")} from your active tasks.`;
-  if (!o.runs)
-    return `Benchmark ready. ${link("/benchmarks", "Sample a candidate model")} against it.`;
-  return `You're set. Sample and Distill on the ${link("/benchmarks", "Benchmarks")} page.`;
+    <div class="hint">${esc(o.next_step)}</div>`;
 }
 
 // ---- episodes --------------------------------------------------------------
