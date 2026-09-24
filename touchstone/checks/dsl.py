@@ -206,6 +206,12 @@ def validate_params(kind: str, params: dict) -> None:
     elif kind == "json_schema":
         if not isinstance(params.get("schema"), dict):
             raise ValueError("'schema' must be a JSON object")
+        import jsonschema
+
+        try:
+            jsonschema.Draft202012Validator.check_schema(params["schema"])
+        except jsonschema.exceptions.SchemaError as exc:
+            raise ValueError(f"invalid JSON schema: {exc.message}") from exc
     elif kind == "tool_called":
         _require_str(params, "name")
         matcher = params.get("arguments_match")

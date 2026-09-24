@@ -27,7 +27,10 @@ class CheckResult:
 def evaluate(checks, target: Target, judge_provider=None) -> list[CheckResult]:
     results = []
     for check in checks:
-        passed, evidence = _run_one(check, target, judge_provider)
+        try:
+            passed, evidence = _run_one(check, target, judge_provider)
+        except Exception as exc:  # one check must never crash a whole benchmark run
+            passed, evidence = None, f"check error: {type(exc).__name__}: {exc}"
         results.append(CheckResult(check_id=getattr(check, "id", "") or "", passed=passed,
                                    evidence=evidence))
     return results
@@ -90,8 +93,11 @@ def _json_schema(params, target):
         instance = json.loads(target.output_text)
     except (json.JSONDecodeError, TypeError):
         return False, "output is not valid JSON"
-    validator = jsonschema.Draft202012Validator(params["schema"])
-    errors = sorted(validator.iter_errors(instance), key=lambda e: list(e.path))
+    try:
+        validator = jsonschema.Draft202012Validator(params["schema"])
+        errors = sorted(validator.iter_errors(instance), key=lambda e: list(e.path))
+    except Exception as exc:  # invalid schema or unresolvable $ref must not crash the run
+        return None, f"invalid JSON schema: {exc}"
     if errors:
         return False, errors[0].message
     return True, "valid against schema"

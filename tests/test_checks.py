@@ -342,3 +342,30 @@ def test_catastrophic_regex_does_not_hang_at_eval():
 def test_validate_rejects_catastrophic_arguments_match_regex():
     with pytest.raises(ValueError):
         validate_params("tool_called", {"name": "t", "arguments_match": {"x": {"regex": "(a+)+$"}}})
+
+
+# ---- json_schema robustness ------------------------------------------------
+
+
+@pytest.mark.parametrize("schema", [
+    {"type": "not-a-real-type"},
+    {"required": "should-be-a-list"},
+])
+def test_validate_rejects_invalid_json_schema(schema):
+    with pytest.raises(ValueError, match="schema"):
+        validate_params("json_schema", {"schema": schema})
+
+
+def test_invalid_json_schema_at_eval_is_errored_not_crash():
+    # a schema that slipped past validation (hand-written into the store) must not crash the run
+    r = _one("json_schema", {"schema": {"$ref": "#/nowhere"}}, '{"a": 1}')
+    assert r.passed is None
+    assert "schema" in r.evidence.lower()
+
+
+def test_evaluate_isolates_a_raising_check():
+    good = Check(kind="contains", params={"values": ["ok"]}, id="g")
+    bad = Check(kind="json_schema", params={"schema": {"type": "bogus-type"}}, id="b")
+    results = evaluate([good, bad], Target(output_text='{"ok": 1}'))
+    assert results[0].passed is True
+    assert results[1].passed is None  # the bad check errors, the good one still evaluates
