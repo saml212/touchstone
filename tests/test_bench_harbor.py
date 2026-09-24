@@ -94,7 +94,7 @@ def _run_verifier(task_dir, output_obj, tmp_path):
 
 def test_test_outputs_runs_standalone_and_writes_reward(exported, tmp_path):
     _conn, _bench, _out, dirs = exported
-    task_dir = dirs[0]
+    task_dir = next(d for d in dirs if "contains" in (d / "tests" / "checks.json").read_text())
 
     passing, reward_pass = _run_verifier(
         task_dir, {"content": "All sorted, thanks!", "tool_calls": []}, tmp_path / "a")

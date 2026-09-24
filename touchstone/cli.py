@@ -262,7 +262,6 @@ def mine(
     code: str = typer.Option(None, "--code", help="Path to a code tree to scan for prompts/tools."),
     provider: str = typer.Option(None, "--provider", help="Agent provider spec for LLM proposals."),
     no_llm: bool = typer.Option(False, "--no-llm", help="Skip the LLM pass; statistics only."),
-    every_turn: bool = typer.Option(False, "--every-turn", help="Cut a task at every turn."),
     limit: int = typer.Option(None, "--limit", help="Only mine the first N episodes."),
 ) -> None:
     """Propose checks from captured episodes and cut replay tasks."""
@@ -278,7 +277,7 @@ def mine(
     try:
         summary = run_mine(
             conn, provider=prov, code_snippets=snippets,
-            no_llm=no_llm, every_turn=every_turn, limit=limit,
+            no_llm=no_llm, limit=limit,
         )
     finally:
         conn.close()

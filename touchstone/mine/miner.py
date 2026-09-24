@@ -461,7 +461,6 @@ def mine(
     provider=None,
     code_snippets: list[Snippet] | None = None,
     no_llm: bool = False,
-    every_turn: bool = False,
     limit: int | None = None,
 ) -> dict:
     episodes = store.list_episodes(conn)
@@ -474,7 +473,7 @@ def mine(
     for proposal in fresh:
         store.insert_check(conn, proposal.store_check())
 
-    tasks = cut_mod.cut_tasks(conn, episodes, every_turn=every_turn)
+    tasks = cut_mod.cut_tasks(conn, episodes)
     return {
         "proposals": fresh,
         "stats": len(stats),

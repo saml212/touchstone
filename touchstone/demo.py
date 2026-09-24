@@ -7,20 +7,38 @@ instrumented app would. Deterministic: same seed => same episodes (ids aside).
 
 from __future__ import annotations
 
+import json
 import random
 
 import touchstone
-from touchstone.llm import provider_from_spec
 
 SYSTEM = "You are a customer support agent. Look up orders, issue refunds, escalate when needed."
 
 TOOLS = [
-    {"type": "function", "function": {"name": "order_status",
-        "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}}}},
-    {"type": "function", "function": {"name": "refund", "parameters": {"type": "object",
-        "properties": {"order_id": {"type": "string"}, "amount": {"type": "number"}}}}},
-    {"type": "function", "function": {"name": "escalate",
-        "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "order_status",
+            "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "refund",
+            "parameters": {
+                "type": "object",
+                "properties": {"order_id": {"type": "string"}, "amount": {"type": "number"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "escalate",
+            "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}},
+        },
+    },
 ]
 
 SCENARIOS = [
@@ -47,8 +65,20 @@ def escalate(reason: str) -> dict:
     return {"escalated": True, "reason": reason}
 
 
+TOOL_FNS = {"order_status": order_status, "refund": refund, "escalate": escalate}
+
+
+def _turn(messages: list[dict], content: str = "", tool_calls: list[dict] | None = None) -> None:
+    """One assistant turn through the real capture path, appended to the running conversation."""
+    reply = {"content": content, "tool_calls": tool_calls or []}
+    touchstone.record_llm_call("scripted:demo", list(messages), reply, tools=TOOLS)
+    messages.append({"role": "assistant", "content": content, "tool_calls": reply["tool_calls"]})
+    for call in reply["tool_calls"]:
+        result = TOOL_FNS[call["name"]](**call["arguments"])
+        messages.append({"role": "tool", "name": call["name"], "content": json.dumps(result)})
+
+
 def run_demo(n: int = 30, seed: int = 1729) -> int:
-    provider = provider_from_spec("scripted")
     rng = random.Random(seed)
     for i in range(n):
         oid = f"A{rng.randint(1000, 9999)}"
@@ -58,22 +88,24 @@ def run_demo(n: int = 30, seed: int = 1729) -> int:
                 {"role": "system", "content": SYSTEM},
                 {"role": "user", "content": scenario},
             ]
-            reply = provider.chat(messages, tools=TOOLS)
-            touchstone.record_llm_call("scripted:demo", messages, reply, tools=TOOLS)
-
             if rng.random() < 0.70:
-                order_status(oid)
+                calls = [{"name": "order_status", "arguments": {"order_id": oid}}]
                 if "refund" in scenario or "twice" in scenario:
-                    refund(oid, round(rng.uniform(10, 200), 2))
+                    amount = round(rng.uniform(10, 200), 2)
+                    calls.append(
+                        {"name": "refund", "arguments": {"order_id": oid, "amount": amount}}
+                    )
+                _turn(messages, tool_calls=calls)
                 if i % 7 == 0:
                     final = f"All sorted. Confirmation emailed to customer{i}@example.com."
                 else:
                     final = "All sorted — is there anything else I can help with?"
-                touchstone.record_llm_call("scripted:demo", messages, final)
+                _turn(messages, content=final)
                 touchstone.outcome(1.0, "resolved")
             else:
-                escalate(scenario)
-                label = "escalated" if rng.random() < 0.6 else "failed"
-                touchstone.record_llm_call("scripted:demo", messages, "Escalating to a human.")
-                touchstone.outcome(0.0, label)
+                _turn(
+                    messages, tool_calls=[{"name": "escalate", "arguments": {"reason": scenario}}]
+                )
+                _turn(messages, content="Escalating to a human.")
+                touchstone.outcome(0.0, "escalated" if rng.random() < 0.6 else "failed")
     return n
