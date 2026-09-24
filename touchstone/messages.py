@@ -3,24 +3,51 @@
 The store only ever holds canonical messages. A canonical message is a dict:
 
     {"role": "system" | "user" | "assistant" | "tool",
-     "content": str,
+     "content": str | [ {"type": "text"|"image"|"audio"|"file", ...} ],
      "tool_calls"?: [{"id": str, "name": str, "arguments": str}],  # assistant only
+     "reasoning"?: [ <thinking block> | {"type": "redacted"} ],     # assistant only
+     "refusal"?: str | None,                                        # assistant only
      "tool_call_id"?: str,                                          # tool only
      "name"?: str}                                                  # tool only
 
-`arguments` is always a JSON string. `canonical()` accepts OpenAI wire shape (tool calls
-nested under `function`, tool messages carrying `tool_call_id`, content-parts lists),
-Anthropic wire shape (`text` / `tool_use` / `tool_result` content blocks, system passed
-separately), and already-canonical messages, and is idempotent: `canonical(canonical(x))
-== canonical(x)`. Missing tool-call ids become deterministic `call_<n>`; a tool message with
-no `tool_call_id` is linked to the preceding assistant call by name order.
+`content` is a string when every part is text, otherwise the list of parts — image / audio /
+file parts are never flattened away. `arguments` is always a JSON string. `canonical()` accepts
+dicts and SDK objects (anything exposing `model_dump()` or the relevant attributes), in OpenAI
+wire shape (tool calls nested under `function`, tool messages carrying `tool_call_id`,
+content-parts lists), OpenAI Responses items (`function_call` / `reasoning`), Anthropic wire shape
+(`text` / `tool_use` / `tool_result` / `thinking` / `redacted_thinking` blocks, system separate),
+and already-canonical messages, and is idempotent: `canonical(canonical(x)) == canonical(x)`.
+Missing tool-call ids become deterministic `call_<n>`; a tool message with no `tool_call_id` links
+to the preceding assistant call by id first, then name order.
 
-`to_openai()` and `to_anthropic()` convert canonical messages back to wire shape.
+`to_openai()` / `to_anthropic()` convert canonical messages back to wire shape. `text_of()` gives a
+flat string for callers (checks, prompts, instruction.md) that want text, marking non-text parts.
 """
 
 from __future__ import annotations
 
 import json
+
+
+def _to_plain(obj):
+    """A dict view of an SDK object (prefer `model_dump()`), else the object itself."""
+    if isinstance(obj, dict):
+        return obj
+    dump = getattr(obj, "model_dump", None)
+    if callable(dump):
+        try:
+            result = dump()
+        except Exception:
+            result = None
+        if isinstance(result, dict):
+            return result
+    return obj
+
+
+def _get(obj, key, default=None):
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
 
 
 def _args_str(value) -> str:
@@ -45,28 +72,85 @@ def _args_obj(value) -> dict:
     return parsed if isinstance(parsed, dict) else {"input": parsed}
 
 
-def _text_part(part) -> str:
-    return (part.get("text") or part.get("content") or "") if isinstance(part, dict) else str(part)
+# Provider content-part type -> canonical part type.
+_PART_TYPE = {
+    "text": "text", "input_text": "text", "output_text": "text",
+    "image": "image", "image_url": "image", "input_image": "image",
+    "audio": "audio", "input_audio": "audio",
+    "file": "file", "input_file": "file", "document": "file",
+}
+_REASONING_TYPES = frozenset({"thinking", "redacted_thinking", "reasoning", "redacted"})
 
 
-def _text(content) -> str:
-    """Flatten content (str, content-parts list, or blocks) into a single string."""
+def _norm_part(part) -> dict:
+    part = _to_plain(part)
+    if not isinstance(part, dict):
+        return {"type": "text", "text": str(part)}
+    canon = _PART_TYPE.get(part.get("type"), part.get("type") or "text")
+    if canon == "text":
+        return {"type": "text", "text": part.get("text") or part.get("content") or ""}
+    rest = {k: v for k, v in part.items() if k != "type"}
+    rest["type"] = canon
+    return rest
+
+
+def _norm_reasoning_block(block) -> dict:
+    block = _to_plain(block)
+    btype = _get(block, "type")
+    if btype in ("redacted_thinking", "redacted"):
+        return {"type": "redacted"}
+    if btype == "reasoning":  # OpenAI Responses reasoning item
+        summary, content = _get(block, "summary"), _get(block, "content")
+        if not summary and not content:
+            return {"type": "redacted"}  # encrypted-only
+        item = {"type": "reasoning"}
+        if summary:
+            item["summary"] = summary
+        if content:
+            item["content"] = content
+        return item
+    item = {"type": "thinking", "thinking": _get(block, "thinking") or _get(block, "text") or ""}
+    if _get(block, "signature"):
+        item["signature"] = _get(block, "signature")
+    return item
+
+
+def _norm_reasoning(value) -> list[dict]:
+    if not value:
+        return []
+    blocks = value if isinstance(value, list) else [value]
+    return [_norm_reasoning_block(b) for b in blocks]
+
+
+def _collapse(parts: list[dict]):
+    """Text-only parts -> a joined string (never flattened when any part is non-text)."""
+    if not parts:
+        return ""
+    if all(p.get("type") == "text" for p in parts):
+        return "\n".join(p.get("text", "") for p in parts if p.get("text"))
+    return parts
+
+
+def _content_value(content):
     if content is None:
         return ""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(p for p in (_text_part(x) for x in content) if p)
+        return _collapse([_norm_part(p) for p in content])
     return json.dumps(content, ensure_ascii=False)
 
 
 def _norm_tool_call(tc: dict) -> dict:
-    fn = tc["function"] if isinstance(tc.get("function"), dict) else tc
-    return {"id": tc.get("id"), "name": fn.get("name"), "arguments": _args_str(fn.get("arguments"))}
+    tc = _to_plain(tc)
+    fn = _to_plain(_get(tc, "function"))
+    fn = fn if fn is not None else tc
+    tcid = _get(tc, "id") or _get(tc, "call_id") or _get(tc, "tool_call_id")
+    return {"id": tcid, "name": _get(fn, "name"), "arguments": _args_str(_get(fn, "arguments"))}
 
 
 def _tool_message(tool_call_id, name, content) -> dict:
-    msg = {"role": "tool", "content": _text(content)}
+    msg = {"role": "tool", "content": _content_value(content)}
     if tool_call_id:
         msg["tool_call_id"] = tool_call_id
     if name:
@@ -74,52 +158,58 @@ def _tool_message(tool_call_id, name, content) -> dict:
     return msg
 
 
-def _split_content_list(content: list) -> tuple[list[str], list[dict], list[dict]]:
-    """A content-parts / block list -> (texts, Anthropic tool_use calls, tool_result messages)."""
-    texts: list[str] = []
+def _split_content(content) -> tuple[list, list, list, list]:
+    """A content value -> (parts, tool_use calls, tool_result messages, reasoning blocks)."""
+    parts: list[dict] = []
     tool_calls: list[dict] = []
     tool_results: list[dict] = []
-    for part in content:
-        if not isinstance(part, dict):
-            texts.append(str(part))
-        elif part.get("type") == "tool_use":  # Anthropic assistant tool call
-            tool_calls.append({"id": part.get("id"), "name": part.get("name"),
-                               "arguments": _args_str(part.get("input"))})
-        elif part.get("type") == "tool_result":  # Anthropic tool result (inside a user turn)
-            tool_results.append(_tool_message(part.get("tool_use_id"), None, part.get("content")))
+    reasoning: list[dict] = []
+    if content is None:
+        return parts, tool_calls, tool_results, reasoning
+    if isinstance(content, str):
+        parts.append({"type": "text", "text": content})
+        return parts, tool_calls, tool_results, reasoning
+    for raw in content if isinstance(content, list) else [content]:
+        block = _to_plain(raw)
+        btype = _get(block, "type") if not isinstance(block, str) else "text"
+        if btype == "tool_use":
+            tool_calls.append({"id": _get(block, "id"), "name": _get(block, "name"),
+                               "arguments": _args_str(_get(block, "input"))})
+        elif btype == "tool_result":
+            tool_results.append(
+                _tool_message(_get(block, "tool_use_id"), None, _get(block, "content")))
+        elif btype in _REASONING_TYPES:
+            reasoning.append(_norm_reasoning_block(block))
         else:
-            texts.append(part.get("text") or part.get("content") or "")
-    return texts, tool_calls, tool_results
+            parts.append(_norm_part(block))
+    return parts, tool_calls, tool_results, reasoning
 
 
-def _canonical_one(msg: dict) -> list[dict]:
-    role = msg.get("role", "user")
-    content = msg.get("content")
+def _canonical_one(msg) -> list[dict]:
+    msg = _to_plain(msg)
+    role = _get(msg, "role") or "user"
+    content = _get(msg, "content")
     if role == "tool":
-        return [_tool_message(msg.get("tool_call_id"), msg.get("name"), content)]
+        return [_tool_message(_get(msg, "tool_call_id"), _get(msg, "name"), content)]
 
-    if isinstance(content, list):
-        texts, tool_calls, tool_results = _split_content_list(content)
-    elif isinstance(content, str):
-        texts, tool_calls, tool_results = [content], [], []
-    elif content is not None:
-        texts, tool_calls, tool_results = [json.dumps(content, ensure_ascii=False)], [], []
-    else:
-        texts, tool_calls, tool_results = [], [], []
-
-    for tc in msg.get("tool_calls") or []:
+    parts, tool_calls, tool_results, reasoning = _split_content(content)
+    for tc in _get(msg, "tool_calls") or []:
         tool_calls.append(_norm_tool_call(tc))
-    return _assemble(role, texts, tool_calls, tool_results)
+    reasoning += _norm_reasoning(_get(msg, "reasoning"))
+    return _assemble(role, parts, tool_calls, tool_results, reasoning, _get(msg, "refusal"))
 
 
-def _assemble(role: str, texts: list[str], tool_calls: list[dict],
-              tool_results: list[dict]) -> list[dict]:
+def _assemble(role, parts, tool_calls, tool_results, reasoning, refusal) -> list[dict]:
     out = list(tool_results)
-    joined = "\n".join(t for t in texts if t)
-    if joined or tool_calls or not tool_results:
-        primary = {"role": role, "content": joined}
+    content = _collapse(parts)
+    if content or tool_calls or reasoning or refusal is not None or not tool_results:
+        primary = {"role": role, "content": content}
         if tool_calls:
             primary["tool_calls"] = tool_calls
+        if reasoning:
+            primary["reasoning"] = reasoning
+        if refusal is not None:
+            primary["refusal"] = refusal
         out.append(primary)
     return out
 
@@ -133,27 +223,6 @@ def _fill_call_ids(messages: list[dict]) -> None:
                 tc["id"] = f"call_{n}"
 
 
-def _link_one(msg: dict, pending: list[list]) -> None:
-    idx = _match_pending(pending, msg.get("name"))
-    if idx is not None:
-        msg["tool_call_id"] = pending[idx][0]
-        pending[idx][2] = True
-
-
-def _link_tool_messages(messages: list[dict]) -> None:
-    pending: list[list] = []  # [id, name, consumed]
-    for msg in messages:
-        if msg["role"] == "assistant" and msg.get("tool_calls"):
-            pending = [[tc["id"], tc.get("name"), False] for tc in msg["tool_calls"]]
-        elif msg["role"] == "tool" and not msg.get("tool_call_id"):
-            _link_one(msg, pending)
-
-
-def _assign_ids(messages: list[dict]) -> None:
-    _fill_call_ids(messages)
-    _link_tool_messages(messages)
-
-
 def _first_unused(pending: list[list], predicate) -> int | None:
     for i, entry in enumerate(pending):
         if not entry[2] and predicate(entry):
@@ -161,7 +230,11 @@ def _first_unused(pending: list[list], predicate) -> int | None:
     return None
 
 
-def _match_pending(pending: list[list], name) -> int | None:
+def _match_pending(pending: list[list], call_id, name) -> int | None:
+    if call_id:
+        idx = _first_unused(pending, lambda entry: entry[0] == call_id)
+        if idx is not None:
+            return idx
     if name:
         idx = _first_unused(pending, lambda entry: entry[1] == name)
         if idx is not None:
@@ -169,43 +242,110 @@ def _match_pending(pending: list[list], name) -> int | None:
     return _first_unused(pending, lambda entry: True)
 
 
+def _link_tool_messages(messages: list[dict]) -> None:
+    pending: list[list] = []  # [id, name, consumed]
+    for msg in messages:
+        if msg["role"] == "assistant" and msg.get("tool_calls"):
+            pending = [[tc["id"], tc.get("name"), False] for tc in msg["tool_calls"]]
+        elif msg["role"] == "tool":
+            idx = _match_pending(pending, msg.get("tool_call_id"), msg.get("name"))
+            if idx is not None:
+                msg["tool_call_id"] = pending[idx][0]
+                pending[idx][2] = True
+
+
 def canonical(messages: list[dict]) -> list[dict]:
     """Convert any supported message list into canonical messages (idempotent)."""
     out: list[dict] = []
     for msg in messages or []:
         out.extend(_canonical_one(msg))
-    _assign_ids(out)
+    _fill_call_ids(out)
+    _link_tool_messages(out)
     return out
 
 
+def text_of(message: dict) -> str:
+    """A flat string for a canonical message; non-text parts render as `[image]` / `[file]`."""
+    content = (message or {}).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        rendered = [p.get("text", "") if p.get("type") == "text" else f"[{p.get('type')}]"
+                    for p in content]
+        return "\n".join(r for r in rendered if r)
+    return "" if content is None else json.dumps(content, ensure_ascii=False)
+
+
+# ---- back to wire ----------------------------------------------------------
+
+
+def _openai_part(part: dict) -> dict:
+    if part.get("type") == "text":
+        return {"type": "text", "text": part.get("text", "")}
+    if part.get("type") == "image":
+        img = part.get("image_url") or part.get("source")
+        return {"type": "image_url", "image_url": img if isinstance(img, dict | str) else part}
+    return dict(part)
+
+
+def _openai_content(content):
+    return [_openai_part(p) for p in content] if isinstance(content, list) else content
+
+
 def to_openai(messages: list[dict]) -> list[dict]:
-    """Canonical messages -> OpenAI chat wire shape."""
+    """Canonical messages -> OpenAI chat wire shape (reasoning is capture-only, dropped here)."""
     out = []
     for msg in canonical(messages):
         role = msg["role"]
         if role == "tool":
-            wire = {"role": "tool", "content": msg.get("content", ""),
+            wire = {"role": "tool", "content": _openai_content(msg.get("content", "")),
                     "tool_call_id": msg.get("tool_call_id", "")}
             if msg.get("name"):
                 wire["name"] = msg["name"]
             out.append(wire)
             continue
-        wire = {"role": role, "content": msg.get("content", "")}
+        wire = {"role": role, "content": _openai_content(msg.get("content", ""))}
         if msg.get("tool_calls"):
             wire["tool_calls"] = [
                 {"id": tc["id"], "type": "function",
                  "function": {"name": tc["name"], "arguments": _args_str(tc["arguments"])}}
                 for tc in msg["tool_calls"]
             ]
+        if msg.get("refusal") is not None:
+            wire["refusal"] = msg["refusal"]
         out.append(wire)
     return out
 
 
+def _anthropic_reasoning_blocks(reasoning: list[dict]) -> list[dict]:
+    blocks = []
+    for r in reasoning or []:
+        if r.get("type") == "thinking":  # redacted data cannot be reconstructed; dropped
+            block = {"type": "thinking", "thinking": r.get("thinking", "")}
+            if r.get("signature"):
+                block["signature"] = r["signature"]
+            blocks.append(block)
+    return blocks
+
+
+def _anthropic_text_blocks(content) -> list[dict]:
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    blocks = []
+    for p in content or []:
+        if p.get("type") == "text":
+            if p.get("text"):
+                blocks.append({"type": "text", "text": p["text"]})
+        elif p.get("type") == "image":
+            blocks.append({"type": "image", "source": p.get("source") or p.get("image_url")})
+        else:
+            blocks.append({"type": "text", "text": json.dumps(p, ensure_ascii=False)})
+    return blocks
+
+
 def _anthropic_blocks(msg: dict) -> list[dict]:
-    """The content + tool_use blocks for one non-system, non-tool canonical message."""
-    blocks: list[dict] = []
-    if msg.get("content"):
-        blocks.append({"type": "text", "text": msg["content"]})
+    blocks = _anthropic_reasoning_blocks(msg.get("reasoning"))
+    blocks += _anthropic_text_blocks(msg.get("content"))
     for tc in msg.get("tool_calls") or []:
         blocks.append({"type": "tool_use", "id": tc["id"], "name": tc["name"],
                        "input": _args_obj(tc["arguments"])})
@@ -215,8 +355,9 @@ def _anthropic_blocks(msg: dict) -> list[dict]:
 def _add_anthropic_message(msg: dict, systems: list[str], turns: list[dict]) -> None:
     role = msg["role"]
     if role == "system":
-        if msg.get("content"):
-            systems.append(msg["content"])
+        text = msg["content"] if isinstance(msg["content"], str) else text_of(msg)
+        if text:
+            systems.append(text)
     elif role == "tool":
         block = {"type": "tool_result",
                  "tool_use_id": msg.get("tool_call_id") or msg.get("name") or "",

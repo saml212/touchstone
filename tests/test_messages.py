@@ -143,3 +143,124 @@ def test_empty_and_none_are_safe():
     assert canonical(None) == []
     assert to_openai([]) == []
     assert to_anthropic([]) == ("", [])
+
+
+# ---- v2: parts, reasoning, refusal, object acceptance ----------------------
+
+def test_multimodal_parts_are_not_flattened():
+    msgs = canonical([
+        {"role": "user", "content": [
+            {"type": "text", "text": "what is this"},
+            {"type": "image_url", "image_url": {"url": "http://x/y.png"}},
+        ]},
+    ])
+    content = msgs[0]["content"]
+    assert isinstance(content, list)
+    assert content[0] == {"type": "text", "text": "what is this"}
+    assert content[1]["type"] == "image" and content[1]["image_url"] == {"url": "http://x/y.png"}
+    assert canonical(msgs) == msgs  # idempotent
+
+
+def test_text_of_marks_non_text_parts():
+    from touchstone.messages import text_of
+    msg = canonical([{"role": "user", "content": [
+        {"type": "text", "text": "look"},
+        {"type": "input_image", "image_url": "http://x"},
+        {"type": "input_file", "filename": "a.pdf"},
+    ]}])[0]
+    assert text_of(msg) == "look\n[image]\n[file]"
+    assert text_of({"role": "user", "content": "plain"}) == "plain"
+
+
+def test_assistant_reasoning_and_refusal_captured():
+    msgs = canonical([{
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "let me think", "signature": "sig"},
+            {"type": "redacted_thinking", "data": "xxx"},
+            {"type": "text", "text": "the answer"},
+        ],
+        "refusal": None,
+    }])
+    m = msgs[0]
+    assert m["content"] == "the answer"
+    assert m["reasoning"] == [
+        {"type": "thinking", "thinking": "let me think", "signature": "sig"},
+        {"type": "redacted"},
+    ]
+    assert canonical(msgs) == msgs
+
+
+def test_refusal_with_empty_content():
+    m = canonical([{"role": "assistant", "content": None, "refusal": "I can't help"}])[0]
+    assert m["content"] == "" and m["refusal"] == "I can't help"
+
+
+class _FakeFunction:
+    def __init__(self, name, arguments):
+        self.name, self.arguments = name, arguments
+
+
+class _FakeToolCall:
+    def __init__(self, id, name, arguments):
+        self.id, self.function = id, _FakeFunction(name, arguments)
+
+
+class _FakeChatCompletionMessage:
+    """No model_dump: forces the attribute-reading fallback path."""
+
+    def __init__(self, content, tool_calls=None, refusal=None):
+        self.role = "assistant"
+        self.content = content
+        self.tool_calls = tool_calls
+        self.refusal = refusal
+        self.reasoning = None
+
+
+def test_canonical_accepts_sdk_objects_without_model_dump():
+    msg = _FakeChatCompletionMessage(
+        content="", tool_calls=[_FakeToolCall("c1", "refund", '{"amt": 5}')])
+    out = canonical([{"role": "user", "content": "hi"}, msg,
+                     {"role": "tool", "tool_call_id": "c1", "content": "ok"}])
+    assistant = next(m for m in out if m.get("tool_calls"))
+    assert assistant["tool_calls"] == [{"id": "c1", "name": "refund", "arguments": '{"amt": 5}'}]
+    assert next(m for m in out if m["role"] == "tool")["tool_call_id"] == "c1"
+
+
+class _FakeModelDump:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def model_dump(self):
+        return self._payload
+
+
+def test_canonical_prefers_model_dump():
+    obj = _FakeModelDump({"role": "assistant", "content": "hi", "tool_calls": [
+        {"id": "c2", "type": "function", "function": {"name": "t", "arguments": "{}"}}]})
+    out = canonical([obj])
+    assert out[0]["content"] == "hi"
+    assert out[0]["tool_calls"] == [{"id": "c2", "name": "t", "arguments": "{}"}]
+
+
+def test_parallel_same_name_calls_link_by_id():
+    msgs = canonical([
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "a", "name": "lookup", "arguments": '{"q": 1}'},
+            {"id": "b", "name": "lookup", "arguments": '{"q": 2}'},
+        ]},
+        {"role": "tool", "tool_call_id": "b", "name": "lookup", "content": "second"},
+        {"role": "tool", "tool_call_id": "a", "name": "lookup", "content": "first"},
+    ])
+    tools = [m for m in msgs if m["role"] == "tool"]
+    assert tools[0]["tool_call_id"] == "b" and tools[0]["content"] == "second"
+    assert tools[1]["tool_call_id"] == "a" and tools[1]["content"] == "first"
+
+
+def test_reasoning_round_trips_to_anthropic_thinking():
+    msgs = canonical([{"role": "assistant", "content": "done", "reasoning": [
+        {"type": "thinking", "thinking": "hmm", "signature": "s"}]}])
+    _system, turns = to_anthropic(msgs)
+    blocks = turns[0]["content"]
+    assert blocks[0] == {"type": "thinking", "thinking": "hmm", "signature": "s"}
+    assert {"type": "text", "text": "done"} in blocks
