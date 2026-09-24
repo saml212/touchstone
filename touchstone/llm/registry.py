@@ -24,72 +24,94 @@ from .scripted import ScriptedProvider
 OPENAI_BASE = "https://api.openai.com/v1"
 
 
+def _unknown(spec: str) -> ValueError:
+    return ValueError(f"unknown provider spec {spec!r}")
+
+
+def _model(name: str, arg: str | None, spec: str) -> str:
+    """The model after 'name:', or raise: 'unknown' with no colon, 'spec must be' with no model."""
+    if arg is None:
+        raise _unknown(spec)
+    if not arg:
+        raise ValueError(f"{name} spec must be '{name}:<model>'.")
+    return arg
+
+
+def _openai(arg: str | None, spec: str, settings: Settings) -> Provider:
+    model = _model("openai", arg, spec)
+    key = secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai))
+    if not key:
+        raise ProviderError(
+            "No OpenAI API key found; set OPENAI_API_KEY or add it to the keychain."
+        )
+    from .openai_compat import OpenAICompatProvider
+    return OpenAICompatProvider(OPENAI_BASE, model, key)
+
+
+def _openai_compatible(arg: str | None, spec: str, settings: Settings) -> Provider:
+    form = "openai-compatible spec must be 'openai-compatible:<base_url>:<model>'."
+    if arg is None:
+        raise _unknown(spec)
+    if ":" not in arg:
+        raise ValueError(form)
+    base_url, model = arg.rsplit(":", 1)
+    if not model or not base_url:
+        raise ValueError(form)
+    key = secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai))
+    from .openai_compat import OpenAICompatProvider
+    return OpenAICompatProvider(base_url, model, key)
+
+
+def _anthropic(arg: str | None, spec: str, settings: Settings) -> Provider:
+    model = _model("anthropic", arg, spec)
+    key = secret("ANTHROPIC_API_KEY", settings.keychain_service(settings.keychain_anthropic))
+    if not key:
+        raise ProviderError(
+            "No Anthropic API key found; set ANTHROPIC_API_KEY or add it to the keychain."
+        )
+    from .anthropic import AnthropicProvider
+    return AnthropicProvider(model, key)
+
+
+def _scripted(arg: str | None, spec: str, settings: Settings) -> Provider:
+    return ScriptedProvider()
+
+
+def _reference(arg: str | None, spec: str, settings: Settings) -> Provider:
+    if arg is not None:  # "reference" takes no argument
+        raise _unknown(spec)
+    from .reference import ReferenceProvider
+    return ReferenceProvider()
+
+
+def _claude_cli(arg: str | None, spec: str, settings: Settings) -> Provider:
+    from .claude_cli import ClaudeCLIProvider
+    return ClaudeCLIProvider(arg or None)
+
+
+def _codex_cli(arg: str | None, spec: str, settings: Settings) -> Provider:
+    from .codex_cli import CodexCLIProvider
+    return CodexCLIProvider(arg or None)
+
+
+_BUILDERS = {
+    "scripted": _scripted,
+    "reference": _reference,
+    "openai": _openai,
+    "openai-compatible": _openai_compatible,
+    "anthropic": _anthropic,
+    "claude-cli": _claude_cli,
+    "codex-cli": _codex_cli,
+}
+
+
 def provider_from_spec(spec: str, settings: Settings | None = None) -> Provider:
     settings = settings or load_settings()
-
-    if spec == "scripted" or spec.startswith("scripted:"):
-        return ScriptedProvider()
-
-    if spec == "reference":
-        from .reference import ReferenceProvider
-
-        return ReferenceProvider()
-
-    if spec.startswith("openai:"):
-        model = spec[len("openai:") :]
-        if not model:
-            raise ValueError("openai spec must name a model: 'openai:<model>'.")
-        key = secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai))
-        if not key:
-            raise ProviderError(
-                "No OpenAI API key found; set OPENAI_API_KEY or add it to the keychain."
-            )
-        from .openai_compat import OpenAICompatProvider
-
-        return OpenAICompatProvider(OPENAI_BASE, model, key)
-
-    if spec.startswith("openai-compatible:"):
-        rest = spec[len("openai-compatible:") :]
-        if ":" not in rest:
-            raise ValueError(
-                "openai-compatible spec must be 'openai-compatible:<base_url>:<model>'."
-            )
-        base_url, model = rest.rsplit(":", 1)
-        if not model or not base_url:
-            raise ValueError(
-                "openai-compatible spec must be 'openai-compatible:<base_url>:<model>'."
-            )
-        key = secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai))
-        from .openai_compat import OpenAICompatProvider
-
-        return OpenAICompatProvider(base_url, model, key)
-
-    if spec.startswith("anthropic:"):
-        model = spec[len("anthropic:") :]
-        if not model:
-            raise ValueError("anthropic spec must name a model: 'anthropic:<model>'.")
-        key = secret("ANTHROPIC_API_KEY", settings.keychain_service(settings.keychain_anthropic))
-        if not key:
-            raise ProviderError(
-                "No Anthropic API key found; set ANTHROPIC_API_KEY or add it to the keychain."
-            )
-        from .anthropic import AnthropicProvider
-
-        return AnthropicProvider(model, key)
-
-    if spec == "claude-cli" or spec.startswith("claude-cli:"):
-        from .claude_cli import ClaudeCLIProvider
-
-        model = spec[len("claude-cli:") :] if ":" in spec else None
-        return ClaudeCLIProvider(model or None)
-
-    if spec == "codex-cli" or spec.startswith("codex-cli:"):
-        from .codex_cli import CodexCLIProvider
-
-        model = spec[len("codex-cli:") :] if ":" in spec else None
-        return CodexCLIProvider(model or None)
-
-    raise ValueError(f"unknown provider spec {spec!r}")
+    head, sep, rest = spec.partition(":")
+    builder = _BUILDERS.get(head)
+    if builder is None:
+        raise _unknown(spec)
+    return builder(rest if sep else None, spec, settings)
 
 
 # ---- doctor ----------------------------------------------------------------
