@@ -5,25 +5,22 @@ import pytest
 
 from touchstone import store
 from touchstone.bench import benchmark, pricing, runner
-from touchstone.demo import run_demo
 from touchstone.llm import Reply
 from touchstone.llm.openai_compat import OpenAICompatProvider
 from touchstone.mine import cut_tasks
 
 
 @pytest.fixture
-def seeded(traced):
+def seeded(demo_db):
     """A demo db with mined tasks, one enabled positive check and one safety check."""
-    run_demo(n=12)
-    conn = store.connect(traced)
+    conn = demo_db(12)
     store.insert_check(conn, store.Check(
         name="polite", kind="contains", params={"values": ["sorted", "escalat", "reply"],
                                                  "mode": "any"}, enabled=1))
     store.insert_check(conn, store.Check(name="clean", kind="no_pii", params={}, enabled=1))
     cut_tasks(conn, store.list_episodes(conn))
     bench = benchmark.create(conn, "all", all_tasks=True)
-    yield conn, bench
-    conn.close()
+    return conn, bench
 
 
 def test_scripted_run_is_deterministic_across_reruns(seeded):
@@ -125,9 +122,8 @@ class _CannedJudge:
         return self.chat(messages, tools, json, timeout)
 
 
-def test_judge_provider_path(traced):
-    run_demo(n=4)
-    conn = store.connect(traced)
+def test_judge_provider_path(demo_db):
+    conn = demo_db(4)
     judge = store.insert_check(conn, store.Check(
         name="j", kind="judge", params={"rubric": "is it helpful"}, severity="soft", enabled=1))
     cut_tasks(conn, store.list_episodes(conn))
@@ -143,7 +139,6 @@ def test_judge_provider_path(traced):
     results = store.list_results(conn, run.id)
     judged = [cr for r in results for cr in (r.check_results or []) if cr["check_id"] == judge.id]
     assert judged and all(cr["passed"] is True for cr in judged)
-    conn.close()
 
 
 def test_replay_tool_context_to_openai_is_valid_wire_and_no_errors(seeded):

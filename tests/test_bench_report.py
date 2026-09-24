@@ -2,14 +2,12 @@ import pytest
 
 from touchstone import store
 from touchstone.bench import benchmark, report, runner
-from touchstone.demo import run_demo
 from touchstone.mine import cut_tasks
 
 
 @pytest.fixture
-def two_runs(traced):
-    run_demo(n=10)
-    conn = store.connect(traced)
+def two_runs(demo_db):
+    conn = demo_db(10)
     store.insert_check(conn, store.Check(
         name="polite", kind="contains",
         params={"values": ["sorted", "escalat"], "mode": "any"}, enabled=1))
@@ -18,8 +16,7 @@ def two_runs(traced):
     bench = benchmark.create(conn, "all", all_tasks=True)
     incumbent = runner.run(conn, bench.id, "scripted")
     candidate = runner.run(conn, bench.id, "openai:gpt-4o-mini", provider=_AlwaysOK())
-    yield conn, incumbent, candidate
-    conn.close()
+    return conn, incumbent, candidate
 
 
 class _AlwaysOK:
@@ -75,9 +72,8 @@ def test_empty_benchmark_rejected(traced):
     conn.close()
 
 
-def test_benchmark_from_tags_and_explicit_ids(traced):
-    run_demo(n=8)
-    conn = store.connect(traced)
+def test_benchmark_from_tags_and_explicit_ids(demo_db):
+    conn = demo_db(8)
     cut_tasks(conn, store.list_episodes(conn))
     tasks = store.list_tasks(conn)
     by_ids = benchmark.create(conn, "two", task_ids=[tasks[0].id, tasks[1].id, "bogus"])
@@ -87,7 +83,6 @@ def test_benchmark_from_tags_and_explicit_ids(traced):
 
     assert benchmark.get(conn, by_ids.id).name == "two"
     assert {b.id for b in benchmark.list_benchmarks(conn)} == {by_ids.id, tagged.id}
-    conn.close()
 
 
 def test_proof_rejects_missing_run(two_runs):
@@ -96,9 +91,8 @@ def test_proof_rejects_missing_run(two_runs):
         report.proof(conn, cand.id, "nonexistent-run-id")
 
 
-def test_proof_rejects_different_benchmarks(traced):
-    run_demo(n=8)
-    conn = store.connect(traced)
+def test_proof_rejects_different_benchmarks(demo_db):
+    conn = demo_db(8)
     cut_tasks(conn, store.list_episodes(conn))
     tasks = store.list_tasks(conn)
     b1 = benchmark.create(conn, "b1", task_ids=[tasks[0].id, tasks[1].id])
@@ -107,4 +101,3 @@ def test_proof_rejects_different_benchmarks(traced):
     r2 = runner.run(conn, b2.id, "scripted")
     with pytest.raises(ValueError, match="benchmark"):
         report.proof(conn, r1.id, r2.id)
-    conn.close()

@@ -1,16 +1,12 @@
 import pytest
 
 from touchstone import store
-from touchstone.demo import run_demo
 from touchstone.mine import cut_tasks
 
 
 @pytest.fixture
-def demo_conn(traced):
-    run_demo(n=30)
-    conn = store.connect(traced)
-    yield conn
-    conn.close()
+def demo_conn(demo_db):
+    return demo_db(30)
 
 
 def test_cut_one_task_per_assistant_turn(demo_conn):

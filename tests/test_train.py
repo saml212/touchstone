@@ -7,25 +7,22 @@ import pytest
 
 from touchstone import store, train
 from touchstone.bench import benchmark, runner
-from touchstone.demo import run_demo
 from touchstone.llm import Reply
 from touchstone.mine import cut_tasks
 from touchstone.train import InfraRequired, TrainConfig, datasets, trainer_for
 
 
 @pytest.fixture
-def seeded(traced):
+def seeded(demo_db):
     """A demo db with mined tasks, a positive check, a safety check, and one benchmark."""
-    run_demo(n=14)
-    conn = store.connect(traced)
+    conn = demo_db(14)
     store.insert_check(conn, store.Check(
         name="polite", kind="contains",
         params={"values": ["sorted", "escalat"], "mode": "any"}, enabled=1))
     store.insert_check(conn, store.Check(name="clean", kind="no_pii", params={}, enabled=1))
     cut_tasks(conn, store.list_episodes(conn))
     bench = benchmark.create(conn, "demo", all_tasks=True)
-    yield conn, bench
-    conn.close()
+    return conn, bench
 
 
 def _read_jsonl(path):

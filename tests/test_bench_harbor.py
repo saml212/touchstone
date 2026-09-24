@@ -6,7 +6,6 @@ import pytest
 
 from touchstone import store
 from touchstone.bench import benchmark, harbor_export, harbor_run
-from touchstone.demo import run_demo
 from touchstone.mine import cut_tasks
 
 # The files this export matches from harbor/src/harbor/cli/template-task/.
@@ -16,9 +15,8 @@ EXPECTED_FILES = ["task.toml", "instruction.md", ".gitignore",
 
 
 @pytest.fixture
-def exported(traced, tmp_path):
-    run_demo(n=6)
-    conn = store.connect(traced)
+def exported(demo_db, tmp_path):
+    conn = demo_db(6)
     store.insert_check(conn, store.Check(
         name="polite", kind="contains",
         params={"values": ["sorted", "escalat"], "mode": "any"}, enabled=1))
@@ -35,8 +33,7 @@ def exported(traced, tmp_path):
     bench = benchmark.create(conn, "all", all_tasks=True)
     out = tmp_path / "harbor"
     dirs = harbor_export.export(conn, bench.id, out)
-    yield conn, bench, out, dirs
-    conn.close()
+    return conn, bench, out, dirs
 
 
 def test_layout_matches_harbor_template(exported):
