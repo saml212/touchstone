@@ -9,6 +9,7 @@ events fan out through the in-process `Hub` so a slow WebSocket client never blo
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import asdict
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from ... import tasks as tasks_mod
 from ...config import Settings
 from ...interview import rooms
 from ...interview.agent import Interviewer
+from ...interview.realtime import Bridges
 from ...interview.rooms import Event, Hub
 from ...interview.speech import SpeechError, validate_audio
 from ._deps import get_conn, get_root
@@ -53,20 +55,22 @@ def list_rooms(conn=Depends(get_conn), root=Depends(get_root)) -> dict:
 
 
 @router.get("/api/rooms/{room_id}")
-def get_room(room_id: str, conn=Depends(get_conn), root=Depends(get_root)) -> dict:
-    state = _room_state(conn, root, room_id)
+def get_room(room_id: str, request: Request, conn=Depends(get_conn),
+             root=Depends(get_root)) -> dict:
+    state = _room_state(conn, root, room_id, request.app.state.settings.speech_mode)
     if state is None:
         raise HTTPException(404, f"no room with id {room_id}")
     return state
 
 
 @router.post("/api/rooms")
-def create_room(body: dict, conn=Depends(get_conn), root=Depends(get_root)) -> dict:
+def create_room(body: dict, request: Request, conn=Depends(get_conn),
+                root=Depends(get_root)) -> dict:
     topic = (body.get("topic") or "").strip() or "quality review"
     room = rooms.open(conn, task_id=body.get("task_id"), topic=topic)
     opening = Interviewer(None, conn, room, root).open_statement()
     rooms.post(conn, room.id, "agent", "assistant", opening)
-    return _room_state(conn, root, room.id)
+    return _room_state(conn, root, room.id, request.app.state.settings.speech_mode)
 
 
 @router.post("/api/rooms/{room_id}/messages")
@@ -120,13 +124,14 @@ def get_audio(room_id: str, message_id: str, request: Request, conn=Depends(get_
 
 
 @router.post("/api/rooms/{room_id}/close")
-def close_room(room_id: str, request: Request, conn=Depends(get_conn),
-               root=Depends(get_root)) -> dict:
+async def close_room(room_id: str, request: Request, conn=Depends(get_conn),
+                     root=Depends(get_root)) -> dict:
     if store.get_room(conn, room_id) is None:
         raise HTTPException(404, f"no room with id {room_id}")
     rooms.close(conn, room_id)
+    await request.app.state.bridges.close(room_id)
     request.app.state.hub.publish(room_id, Event("closed", {}))
-    return _room_state(conn, root, room_id)
+    return _room_state(conn, root, room_id, request.app.state.settings.speech_mode)
 
 
 @router.websocket("/ws/rooms/{room_id}")
@@ -135,7 +140,7 @@ async def room_feed(websocket: WebSocket, room_id: str) -> None:
     settings: Settings = websocket.app.state.settings
     conn = store.connect(settings.db_path)
     try:
-        state = _room_state(conn, settings.root, room_id)
+        state = _room_state(conn, settings.root, room_id, settings.speech_mode)
     finally:
         conn.close()
     if state is None:
@@ -144,18 +149,49 @@ async def room_feed(websocket: WebSocket, room_id: str) -> None:
     await websocket.send_json({"type": "state", "data": state})
 
     hub: Hub = websocket.app.state.hub
+    bridges: Bridges = websocket.app.state.bridges
+    realtime = settings.speech_mode == "realtime"
+    if realtime:
+        bridges.client_here(room_id)
     queue = hub.subscribe(room_id)
     pump = asyncio.ensure_future(_pump(websocket, queue))
     try:
-        while True:
-            message = await websocket.receive()  # client payloads ignored; watch for close
-            if message["type"] == "websocket.disconnect":
-                break
+        await _recv_loop(websocket, bridges, room_id, realtime)
     except WebSocketDisconnect:
         pass
     finally:
         pump.cancel()
         hub.unsubscribe(room_id, queue)
+        if realtime:
+            bridges.client_gone(room_id)
+
+
+async def _recv_loop(websocket: WebSocket, bridges: Bridges, room_id: str, realtime: bool) -> None:
+    """Watch for the client's close; in realtime mode route its audio/ptt payloads to the bridge."""
+    while True:
+        message = await websocket.receive()
+        if message["type"] == "websocket.disconnect":
+            return
+        if realtime and message.get("text"):
+            await _route_client(bridges, room_id, message["text"])
+
+
+async def _route_client(bridges: Bridges, room_id: str, text: str) -> None:
+    """Route a browser WS payload (push-to-talk audio / ptt state) to the room's realtime bridge."""
+    try:
+        msg = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return
+    kind = msg.get("type")
+    if kind not in ("audio", "ptt"):
+        return
+    bridge = await bridges.get(room_id)
+    if bridge is None:
+        return
+    if kind == "audio" and msg.get("b64"):
+        await bridge.append_audio(msg["b64"])
+    elif kind == "ptt":
+        await bridge.ptt(msg.get("state", ""), msg.get("speaker", "guest"))
 
 
 # ---- shared request handling ----------------------------------------------
@@ -232,13 +268,14 @@ def _history(conn, room_id: str) -> list[dict]:
     return [_msg_view(m) for m in store.list_room_messages(conn, room_id) if m.role != "draft"]
 
 
-def _room_state(conn, root, room_id: str) -> dict | None:
+def _room_state(conn, root, room_id: str, mode: str = "local") -> dict | None:
     room = store.get_room(conn, room_id)
     if room is None:
         return None
     agent = Interviewer(None, conn, room, root)
     return {
         "room": asdict(room),
+        "mode": mode,
         "messages": _history(conn, room_id),
         "draft": agent.draft(),
         "committed": agent.committed(),

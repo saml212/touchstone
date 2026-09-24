@@ -281,6 +281,10 @@ class Bridges:
         self._cancel_idle(room_id)
         return bridge
 
+    def client_here(self, room_id: str) -> None:
+        """A client (re)joined; cancel any pending idle-close for its bridge."""
+        self._cancel_idle(room_id)
+
     def client_gone(self, room_id: str) -> None:
         """A client left; close the bridge after `idle_seconds` if no client returns."""
         if room_id not in self._bridges or self.hub.subscriber_count(room_id) > 0:
