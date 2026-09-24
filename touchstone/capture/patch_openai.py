@@ -40,6 +40,19 @@ def _state():
     return {"parts": [], "args": {}, "meta": {}, "usage": None}
 
 
+def _accumulate_tool_call(tc, st):
+    idx = get(tc, "index") or 0
+    meta = st["meta"].setdefault(idx, {})
+    if get(tc, "id"):
+        meta["id"] = get(tc, "id")
+    fn = get(tc, "function")
+    if get(fn, "name"):
+        meta["name"] = get(fn, "name")
+    a = get(fn, "arguments")
+    if a:
+        st["args"][idx] = st["args"].get(idx, "") + a
+
+
 def _accumulate(chunk, st):
     u = _usage(chunk)
     if u and (u["tokens_in"] or u["tokens_out"]):
@@ -52,16 +65,7 @@ def _accumulate(chunk, st):
     if c:
         st["parts"].append(c)
     for tc in get(delta, "tool_calls") or []:
-        idx = get(tc, "index") or 0
-        meta = st["meta"].setdefault(idx, {})
-        if get(tc, "id"):
-            meta["id"] = get(tc, "id")
-        fn = get(tc, "function")
-        if get(fn, "name"):
-            meta["name"] = get(fn, "name")
-        a = get(fn, "arguments")
-        if a:
-            st["args"][idx] = st["args"].get(idx, "") + a
+        _accumulate_tool_call(tc, st)
 
 
 def _finish(st):

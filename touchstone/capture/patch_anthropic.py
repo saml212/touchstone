@@ -39,29 +39,47 @@ def _state():
     return {"parts": [], "args": {}, "meta": {}, "tin": None, "tout": None}
 
 
+def _on_message_start(event, st):
+    u = get(get(event, "message"), "usage")
+    if u:
+        st["tin"] = get(u, "input_tokens")
+
+
+def _on_block_start(event, st):
+    idx = get(event, "index") or 0
+    cb = get(event, "content_block")
+    if get(cb, "type") == "tool_use":
+        st["meta"][idx] = {"id": get(cb, "id"), "name": get(cb, "name")}
+
+
+def _on_block_delta(event, st):
+    idx = get(event, "index") or 0
+    d = get(event, "delta")
+    dt = get(d, "type")
+    if dt == "text_delta":
+        st["parts"].append(get(d, "text") or "")
+    elif dt == "input_json_delta":
+        st["args"][idx] = st["args"].get(idx, "") + (get(d, "partial_json") or "")
+
+
+def _on_message_delta(event, st):
+    u = get(event, "usage")
+    if u and get(u, "output_tokens") is not None:
+        st["tout"] = get(u, "output_tokens")
+
+
+_EVENT_HANDLERS = {
+    "message_start": _on_message_start,
+    "content_block_start": _on_block_start,
+    "content_block_delta": _on_block_delta,
+    "message_delta": _on_message_delta,
+}
+
+
 def _accumulate(event, st):
-    et = get(event, "type")
-    if et == "message_start":
-        u = get(get(event, "message"), "usage")
-        if u:
-            st["tin"] = get(u, "input_tokens")
-    elif et == "content_block_start":
-        idx = get(event, "index") or 0
-        cb = get(event, "content_block")
-        if get(cb, "type") == "tool_use":
-            st["meta"][idx] = {"id": get(cb, "id"), "name": get(cb, "name")}
-    elif et == "content_block_delta":
-        idx = get(event, "index") or 0
-        d = get(event, "delta")
-        dt = get(d, "type")
-        if dt == "text_delta":
-            st["parts"].append(get(d, "text") or "")
-        elif dt == "input_json_delta":
-            st["args"][idx] = st["args"].get(idx, "") + (get(d, "partial_json") or "")
-    elif et == "message_delta":
-        u = get(event, "usage")
-        if u and get(u, "output_tokens") is not None:
-            st["tout"] = get(u, "output_tokens")
+    handler = _EVENT_HANDLERS.get(get(event, "type"))
+    if handler:
+        handler(event, st)
 
 
 def _finish(st):
