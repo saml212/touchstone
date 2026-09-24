@@ -369,3 +369,8 @@ def test_evaluate_isolates_a_raising_check():
     results = evaluate([good, bad], Target(output_text='{"ok": 1}'))
     assert results[0].passed is True
     assert results[1].passed is None  # the bad check errors, the good one still evaluates
+
+
+def test_contains_unicode_case_folding():
+    # case-insensitive contains should fold ß<->SS (casefold), not just ASCII-lower
+    assert _one("contains", {"values": ["STRASSE"]}, "die Bahnhofstraße").passed is True

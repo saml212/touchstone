@@ -62,8 +62,8 @@ def _run_one(check, target: Target, judge_provider) -> tuple[bool | None, str]:
 def _contains(params, target):
     values = params["values"]
     case_sensitive = params.get("case_sensitive", False)
-    hay = target.output_text if case_sensitive else target.output_text.lower()
-    needles = values if case_sensitive else [v.lower() for v in values]
+    hay = target.output_text if case_sensitive else target.output_text.casefold()
+    needles = values if case_sensitive else [v.casefold() for v in values]
     hits = [v for v, n in zip(values, needles, strict=True) if n in hay]
     found = len(hits) == len(values) if params.get("mode", "any") == "all" else bool(hits)
     return found, f"matched {hits}" if hits else "no values found"
