@@ -30,6 +30,10 @@ class Kind(StrEnum):
 KINDS = frozenset(k.value for k in Kind)
 APPLIES_TO = frozenset({"final", "any_turn", "tool_calls"})
 SEVERITIES = frozenset({"hard", "soft"})
+SOURCES = frozenset({"mined", "interview", "policy", "manual"})
+
+# Safety kinds mean "avoid this": they attach even when the recorded reference was bad.
+SAFETY_KINDS = frozenset({"no_pii", "not_contains", "not_regex", "tool_not_called"})
 
 
 def _open_ended_brace(pattern: str, k: int, n: int) -> tuple[bool, int]:
@@ -154,6 +158,16 @@ def coerce_tool_calls(value) -> list[dict]:
     return value
 
 
+# Prose/routing keys of a check block; everything else in a block is a flat param.
+_RESERVED = frozenset({
+    "name", "rule", "kind", "severity", "source", "because", "confidence",
+    "applies_to", "id", "enabled",
+})
+# Params whose file-facing key reads better than the evaluator's key.
+_PARAM_TO_FLAT = {"name": "tool", "kinds": "pii"}
+_FLAT_TO_PARAM = {v: k for k, v in _PARAM_TO_FLAT.items()}
+
+
 @dataclass
 class Check:
     kind: str
@@ -162,25 +176,49 @@ class Check:
     name: str = ""
     applies_to: str = "final"
     severity: str = "hard"
+    rule: str = ""
+    because: str = ""
+    source: str = "manual"
+    confidence: float | None = None
 
-    _FIELDS = ("kind", "params", "id", "name", "applies_to", "severity")
+    _FIELDS = ("kind", "params", "id", "name", "applies_to", "severity",
+               "rule", "because", "source", "confidence")
 
     @classmethod
     def from_dict(cls, data: dict) -> Check:
         kwargs = {k: data[k] for k in cls._FIELDS if k in data and data[k] is not None}
+        if "because" not in kwargs and data.get("rationale"):  # v1 called it rationale
+            kwargs["because"] = data["rationale"]
         if "kind" not in kwargs:
             raise ValueError("check dict is missing 'kind'")
         return cls(**kwargs)
 
     def to_dict(self) -> dict:
-        return {
-            "kind": self.kind,
-            "params": self.params,
-            "id": self.id,
-            "name": self.name,
-            "applies_to": self.applies_to,
-            "severity": self.severity,
-        }
+        return {k: getattr(self, k) for k in self._FIELDS}
+
+    @classmethod
+    def from_toml(cls, block: dict) -> Check:
+        """Read one flat `[[...check]]` block: prose keys plus per-kind param keys."""
+        params = {_FLAT_TO_PARAM.get(k, k): v for k, v in block.items() if k not in _RESERVED}
+        return cls.from_dict({**{k: block[k] for k in cls._FIELDS if k in block}, "params": params})
+
+    def to_toml(self) -> dict:
+        """A flat block: name, rule, kind, params, then severity/source/because/confidence."""
+        block: dict = {"name": self.name or self.kind}
+        if self.rule:
+            block["rule"] = self.rule
+        block["kind"] = self.kind
+        for pk, pv in (self.params or {}).items():
+            block[_PARAM_TO_FLAT.get(pk, pk)] = pv
+        block["severity"] = self.severity
+        block["source"] = self.source
+        if self.because:
+            block["because"] = self.because
+        if self.confidence is not None:
+            block["confidence"] = self.confidence
+        if self.applies_to != "final":
+            block["applies_to"] = self.applies_to
+        return block
 
     def validate(self) -> None:
         validate_params(self.kind, self.params)
@@ -188,6 +226,10 @@ class Check:
             raise ValueError(f"applies_to must be one of {sorted(APPLIES_TO)}")
         if self.severity not in SEVERITIES:
             raise ValueError("severity must be 'hard' or 'soft'")
+        if self.source not in SOURCES:
+            raise ValueError(f"source must be one of {sorted(SOURCES)}")
+        if self.confidence is not None and not 0.0 <= float(self.confidence) <= 1.0:
+            raise ValueError("confidence must be between 0 and 1")
 
 
 # ---- per-kind parameter validation -----------------------------------------

@@ -265,6 +265,69 @@ def test_from_dict_requires_kind():
         Check.from_dict({"params": {}})
 
 
+def test_from_dict_maps_legacy_rationale_to_because():
+    check = Check.from_dict({"kind": "contains", "params": {"values": ["x"]},
+                             "rationale": "old field name"})
+    assert check.because == "old field name"
+
+
+_TOML_CASES = [
+    ("contains", {"values": ["hi", "bye"], "mode": "all"}),
+    ("not_contains", {"values": ["secret"], "mode": "any"}),
+    ("regex", {"pattern": r"\d+"}),
+    ("not_regex", {"pattern": r"ssn"}),
+    ("json_schema", {"schema": {"type": "object"}}),
+    ("tool_called", {"name": "escalate", "arguments_match": {"reason": "late"}}),
+    ("tool_not_called", {"name": "refund"}),
+    ("tool_order", {"order": ["a", "b"]}),
+    ("max_length", {"max": 200}),
+    ("min_length", {"min": 3}),
+    ("no_pii", {"kinds": ["email", "phone"]}),
+    ("expr", {"expr": "len(output) > 0"}),
+    ("judge", {"rubric": "is it polite?"}),
+]
+
+
+@pytest.mark.parametrize("kind,params", _TOML_CASES)
+def test_to_toml_from_toml_roundtrip_every_kind(kind, params):
+    check = Check(kind=kind, params=params, name=f"a {kind} check", rule="it must hold",
+                  because="mined it", severity="soft", source="mined", confidence=0.5,
+                  applies_to="tool_calls")
+    block = check.to_toml()
+    assert block["kind"] == kind
+    assert block["name"] == f"a {kind} check"
+    round = Check.from_toml(block)
+    assert round.kind == kind
+    assert round.params == params
+    assert round.rule == "it must hold" and round.because == "mined it"
+    assert round.severity == "soft" and round.source == "mined"
+    assert round.confidence == 0.5 and round.applies_to == "tool_calls"
+    round.validate()
+
+
+def test_to_toml_flat_key_renames():
+    tool = Check(kind="tool_called", params={"name": "escalate"}).to_toml()
+    assert tool["tool"] == "escalate"
+    assert Check.from_toml(tool).params == {"name": "escalate"}
+    pii = Check(kind="no_pii", params={"kinds": ["email"]}).to_toml()
+    assert pii["pii"] == ["email"] and "kinds" not in pii
+
+
+def test_to_toml_omits_empty_prose_and_default_applies_to():
+    block = Check(kind="max_length", params={"max": 10}).to_toml()
+    assert "rule" not in block and "because" not in block
+    assert "confidence" not in block and "applies_to" not in block
+    assert block == {"name": "max_length", "kind": "max_length", "max": 10,
+                     "severity": "hard", "source": "manual"}
+
+
+def test_validate_rejects_bad_source_and_confidence():
+    with pytest.raises(ValueError, match="source"):
+        Check(kind="max_length", params={"max": 1}, source="bogus").validate()
+    with pytest.raises(ValueError, match="confidence"):
+        Check(kind="max_length", params={"max": 1}, confidence=2.0).validate()
+
+
 @pytest.mark.parametrize(
     "kind,params",
     [
