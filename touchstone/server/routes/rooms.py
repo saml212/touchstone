@@ -1,10 +1,36 @@
-"""GET /api/rooms — every interview room, open ones first, each with its task name."""
+"""Interview rooms: list, read, create, message, push-to-talk audio, close, and the WebSocket feed.
+
+Every request gets its own SQLite connection (the `get_conn` dependency) and never shares it across
+threads; the agent turn — the one slow, blocking step — runs in a threadpool with a fresh connection
+of its own. Room events fan out through the in-process `Hub` so a slow WebSocket client never blocks
+the others, and a client that (re)connects always receives full room state first.
+"""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import asyncio
+from dataclasses import asdict
+from pathlib import Path
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import FileResponse, Response
 
 from ... import store
+from ...config import Settings
+from ...interview import rooms
+from ...interview.agent import Interviewer
+from ...interview.rooms import Event, Hub
+from ...interview.speech import SpeechError, validate_audio
 from ._deps import get_conn
 
 router = APIRouter()
@@ -12,13 +38,223 @@ router = APIRouter()
 
 @router.get("/api/rooms")
 def list_rooms(conn=Depends(get_conn)) -> dict:
-    rooms = store.list_rooms(conn)
-    rooms.sort(key=lambda r: (r.closed_at is not None, r.id))
+    """Every interview room, open ones first, each with its task name."""
+    all_rooms = store.list_rooms(conn)
+    all_rooms.sort(key=lambda r: (r.closed_at is not None, r.id))
     out = []
-    for r in rooms:
+    for r in all_rooms:
         task = store.get_task(conn, r.task_id) if r.task_id else None
         out.append({
             "id": r.id, "task_id": r.task_id, "task_name": task.name if task else None,
             "topic": r.topic, "created_at": r.created_at, "closed_at": r.closed_at,
         })
     return {"rooms": out}
+
+
+@router.get("/api/rooms/{room_id}")
+def get_room(room_id: str, conn=Depends(get_conn)) -> dict:
+    state = _room_state(conn, room_id)
+    if state is None:
+        raise HTTPException(404, f"no room with id {room_id}")
+    return state
+
+
+@router.post("/api/rooms")
+def create_room(body: dict, conn=Depends(get_conn)) -> dict:
+    topic = (body.get("topic") or "").strip() or "quality review"
+    room = rooms.open(conn, task_id=body.get("task_id"), topic=topic)
+    opening = Interviewer(None, conn, room).open_statement()
+    rooms.post(conn, room.id, "agent", "assistant", opening)
+    return _room_state(conn, room.id)
+
+
+@router.post("/api/rooms/{room_id}/messages")
+async def post_message(room_id: str, body: dict, request: Request) -> dict:
+    text = (body.get("text") or "").strip()
+    speaker = (body.get("speaker") or "").strip() or "guest"
+    if not text:
+        raise HTTPException(400, "message text is required")
+    return await _ingest(request.app, room_id, speaker, text)
+
+
+@router.post("/api/rooms/{room_id}/audio")
+async def post_audio(
+    room_id: str, request: Request, speaker: str = Form("guest"), file: UploadFile = File(...),
+    conn=Depends(get_conn),
+) -> dict:
+    room = store.get_room(conn, room_id)
+    if room is None:
+        raise HTTPException(404, f"no room with id {room_id}")
+    if room.closed_at is not None:
+        raise HTTPException(409, "this room is closed")
+    data = await file.read()
+    try:
+        mime = validate_audio(data)
+        text = await asyncio.to_thread(request.app.state.speech.stt.transcribe, data, mime)
+    except SpeechError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not text.strip():
+        raise HTTPException(400, "Transcription produced no text.")
+    result = await _ingest(request.app, room_id, speaker.strip() or "guest", text.strip())
+    result["transcript"] = text.strip()
+    return result
+
+
+@router.get("/api/rooms/{room_id}/audio/{message_id}")
+def get_audio(room_id: str, message_id: str, request: Request, conn=Depends(get_conn)):
+    msg = next(
+        (m for m in store.list_room_messages(conn, room_id) if m.id == message_id), None
+    )
+    if msg is None:
+        raise HTTPException(404, "no such message")
+    if msg.audio_path and Path(msg.audio_path).exists():
+        return FileResponse(msg.audio_path)
+    if msg.role != "assistant":
+        raise HTTPException(404, "no audio for this message")
+    spoken = request.app.state.speech.tts.synthesize(msg.text)
+    if spoken is None:
+        return Response(status_code=204)  # browser speaks it via speechSynthesis
+    audio, media_type = spoken
+    return Response(content=audio, media_type=media_type)
+
+
+@router.post("/api/rooms/{room_id}/close")
+def close_room(room_id: str, request: Request, conn=Depends(get_conn)) -> dict:
+    if store.get_room(conn, room_id) is None:
+        raise HTTPException(404, f"no room with id {room_id}")
+    rooms.close(conn, room_id)
+    request.app.state.hub.publish(room_id, Event("closed", {}))
+    return _room_state(conn, room_id)
+
+
+@router.websocket("/ws/rooms/{room_id}")
+async def room_feed(websocket: WebSocket, room_id: str) -> None:
+    await websocket.accept()
+    settings: Settings = websocket.app.state.settings
+    conn = store.connect(settings.db_path)
+    try:
+        state = _room_state(conn, room_id)
+    finally:
+        conn.close()
+    if state is None:
+        await websocket.close(code=4004)
+        return
+    await websocket.send_json({"type": "state", "data": state})
+
+    hub: Hub = websocket.app.state.hub
+    queue = hub.subscribe(room_id)
+    pump = asyncio.ensure_future(_pump(websocket, queue))
+    try:
+        while True:
+            message = await websocket.receive()  # client payloads ignored; watch for close
+            if message["type"] == "websocket.disconnect":
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        pump.cancel()
+        hub.unsubscribe(room_id, queue)
+
+
+# ---- shared request handling ----------------------------------------------
+
+
+async def _ingest(app, room_id: str, speaker: str, text: str) -> dict:
+    """Post a participant message, run the agent in a thread, and broadcast every event."""
+    settings: Settings = app.state.settings
+    hub: Hub = app.state.hub
+
+    conn = store.connect(settings.db_path)
+    try:
+        room = store.get_room(conn, room_id)
+        if room is None:
+            raise HTTPException(404, f"no room with id {room_id}")
+        if room.closed_at is not None:
+            raise HTTPException(409, "this room is closed")
+        user_msg = rooms.post(conn, room_id, speaker, "user", text)
+        history = [_msg_view(m) for m in store.list_room_messages(conn, room_id)]
+        user_view = _msg_view(user_msg)
+    finally:
+        conn.close()
+    hub.publish(room_id, Event("message", user_view))
+
+    step = await asyncio.to_thread(
+        _agent_step, settings, app.state.provider_factory, room_id, history
+    )
+
+    hub.publish(room_id, Event("message", step["agent"]))
+    hub.publish(room_id, Event("draft", {"checks": step["draft"]}))
+    if step["turn"]["commit"]:
+        hub.publish(room_id, Event("committed", {"checks": step["turn"]["commit"]}))
+    if step["closed"]:
+        hub.publish(room_id, Event("closed", {}))
+    return {"user": user_view, **step}
+
+
+def _agent_step(settings: Settings, provider_factory, room_id: str, history: list[dict]) -> dict:
+    conn = store.connect(settings.db_path)
+    try:
+        room = store.get_room(conn, room_id)
+        agent = Interviewer(provider_factory(), conn, room)
+        turn = agent.respond(history)
+        agent_msg = rooms.post(conn, room_id, "agent", "assistant", turn.say)
+        closed = store.get_room(conn, room_id).closed_at is not None
+        return {
+            "turn": turn.to_dict(),
+            "agent": _msg_view(agent_msg),
+            "draft": _draft_view(conn, room_id),
+            "committed": _committed_view(conn, room_id),
+            "closed": closed,
+        }
+    finally:
+        conn.close()
+
+
+async def _pump(websocket: WebSocket, queue: asyncio.Queue) -> None:
+    while True:
+        event: Event = await queue.get()
+        await websocket.send_json({"type": event.type, "data": event.data})
+
+
+# ---- views -----------------------------------------------------------------
+
+
+def _msg_view(m: store.RoomMessage) -> dict:
+    return {"id": m.id, "speaker": m.speaker, "role": m.role, "text": m.text,
+            "audio_path": m.audio_path, "ts": m.ts,
+            "has_audio": bool(m.audio_path) or m.role == "assistant"}
+
+
+def _check_view(c: store.Check) -> dict:
+    return {"id": c.id, "name": c.name, "kind": c.kind, "params": c.params,
+            "applies_to": c.applies_to, "severity": c.severity, "rationale": c.rationale,
+            "enabled": bool(c.enabled)}
+
+
+def _room_checks(conn, room_id: str, enabled: bool) -> list[dict]:
+    out = []
+    for cid in store.list_room_check_ids(conn, room_id):
+        c = store.get_check(conn, cid)
+        if c and bool(c.enabled) == enabled:
+            out.append(_check_view(c))
+    return out
+
+
+def _draft_view(conn, room_id: str) -> list[dict]:
+    return _room_checks(conn, room_id, enabled=False)
+
+
+def _committed_view(conn, room_id: str) -> list[dict]:
+    return _room_checks(conn, room_id, enabled=True)
+
+
+def _room_state(conn, room_id: str) -> dict | None:
+    room = store.get_room(conn, room_id)
+    if room is None:
+        return None
+    return {
+        "room": asdict(room),
+        "messages": [_msg_view(m) for m in store.list_room_messages(conn, room_id)],
+        "draft": _draft_view(conn, room_id),
+        "committed": _committed_view(conn, room_id),
+    }
