@@ -63,14 +63,16 @@ def test_concurrent_writers(db):
     errors = []
 
     def worker():
-        c = store.connect(db)
+        c = None
         try:
+            c = store.connect(db)
             for _ in range(per):
                 store.insert_episode(c, store.Episode(name="w"))
         except Exception as e:
             errors.append(e)
         finally:
-            c.close()
+            if c:
+                c.close()
 
     threads = [threading.Thread(target=worker) for _ in range(writers)]
     for t in threads:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -27,6 +28,8 @@ def _dumps(value) -> str | None:
 def _loads(text):
     return None if text is None else json.loads(text)
 
+
+SCHEMA_VERSION = 1
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
@@ -76,12 +79,31 @@ def connect(path: str | Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    _ensure_wal(conn)
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(SCHEMA)
+    if conn.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+        with write(conn):
+            for statement in SCHEMA.split(";"):
+                if statement.strip():
+                    conn.execute(statement)
+            conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     return conn
+
+
+def _ensure_wal(conn: sqlite3.Connection) -> None:
+    """journal_mode=WAL ignores busy_timeout: switch only when needed, retry the first-open race."""
+    for attempt in range(5):
+        if conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal":
+            return
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError:
+            if attempt == 4:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 @contextmanager
@@ -273,8 +295,13 @@ def list_episodes(conn, label: str | None = None) -> list[Episode]:
 
 def outcome(conn, episode_id: str, score: float | None, label: str | None) -> None:
     _update(
-        conn, "episodes", "id", episode_id,
-        outcome_score=score, outcome_label=label, ended_at=now(),
+        conn,
+        "episodes",
+        "id",
+        episode_id,
+        outcome_score=score,
+        outcome_label=label,
+        ended_at=now(),
     )
 
 
