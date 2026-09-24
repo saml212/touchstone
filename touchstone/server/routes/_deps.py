@@ -30,6 +30,8 @@ def check_view(c: Check) -> dict:
         "name": c.name, "kind": c.kind, "params": c.params, "applies_to": c.applies_to,
         "severity": c.severity, "source": c.source, "rule": c.rule, "because": c.because,
         "confidence": c.confidence,
+        # The flat block exactly as it reads in task.toml / checks.toml (tool/pii flat keys).
+        "block": c.to_toml(),
     }
 
 

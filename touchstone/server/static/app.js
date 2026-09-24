@@ -138,21 +138,27 @@ function bubble(m) {
 
 // ---- checks ----------------------------------------------------------------
 
+function checkCell(c) {
+  // Rule and reason read first; the machine params (kind + values) sit underneath, muted.
+  const rule = c.rule ? `<div class="crule">${esc(c.rule)}</div>` : "";
+  const because = c.because ? `<div class="rationale">${esc(c.because)}</div>` : "";
+  return `<div class="cname">${esc(c.name || c.kind)}</div>${rule}${because}` +
+    `<div class="cmeta"><code>${esc(c.kind)}</code> ${esc(JSON.stringify(c.params))}</div>`;
+}
+
 async function checksPage() {
   const [{ checks }, { kinds }] = await Promise.all([api("/api/checks"), api("/api/checks/kinds")]);
   const rows = checks.map((c) => [
     `<input type="checkbox" data-enable="${esc(c.name)}" ${c.enabled ? "checked" : ""}>`,
-    `<code>${esc(c.kind)}</code>`,
-    esc(c.name || ""),
+    checkCell(c),
     badge(c.severity, c.severity),
     badge(c.source, "src"),
-    `<div class="rationale">${esc(c.because || "")}</div>`,
     `<button class="ghost" data-try="${esc(c.name)}">Try it</button>`,
   ]);
   view.innerHTML = `<h2>Checks <span class="count">${checks.length}</span></h2>
     ${newCheckForm(kinds)}
     <div id="tryDrawer"></div>
-    ${checks.length ? table(["on", "kind", "name", "severity", "source", "rationale", ""], rows) : `<p class="muted">No checks yet — mine them or add one above.</p>`}`;
+    ${checks.length ? table(["on", "check", "severity", "source", ""], rows) : `<p class="muted">No checks yet — mine them or add one above.</p>`}`;
 
   view.querySelectorAll("[data-enable]").forEach((box) => {
     box.onchange = () => api(`/api/checks/${encodeURIComponent(box.dataset.enable)}`, "PATCH", { enabled: box.checked });
@@ -282,12 +288,19 @@ async function startInterview(taskName) {
   location.href = `/rooms/${room.room.id}`;
 }
 
+function tomlBlock(block) {
+  // Render a check as it reads in task.toml: the block header, then key = value per line.
+  const lines = ["[[metadata.touchstone.check]]"];
+  for (const [k, v] of Object.entries(block || {})) lines.push(`${k} = ${JSON.stringify(v)}`);
+  return lines.join("\n");
+}
+
 async function taskDetail(id) {
   const t = await api(`/api/tasks/${id}`);
   const ctx = ((t.context || {}).messages || []).map(bubble).join("") || `<p class="muted">no context</p>`;
   const checks = (t.checks || []).map((c) =>
-    `<div class="check"><code>${esc(c.kind)}</code> ${esc(c.name || "")} ${badge(c.severity, c.severity)}
-      <button class="ghost" data-detach="${esc(c.name)}">detach</button></div>`).join("") || `<p class="muted">no checks attached</p>`;
+    `<div class="check-block"><button class="ghost" data-detach="${esc(c.name)}">detach</button>
+      <pre>${esc(tomlBlock(c.block))}</pre></div>`).join("") || `<p class="muted">no checks attached</p>`;
   view.innerHTML = `<div class="crumb">${link("/tasks", "← Tasks")}</div>
     <h2>${esc(t.name)} ${(t.tags || []).map((x) => badge(x)).join(" ")}</h2>
     <button id="interview">Interview</button>
