@@ -199,8 +199,19 @@ class ReviewAgent:
         store.insert_review(self.conn, review)
         return {"recorded": review.verdict, "trust": self._trust()}
 
+    def _task_arg(self, args: dict) -> str:
+        """The task a tool acts on: the model's `task` when it names a real task dir, else the
+        open trial's task. Models often send the job label ("refund-order") for the task name."""
+        named = args.get("task") or ""
+        if named and (self.dataset_dir / "tasks" / named / "task.toml").is_file():
+            return named
+        current = (self.scratch.current or {}).get("task", "")
+        if not current:
+            raise changes.ChangeError("no trial is open — read a trial first, then change it.")
+        return current
+
     def _propose_change(self, args: dict) -> dict:
-        task, change = args.get("task", ""), args.get("change")
+        task, change = self._task_arg(args), args.get("change")
         changes.validate(self.dataset_dir / "tasks" / task, change)  # bad shape -> re-draft
         self.scratch.proposed = change
         self.scratch.readback = changes.describe(change)
@@ -215,7 +226,7 @@ class ReviewAgent:
         if change is None:
             return {"error": "no change has been proposed yet — call propose_change and read it "
                              "back first, then apply."}
-        task = args.get("task") or (self.scratch.current or {}).get("task", "")
+        task = self._task_arg(args)
         targets = _shared_tasks(self.dataset_dir, task) if args.get("always") else [task]
         for name in targets:  # refuse an unvalidated/malformed change before writing any file
             changes.validate(self.dataset_dir / "tasks" / name, change)

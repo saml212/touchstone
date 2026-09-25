@@ -343,3 +343,18 @@ def test_apply_max_steps_with_error_surfaces_the_reason(tmp_path, conn):
     agent = ReviewAgent(provider, conn, room, _settings(tmp_path))
     turn = agent.respond([{"role": "user", "speaker": "sam", "text": "apply"}])
     assert "couldn't apply that change" in turn.say
+
+
+def test_change_tools_fall_back_to_the_open_trial_task(tmp_path, monkeypatch):
+    """A model that sends the job label as `task` still changes the trial it is looking at."""
+    from touchstone.review import agent as review_agent
+
+    ds = tmp_path / "touchstone"
+    (ds / "tasks" / "refund-order-2" / "tests").mkdir(parents=True)
+    (ds / "tasks" / "refund-order-2" / "task.toml").write_text("[metadata.touchstone]\n")
+    ra = review_agent.ReviewAgent.__new__(review_agent.ReviewAgent)
+    ra.dataset_dir = ds
+    ra.scratch = review_agent._Scratch(current={"task": "refund-order-2", "trial": "j/t"})
+    assert ra._task_arg({"task": "refund-order"}) == "refund-order-2"
+    assert ra._task_arg({"task": "refund-order-2"}) == "refund-order-2"
+    assert ra._task_arg({}) == "refund-order-2"
