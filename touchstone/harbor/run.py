@@ -172,6 +172,50 @@ def build_image(context_dir: str | Path, tag: str, settings: Settings | None = N
         _call(["docker", "build", "-t", tag, str(context_dir)])
 
 
+def _regrade_cmd(job_dir: str, tasks_path: str, out: str) -> list[str]:
+    return ["harbor", "job", "regrade", job_dir, "-p", tasks_path, "-o", out]
+
+
+def _regrade_local(job_dir: Path, tasks_path: Path) -> Path:
+    """Regrade `job_dir` against the updated tasks; the new job lands beside the source."""
+    out = job_dir.parent
+    before = _job_dirs(out)
+    _call(_regrade_cmd(str(job_dir.resolve()), str(_run_path(tasks_path).resolve()),
+                       str(out.resolve())))
+    return _newest_job(out, before)
+
+
+def _regrade_remote(job_dir: Path, tasks_path: Path, settings: Settings) -> Path:
+    host = settings.harbor_host
+    sync_root = job_dir.parent.parent  # the dataset root holding tasks/ and jobs/
+    rel_tasks = _run_path(tasks_path).relative_to(sync_root).as_posix()
+    remote_path = _remote_dataset_path(settings.harbor_remote_root, sync_root)
+    # Push the updated tasks (never the whole jobs tree), then just the one source job dir.
+    _call(["rsync", "-az", "--delete", "--exclude", "jobs",
+           f"{sync_root}/", f"{host}:{remote_path}/"])
+    _call(["rsync", "-az", f"{job_dir}/", f"{host}:{remote_path}/jobs/{job_dir.name}/"])
+    remote_cmd = " ".join(_regrade_cmd(f"jobs/{job_dir.name}", rel_tasks, "jobs"))
+    _call(["ssh", host, f"{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"])
+    out = job_dir.parent
+    before = _job_dirs(out)
+    _call(["rsync", "-az", f"{host}:{remote_path}/jobs/", f"{out}/"])
+    return _newest_job(out, before)
+
+
+def regrade(job_dir: str | Path, tasks_path: str | Path, *,
+            settings: Settings | None = None) -> Path:
+    """Run `harbor job regrade` over `job_dir` with the updated tasks and return the new job dir.
+
+    Regrades from recorded artifacts (no agent, no key). Runs on the SSH host — syncing the tasks
+    and the one source job up, then the result back — when the local machine has no Docker daemon.
+    """
+    job_dir, tasks_path = Path(job_dir), Path(tasks_path)
+    settings = settings or load_settings()
+    if settings.harbor_host and not _has_docker():
+        return _regrade_remote(job_dir, tasks_path, settings)
+    return _regrade_local(job_dir, tasks_path)
+
+
 def run(path: str | Path, agent: str, *, model: str | None = None, jobs_dir: str | Path = "jobs",
         n_concurrent: int = 4, extra_args: list[str] | None = None,
         settings: Settings | None = None) -> Path:
