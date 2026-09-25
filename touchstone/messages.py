@@ -214,7 +214,7 @@ def _passthrough_item(msg, itype) -> list[dict]:
 
 def _from_role(role, msg) -> list[dict]:
     content = get(msg, "content")
-    if role == "tool":
+    if role in ("tool", "function"):  # "function" is OpenAI's legacy tool-result role
         return [_tool_message(get(msg, "tool_call_id"), get(msg, "name"), content)]
     parts, tool_calls, tool_results, reasoning = _split_content(content)
     for tc in get(msg, "tool_calls") or []:

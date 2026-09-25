@@ -298,3 +298,20 @@ def test_unknown_responses_item_is_preserved_not_dropped():
     assert canonical(msgs) == msgs  # idempotent
     to_openai(msgs)  # wire converters must not crash on the passthrough item
     to_anthropic(msgs)
+
+
+def test_legacy_function_role_becomes_a_linked_tool_message():
+    # OpenAI's deprecated function-calling API feeds the result back as role="function" with a name
+    # and no tool_call_id. Canonicalize it to a tool message and link it to the preceding call.
+    from touchstone.messages import canonical
+
+    out = canonical([
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "c1", "function": {"name": "get_weather", "arguments": "{}"}}]},
+        {"role": "function", "name": "get_weather", "content": '{"temp": 20}'},
+    ])
+    tools = [m for m in out if m["role"] == "tool"]
+    assert len(tools) == 1
+    assert tools[0]["name"] == "get_weather"
+    assert tools[0]["content"] == '{"temp": 20}'
+    assert tools[0]["tool_call_id"] == "c1"  # linked by name to the preceding call
