@@ -43,7 +43,7 @@ def test_derive_state_criteria_changed_cell_and_added_row():
 
 
 def test_read_only_tool_never_required():
-    # get is read-only + no state change -> never a tool_used criterion; only avoid the mutating ones
+    # get is read-only + no state change -> never a tool_used criterion; only avoids mutating
     calls = [ToolEvent("get", {"widget_id": "w1"}, {}, "e")]
     _, tool = derive_criteria({"initial": {}, "final": {}}, [], MAP, calls)
     assert not any("trajectory_tool_used" in line for line in tool)

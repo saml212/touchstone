@@ -99,7 +99,7 @@ def _changed_cells(table: str, before: dict, after: dict, db_rel: str) -> list[s
 
 def _token_value(val) -> bool:
     """A stable identifier: a number, or a short whitespace-free string. Free text (subjects,
-    bodies, reasons) is rejected so a different-but-correct model's wording never fails a criterion."""
+    bodies, reasons) is rejected so another correct model's wording never fails a criterion."""
     if isinstance(val, bool):
         return False
     if isinstance(val, int | float):
