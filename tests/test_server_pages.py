@@ -102,7 +102,7 @@ def test_overview_sentence_map_services_and_latest_job(db):
     c = _client(db)
     o = c.get("/api/pages/overview").json()
     assert o["sentence"] == ("Built 2 tasks from 4 conversations. Your current setup passes 1. "
-                             "1 failures — walk through them?")
+                             "1 failure — walk through them? (touchstone review)")
     assert o["map"] == "This agent handles issue a refund and check order status."
     assert o["services"] == [{"service": "orders_service", "fidelity": 1.0,
                               "reproduced": 25, "calls": 25, "status": "ok"}]
@@ -111,6 +111,14 @@ def test_overview_sentence_map_services_and_latest_job(db):
     assert [j["job"] for j in o["latest_jobs"]] == [MODEL_JOB]
     assert o["latest_jobs"][0]["model"] == "openai/gpt-4o-mini"
     assert o["trust"] is None
+
+
+def test_overview_sentence_points_to_bench_when_a_task_is_not_in_the_baseline(db):
+    ds = _seed(db)
+    _task(ds, "escalate-1", "Escalate", 1.0)  # a new gated task the baseline never ran
+    o = _client(db).get("/api/pages/overview").json()
+    assert o["sentence"] == ("Built 3 tasks from 4 conversations. Your current setup passes 1 "
+                             "of the 2 run; 1 not run yet — run touchstone bench.")
 
 
 def test_overview_trust_appears_after_a_review(db):

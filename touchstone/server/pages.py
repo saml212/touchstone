@@ -15,14 +15,13 @@ from pathlib import Path
 from ..harbor import jobs as harbor_jobs
 from ..review import trials as trials_mod
 from ..review.facts import (
-    _baseline_counts,
     _job_labels,
     _join,
     _read_toml,
-    _task_count,
     _touchstone_meta,
 )
 from ..survey import descriptions
+from ..survey.report import first_five_sentence
 from .pagedata import (
     _all_job_dirs,
     _is_gate,
@@ -44,19 +43,16 @@ def _conversations(dataset_dir: Path) -> int:
 
 
 def _sentence(dataset_dir: Path) -> str:
-    """The first-five-minutes sentence: built N tasks from M conversations, passes K, F failures."""
-    built = f"Built {_task_count(dataset_dir)} tasks"
+    """The first-five-minutes sentence, computed the same way as the CLI summary: N built tasks,
+    K passed among them in the latest baseline, U gated tasks that baseline never ran."""
+    built_names = [d.name for d in _task_dirs(dataset_dir)]
     convos = _conversations(dataset_dir)
-    if convos:
-        built += f" from {convos} conversations"
-    counts = _baseline_counts(dataset_dir)
-    if not counts:
-        return built + "."
-    failures = counts["tasks"] - counts["passed"]
-    tail = f" Your current setup passes {counts['passed']}."
-    if failures:
-        return f"{built}.{tail} {failures} failures — walk through them?"
-    return f"{built}.{tail} Everything passes — spot-check a few?"
+    baseline = _load_json(dataset_dir / "baseline.json")
+    if not baseline or "pass_rates" not in baseline:
+        built = f"Built {len(built_names)} tasks"
+        return built + (f" from {convos} conversations." if convos else ".")
+    return first_five_sentence(built_names, convos, baseline.get("pass_rates", {}),
+                               baseline.get("passed", []))
 
 
 def _map_paragraph(dataset_dir: Path) -> str:

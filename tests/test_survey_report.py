@@ -65,7 +65,8 @@ def test_summary_gate_skipped_clause():
 
 
 def test_summary_baseline_sentence_is_the_design_line():
-    stats = {"tasks": 7, "conversations": 12, "gated": 7, "needs_review": 0}
+    stats = {"tasks": 7, "built_names": [f"t{i}" for i in range(7)],
+             "conversations": 12, "gated": 7, "needs_review": 0}
     baseline = {"pass_rates": {f"t{i}": (1.0 if i < 5 else 0.0) for i in range(7)},
                 "passed": [f"t{i}" for i in range(5)], "failed": ["t5", "t6"],
                 "model": "openai/gpt-4o-mini", "mode": "packaged"}
@@ -84,3 +85,28 @@ def test_report_baseline_shows_mean_reward_and_check():
     assert "75%" in md and "75% ✓" not in md  # a-2 partial reward, no check
     from touchstone.survey.report import baseline_section
     assert "Failed:" in baseline_section({"error": "boom\nmore"})
+
+
+# ---- first-five-minutes sentence: N built, K passed, U gated-but-not-run -------------------------
+
+from touchstone.survey.report import first_five_sentence  # noqa: E402
+
+
+def test_sentence_all_pass_when_baseline_covers_every_task():
+    s = first_five_sentence(["t1", "t2"], 5, {"t1": 1.0, "t2": 1.0}, ["t1", "t2"])
+    assert s == "Built 2 tasks from 5 conversations. Everything passes — spot-check a few?"
+
+
+def test_sentence_failures_when_baseline_covers_every_task():
+    s = first_five_sentence(["t1", "t2", "t3"], 5, {"t1": 1.0, "t2": 0.0, "t3": 1.0}, ["t1", "t3"])
+    assert s == ("Built 3 tasks from 5 conversations. Your current setup passes 2. "
+                 "1 failure — walk through them? (touchstone review)")
+
+
+def test_sentence_points_to_bench_when_tasks_were_not_run():
+    # 7 built, the latest baseline only ran/passed 5 -> 2 not run yet; never "everything passes".
+    ran = {f"t{i}": 1.0 for i in range(1, 6)}
+    passed = list(ran)
+    s = first_five_sentence([f"t{i}" for i in range(1, 8)], 12, ran, passed)
+    assert s == ("Built 7 tasks from 12 conversations. Your current setup passes 5 of the 5 run; "
+                 "2 not run yet — run touchstone bench.")

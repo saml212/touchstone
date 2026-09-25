@@ -60,6 +60,41 @@ def test_run_baseline_idempotent(tmp_path, monkeypatch):
     assert again["passed"] == ["t1"]
 
 
+def _task_dir(out, name):
+    d = out / "tasks" / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "task.toml").write_text("")
+
+
+def test_run_baseline_reruns_when_a_new_task_is_absent_from_the_baseline(tmp_path, monkeypatch):
+    # An earlier baseline ran t1; a later survey pass wrote t2. The stale baseline no longer covers
+    # every current task, so it is NOT reused — the baseline re-runs over the full current set.
+    out = tmp_path / "touchstone"
+    _agent_toml(out)
+    _task_dir(out, "t1")
+    _mock_harbor(monkeypatch, {"t1": 1.0})
+    baseline.run_baseline(tmp_path, {}, Settings())  # first baseline covers {t1}
+
+    _task_dir(out, "t2")  # a new task appears after the baseline
+    _mock_harbor(monkeypatch, {"t1": 1.0, "t2": 0.0})
+    again = baseline.run_baseline(tmp_path, {}, Settings())
+    assert set(again["pass_rates"]) == {"t1", "t2"} and again["failed"] == ["t2"]  # re-ran, merged
+
+
+def test_run_baseline_reused_when_it_already_covers_every_task(tmp_path, monkeypatch):
+    out = tmp_path / "touchstone"
+    _agent_toml(out)
+    _task_dir(out, "t1")
+    _mock_harbor(monkeypatch, {"t1": 1.0})
+    baseline.run_baseline(tmp_path, {}, Settings())
+
+    def boom(*a, **k):
+        raise AssertionError("should not re-run when the baseline covers every current task")
+    monkeypatch.setattr(baseline.run_mod, "run", boom)
+    again = baseline.run_baseline(tmp_path, {}, Settings())
+    assert again["passed"] == ["t1"]
+
+
 def test_run_baseline_skip_and_missing_agent(tmp_path, monkeypatch):
     assert baseline.run_baseline(tmp_path, {}, Settings(), skip=True) is None  # skip flag
     assert baseline.run_baseline(tmp_path, {}, Settings()) is None  # no agent.toml

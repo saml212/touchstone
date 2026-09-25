@@ -137,7 +137,7 @@ def _gate_and_baseline(repo, env_result, settings, force, skip_gate, skip_baseli
 
 def _stats(conn, tasks, gate, skip_gate) -> dict:
     built = set((tasks or {}).get("written", []) + (tasks or {}).get("reused", []))
-    return {"tasks": len(built),
+    return {"tasks": len(built), "built_names": sorted(built),
             "conversations": len(store.list_episodes(conn)) if conn else 0,
             "gated": len((gate or {}).get("gated", [])),
             "needs_review": len((gate or {}).get("needs_review", [])),

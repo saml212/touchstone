@@ -29,6 +29,13 @@ def _agent_cfg(out: Path) -> dict | None:
             "provider": agent.get("provider", "")}
 
 
+def _current_tasks(out: Path) -> set:
+    """The task ids currently in the dataset (tasks/*/task.toml) — the set a fresh baseline runs."""
+    tasks = out / "tasks"
+    return {d.name for d in tasks.glob("*") if (d / "task.toml").is_file()} if tasks.is_dir() \
+        else set()
+
+
 def _model_ref(cfg: dict) -> str:
     model = cfg["model_default"]
     if "/" in model or not cfg["provider"]:
@@ -55,7 +62,10 @@ def run_baseline(repo, env_result: dict, settings, force: bool = False,
         return None
     existing = out / "baseline.json"
     if existing.exists() and not force:
-        return json.loads(existing.read_text(encoding="utf-8"))
+        data = json.loads(existing.read_text(encoding="utf-8"))
+        if not (_current_tasks(out) - set(data.get("pass_rates", {}))):
+            return data  # the baseline already ran every current task; reuse it
+        # tasks were added since this baseline (its set != the current gated set) — re-run below.
     model = _model_ref(cfg)
     try:
         job_dir = run_mod.run(out, AGENT_PATH, model=model, jobs_dir=out / "jobs",

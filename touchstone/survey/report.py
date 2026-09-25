@@ -187,14 +187,32 @@ def _task_clause(stats: dict) -> str:
     return head + f" ({stats.get('gated', 0)} gated, {stats.get('needs_review', 0)} needs review)."
 
 
+def first_five_sentence(built_names, convos: int, ran, passed) -> str:
+    """The first-five-minutes sentence, shared by the CLI summary and the Overview page.
+
+    N = tasks built now; among them, K passed in the LATEST baseline, R were run, U were not run
+    (new since that baseline). When U > 0 the baseline is stale — point to `touchstone bench` — so
+    the sentence never says "everything passes" while some gated tasks were never actually run."""
+    built = set(built_names)
+    n = len(built)
+    k = len(built & set(passed))
+    r = len(built & set(ran))
+    u = n - r
+    head = f"Built {_plural(n, 'task')}" + (f" from {_plural(convos, 'conversation')}" if convos
+                                            else "")
+    if u > 0:
+        return (f"{head}. Your current setup passes {k} of the {r} run; "
+                f"{u} not run yet — run touchstone bench.")
+    if n - k > 0:
+        return (f"{head}. Your current setup passes {k}. {_plural(n - k, 'failure')} — "
+                f"walk through them? (touchstone review)")
+    return f"{head}. Everything passes — spot-check a few?"
+
+
 def _baseline_sentence(stats: dict, baseline: dict) -> str:
     """The first-five-minutes sentence: tasks built, conversations, what the setup passes today."""
-    rates = baseline["pass_rates"]
-    n, k = len(rates), len(baseline["passed"])
-    m = stats.get("conversations", 0)
-    return (f"Built {_plural(n, 'task')} from {_plural(m, 'conversation')}. "
-            f"Your current setup passes {k}. {_plural(n - k, 'failure')} — "
-            f"walk through them? (touchstone review)")
+    return first_five_sentence(stats.get("built_names", []), stats.get("conversations", 0),
+                               baseline.get("pass_rates", {}), baseline.get("passed", []))
 
 
 def summary(map_data: dict, fidelity: dict, stats: dict | None = None,
