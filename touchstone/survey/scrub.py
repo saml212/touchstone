@@ -10,13 +10,21 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-# Card: 13–19 digits, optional single space/hyphen separators. Runs before phone so 16-digit
-# card numbers are not mistaken for phone numbers.
-_CARD = re.compile(r"\b(?:\d[ -]?){12,18}\d\b")
-# Phone: 10–15 digits with optional +/space/hyphen. The 10-digit floor keeps short ids and ISO
+# One combined, left-to-right pass so a replacement is never re-scanned by a later pattern (a card
+# fake like "4000-0000-0000-0001" would otherwise be re-matched as a phone). Alternation order is
+# the priority: email, then card (13–19 digits), then phone. Phone allows a leading `(area)` and
+# runs of separators so `(415) 555-0132` is caught; the 10-digit floor keeps short ids and ISO
 # dates (8 digits) out — the simpler choice over full locale parsing.
-_PHONE = re.compile(r"\+?\d(?:[ -]?\d){9,14}")
+_PII = re.compile(
+    r"(?P<email>[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})"
+    r"|(?P<card>\b(?:\d[ -]?){12,18}\d\b)"
+    r"|(?P<phone>\+?\(?\d(?:[ ()\-]{0,2}\d){9,14})"
+)
+_TEMPLATES = {
+    "email": "person{n}@example.invalid",
+    "card": "4000-0000-0000-{n:04d}",
+    "phone": "5550100{n:04d}",
+}
 
 
 class Scrubber:
@@ -32,8 +40,9 @@ class Scrubber:
             self._fakes[mkey] = template.format(n=self._counts[category])
         return self._fakes[mkey]
 
-    def _sub(self, text: str, pattern: re.Pattern, category: str, template: str) -> str:
-        return pattern.sub(lambda m: self._fake(category, m.group(0), template), text)
+    def _replace(self, m: re.Match) -> str:
+        category = m.lastgroup
+        return self._fake(category, m.group(0), _TEMPLATES[category])
 
     def _sub_names(self, text: str) -> str:
         for name in self._names:
@@ -42,10 +51,7 @@ class Scrubber:
         return text
 
     def text(self, value: str) -> str:
-        value = self._sub(value, _EMAIL, "email", "person{n}@example.invalid")
-        value = self._sub(value, _CARD, "card", "4000-0000-0000-{n:04d}")
-        value = self._sub(value, _PHONE, "phone", "5550100{n:04d}")
-        return self._sub_names(value)
+        return self._sub_names(_PII.sub(self._replace, value))
 
     def scrub(self, value):
         """Return a scrubbed copy of any JSON-like value (str / dict / list / scalar)."""

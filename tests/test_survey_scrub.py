@@ -44,3 +44,22 @@ def test_scrub_nested_structure():
     assert scrubbed["n"] == 3 and scrubbed["items"][1] == 7
     assert "@example.invalid" in scrubbed["to"]
     assert "@example.invalid" in scrubbed["items"][0]
+
+
+def test_parenthesized_phone_is_scrubbed():
+    # Attack (stage-7 survey PII): a common US format `(415) 555-0132` leaked entirely because the
+    # phone pattern required the number to start with a digit and forbade `)` separators.
+    s = Scrubber()
+    out = s.text("call the customer at (415) 555-0132 today")
+    assert "(415) 555-0132" not in out
+    assert "415" not in out
+
+
+def test_card_fake_is_not_rescrubbed_into_a_phone():
+    # Attack: sequential passes let the phone pass re-match the card replacement
+    # `4000-0000-0000-0001`, so scrubbed cards came out phone-shaped. A single pass keeps the
+    # card fake intact.
+    s = Scrubber()
+    out = s.text("card 4111 1111 1111 1111")
+    assert "4111" not in out
+    assert "4000-0000-0000-0001" in out
