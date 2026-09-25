@@ -19,16 +19,27 @@ from __future__ import annotations
 
 import json
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import store
 from ..harbor import run as run_mod
 from ..interview import rooms
-from ..interview.agent import AgentTurn
 from . import changes, regrade, trials
 
 MAX_STEPS = 6
+
+
+@dataclass
+class AgentTurn:
+    """What the review agent says on one turn, plus any drafted / committed criterion changes."""
+
+    say: str
+    draft: list[dict] = field(default_factory=list)
+    commit: list[dict] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {"say": self.say, "draft": self.draft, "commit": self.commit}
 
 TOOLS = [
     {"type": "function", "function": {

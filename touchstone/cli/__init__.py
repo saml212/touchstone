@@ -1,4 +1,4 @@
-"""Touchstone CLI: init, doctor, demo, serve, interview, bench, jobs. Errors exit non-zero."""
+"""Touchstone CLI: init, doctor, demo, serve, review, bench, jobs. Errors exit non-zero."""
 
 from __future__ import annotations
 
@@ -191,4 +191,4 @@ def serve(
 
 # Register the remaining top-level commands. Imported last so `app` and the shared helpers above
 # already exist when each module binds onto them.
-from . import bench, interview, review, survey, train  # noqa: E402,F401
+from . import bench, review, survey, train  # noqa: E402,F401
