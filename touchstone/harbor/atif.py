@@ -7,8 +7,9 @@ Matched against Harbor's pydantic models at
 Mapping: the first llm span's `input.messages` become the leading system/user/agent steps; each
 llm span becomes an agent step (assistant text + tool_calls + token metrics); tool spans between
 one llm span and the next become that step's `observation.results`, with `source_call_id` matched
-to a tool_call id (by id first, then by tool name). Multi-turn user messages injected mid-episode
-are not reconstructed (single simplification; noted in tests).
+to a tool_call id (by id first, then by tool name). A user turn injected mid-conversation is
+recorded as a `kind="user"` span and becomes its own user step, so a simulated-user run's every
+turn shows up in the trajectory.
 """
 
 from __future__ import annotations
@@ -182,18 +183,44 @@ def _leading_steps(first_span: store.Span) -> list[dict]:
     return steps
 
 
-def _body_steps(spans: list[store.Span], llm_spans: list[store.Span], model: str | None) -> list:
-    """Each model span becomes an agent step; tool spans in between become its observation."""
+def _user_step(span: store.Span) -> dict:
+    """A mid-conversation user turn (a kind="user" span the run loop records) -> a user step."""
+    return {"step_id": 0, "source": "user", "message": (span.input or {}).get("content", "")}
+
+
+def _tools_until_next_model(spans: list[store.Span], start: int) -> list[store.Span]:
+    out: list[store.Span] = []
+    for s in spans[start + 1:]:
+        if s.kind == "model":
+            break
+        if s.kind == "tool":
+            out.append(s)
+    return out
+
+
+def _agent_step_with_obs(spans: list[store.Span], i: int, model: str | None) -> dict:
+    step = _agent_step(0, spans[i], model)
+    obs = _observation(_tools_until_next_model(spans, i), step)
+    if obs:
+        step["observation"] = obs
+    return step
+
+
+def _walk_steps(spans: list[store.Span], model: str | None) -> list[dict]:
+    """Agent steps per model span (with tool observations), interleaved with a user step for every
+    user turn injected after the conversation opened. The first model span's message history (system
+    + the opening user turn) is reconstructed as the leading steps. With no user spans this is
+    identical to the old leading+body assembly, so single-turn trajectories are unchanged."""
     steps: list[dict] = []
-    for i, span in enumerate(llm_spans):
-        step = _agent_step(0, span, model)
-        lo = _span_index(spans, span)
-        hi = _span_index(spans, llm_spans[i + 1]) if i + 1 < len(llm_spans) else len(spans)
-        between = [s for s in spans[lo + 1 : hi] if s.kind == "tool"]
-        obs = _observation(between, step)
-        if obs:
-            step["observation"] = obs
-        steps.append(step)
+    seen_model = False
+    for i, span in enumerate(spans):
+        if span.kind == "user" and seen_model:
+            steps.append(_user_step(span))
+        elif span.kind == "model":
+            if not seen_model:
+                steps += _leading_steps(span)
+                seen_model = True
+            steps.append(_agent_step_with_obs(spans, i, model))
     return steps
 
 
@@ -227,8 +254,7 @@ def to_atif(conn, episode_id: str) -> dict:
     llm_spans = [s for s in spans if s.kind == "model"]
     model = llm_spans[0].model if llm_spans else None
 
-    steps: list[dict] = _leading_steps(llm_spans[0]) if llm_spans else []
-    steps += _body_steps(spans, llm_spans, model)
+    steps: list[dict] = _walk_steps(spans, model)
     for n, step in enumerate(steps, start=1):  # ATIF requires step_ids 1..N
         step["step_id"] = n
 
@@ -241,13 +267,6 @@ def to_atif(conn, episode_id: str) -> dict:
         "final_metrics": _final_metrics(llm_spans, len(steps)),
         "notes": _episode_notes(ep),
     }
-
-
-def _span_index(spans: list[store.Span], span: store.Span) -> int:
-    for i, s in enumerate(spans):
-        if s.id == span.id:
-            return i
-    return -1
 
 
 def _validate_message(message) -> None:

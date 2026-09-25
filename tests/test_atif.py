@@ -83,6 +83,30 @@ def test_atif_empty_episode_has_fallback_step(traced):
     assert len(traj["steps"]) == 1
 
 
+def test_atif_interleaves_mid_conversation_user_turns(conn):
+    from touchstone import store
+    ep = store.insert_episode(conn, store.Episode(id="mt", name="mt"))
+    store.insert_span(conn, store.Span(episode_id=ep.id, kind="user", name="user",
+                                       input={"content": "book a flight"}, output={}))
+    store.insert_span(conn, store.Span(
+        episode_id=ep.id, kind="model", name="gpt",
+        input={"messages": [{"role": "system", "content": "assistant"},
+                            {"role": "user", "content": "book a flight"}]},
+        output={"message": {"content": "Sure, who is flying?", "tool_calls": []}}))
+    # a second user turn injected mid-conversation, then the agent acts
+    store.insert_span(conn, store.Span(episode_id=ep.id, kind="user", name="user",
+                                       input={"content": "Ben Cole, aisle seat"}, output={}))
+    store.insert_span(conn, store.Span(
+        episode_id=ep.id, kind="model", name="gpt",
+        input={"messages": [{"role": "user", "content": "Ben Cole, aisle seat"}]},
+        output={"message": {"content": "Booked.", "tool_calls": []}}))
+    traj = atif.to_atif(conn, ep.id)
+    atif.validate(traj)
+    sources = [s["source"] for s in traj["steps"]]
+    assert sources == ["system", "user", "agent", "user", "agent"]
+    assert traj["steps"][3]["message"] == "Ben Cole, aisle seat"
+
+
 def test_atif_matches_harbor_models_when_available(traced):
     harbor = __import__("importlib").util.find_spec("harbor")
     if harbor is None:
