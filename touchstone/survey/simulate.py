@@ -16,6 +16,7 @@ from pathlib import Path
 from ..config import Settings
 from ..llm.prompt import extract_json
 from . import fidelity
+from .minted_ids import minted_ids_text
 from .provider import SurveyProvider
 from .recordings import ToolEvent
 from .scrub import Scrubber
@@ -46,12 +47,14 @@ app.py requirements:
 - `GET /__health` returns 200 with a JSON body.
 - Use only the standard library, fastapi, uvicorn, and pydantic.
 
-seed.json is the initial state derived from the recorded calls. When one recorded call MINTS an id
-(e.g. save returns passenger_id=PAX-9) that a LATER recorded call references (book is called with
-passenger_id=PAX-9), the simulator must make that id resolvable on replay: derive a minted id
-deterministically from the request (so the same input yields the same id the recording saw), or seed
-the referenced entity, so replaying the dependent call in isolation still finds it. README.md
-explains what this simulates, which routes, and how it was derived.
+seed.json is the initial state derived from the recorded calls. It MUST carry every id that appears
+in the recorded tool RESULTS below, because a later call may reference one. When one recorded call
+MINTS an id (e.g. save returns passenger_id=PAX-9) that a LATER recorded call references (book is
+called with passenger_id=PAX-9), the simulator must make that id resolvable on replay: derive the
+minted id deterministically from the request (so the same input yields the same id the recording
+saw) AND seed the referenced entity, so replaying the dependent call in isolation still finds it —
+see the "Cross-call ids" section for the exact ids and inputs. README.md explains what this
+simulates, which routes, and how it was derived.
 
 ## Service: {name}  (kind={kind}, base_url_env={env})
 ## Routes observed
@@ -68,6 +71,7 @@ explains what this simulates, which routes, and how it was derived.
 ## Recorded calls (scrubbed; tool, arguments, and the tool's PARSED return — reconstruct the raw
 ## response body from the tool source above)
 {examples}
+{minted_ids}
 {hint}
 Return only the JSON object."""
 
@@ -196,7 +200,7 @@ def _prompt(repo: Path, service: dict, tools: list[dict], examples: list[dict],
         tool_source=source, keys=_keys_text(source),
         service_source=_service_source(repo, service),
         docs=_openapi(repo), examples=json.dumps(examples, indent=2, ensure_ascii=False),
-        hint=hint)
+        minted_ids=minted_ids_text(examples), hint=hint)
 
 
 # ---- generate + write ------------------------------------------------------
@@ -288,6 +292,8 @@ def generate_simulator(repo: Path, provider: SurveyProvider, service: dict, tool
     sim_dir = sim_root / service["name"]
     ctx = _replay_ctx(service, tools)
     names = {t["name"] for t in tools}
+    # `events` is in recorded order (tool_events), so a create-then-use pair replays in that order
+    # within its episode and the minted id is resolvable when the dependent call runs.
     calls = [e for e in events if e.tool in names]
     if (sim_dir / "app.py").exists() and not force:
         return _measure(sim_dir, repo, calls, ctx, settings, scrub)

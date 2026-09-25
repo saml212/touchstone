@@ -347,3 +347,131 @@ def test_replay_sets_auth_env_placeholder_from_repo(tmp_path, monkeypatch):
                                                                        "arguments": {"x": 1}}]})
     assert out[0]["got"] == {"key": "touchstone-placeholder", "x": 1}
     assert os.environ.get("SVC_API_KEY") == "touchstone-placeholder"
+
+
+# ---- cross-call minted ids: a create returns an id a later call uses ----------------------------
+
+BOOKING_TOOL = '''\
+import os
+
+import httpx
+
+BASE = os.environ.get("BOOK_URL", "http://127.0.0.1:9")
+_client = httpx.Client(base_url=BASE, timeout=5)
+
+
+def save_passenger(name: str) -> dict:
+    return _client.post("/passengers", json={"name": name}).json()
+
+
+def book_flight(passenger_id: str, flight: str) -> dict:
+    r = _client.post("/bookings", json={"passenger_id": passenger_id, "flight": flight})
+    if r.status_code == 404:
+        return {"error": "Passenger not found"}
+    return r.json()
+'''
+
+BOOKING_SIM = '''\
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+app = FastAPI()
+HERE = Path(__file__).parent
+DB = HERE / "state.db"
+
+
+def load():
+    conn = sqlite3.connect(DB)
+    conn.execute("DROP TABLE IF EXISTS passengers")
+    conn.execute("CREATE TABLE passengers (passenger_id TEXT PRIMARY KEY, name TEXT)")
+    seed = json.loads((HERE / "seed.json").read_text())
+    for p in seed.get("passengers", []):
+        conn.execute("INSERT OR REPLACE INTO passengers VALUES (?, ?)",
+                     (p["passenger_id"], p["name"]))
+    conn.commit()
+    conn.close()
+
+
+class Passenger(BaseModel):
+    name: str
+
+
+class Booking(BaseModel):
+    passenger_id: str
+    flight: str
+
+
+@app.get("/__health")
+def health():
+    return {"ok": True}
+
+
+@app.post("/__reset")
+def reset():
+    load()
+    return {"ok": True}
+
+
+@app.post("/passengers")
+def create(p: Passenger):
+    conn = sqlite3.connect(DB)
+    pid = "PAX-NEW"  # a freshly minted id, NOT the recorded one
+    conn.execute("INSERT OR REPLACE INTO passengers VALUES (?, ?)", (pid, p.name))
+    conn.commit()
+    conn.close()
+    return {"passenger_id": pid, "name": p.name}
+
+
+@app.post("/bookings")
+def book(b: Booking):
+    conn = sqlite3.connect(DB)
+    row = conn.execute("SELECT name FROM passengers WHERE passenger_id = ?",
+                       (b.passenger_id,)).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Passenger not found")
+    return {"booking_id": "BK-NEW", "passenger_id": b.passenger_id, "flight": b.flight}
+
+
+if __name__ == "__main__":
+    load()
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=int(sys.argv[1]))
+'''
+
+BOOKING_SERVICE = {
+    "name": "booking", "kind": "http", "base_url_env": "BOOK_URL", "base_url_default": None,
+    "calls": [{"method": "POST", "path_template": "/passengers", "from_tool": "save_passenger"},
+              {"method": "POST", "path_template": "/bookings", "from_tool": "book_flight"}],
+}
+BOOKING_TOOLS = [
+    {"name": "save_passenger", "import_path": "customer_tools:save_passenger",
+     "file": "customer_tools.py", "line": 1, "calls": ["booking"]},
+    {"name": "book_flight", "import_path": "customer_tools:book_flight",
+     "file": "customer_tools.py", "line": 1, "calls": ["booking"]},
+]
+
+
+def test_two_step_create_then_use_reproduces_via_seeded_id(tmp_path):
+    # save_passenger mints PAX-9 in the recording; book_flight later passes PAX-9. The simulator
+    # mints its OWN id on save, so book only reproduces because seed.json carries the recorded id
+    # (the cross-call-id fix) AND the calls replay in recorded order within the episode.
+    (tmp_path / "customer_tools.py").write_text(BOOKING_TOOL, encoding="utf-8")
+    events = [
+        ToolEvent("save_passenger", {"name": "Ada"},
+                  {"passenger_id": "PAX-9", "name": "Ada"}, "e1"),
+        ToolEvent("book_flight", {"passenger_id": "PAX-9", "flight": "AA1"},
+                  {"booking_id": "BK-1", "passenger_id": "PAX-9", "flight": "AA1"}, "e1"),
+    ]
+    answer = json.dumps({"app.py": BOOKING_SIM,
+                         "seed.json": {"passengers": [{"passenger_id": "PAX-9", "name": "Ada"}]},
+                         "README.md": "booking simulator"})
+    result = generate_simulator(tmp_path, ScriptedSurveyProvider([answer]), BOOKING_SERVICE,
+                                BOOKING_TOOLS, events, tmp_path / "touchstone" / "simulators",
+                                Scrubber(), _settings())
+    assert result["score"] == 1.0 and result["reproduced"] == 2 and result["failures"] == []
