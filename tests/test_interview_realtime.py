@@ -91,24 +91,39 @@ async def test_session_update_carries_pcm16_and_the_topic(tmp_path):
     assert "orders" in session["instructions"]  # the room topic is in the prompt
 
 
-async def test_transcripts_become_room_messages(tmp_path):
+async def test_user_transcription_is_routed_to_the_review_agent_and_the_reply_is_voiced(tmp_path):
+    # Attack (stage-7 review): the realtime voice path must drive the SAME ReviewAgent as text, not
+    # the old interview agent. A completed user transcription is fed to the injected `respond`
+    # (the ReviewAgent turn) attributed to the ptt speaker; its reply is then spoken by the session.
     settings, room_id = _project(tmp_path)
-    script = [
-        {"type": "conversation.item.input_audio_transcription.completed",
-         "transcript": "it must mention the order id"},
-        {"type": "response.output_audio_transcript.done",
-         "transcript": "So, the reply must mention it?"},
-    ]
+    seen = []
+
+    async def respond(rid, speaker, text):
+        seen.append((rid, speaker, text))
+        return "The verifier scored that trial 1.0."
+
+    script = [{"type": "conversation.item.input_audio_transcription.completed",
+               "transcript": "did that trial pass?"}]
     async with FakeRealtime(script) as fake:
-        bridge = RealtimeBridge(settings, room_id, Hub(), url=fake.url)
+        bridge = RealtimeBridge(settings, room_id, Hub(), url=fake.url, respond=respond)
         await bridge.start()
         await bridge.ptt("down", "sam")  # attribute the user turn to sam
         await asyncio.wait_for(bridge._task, timeout=5)
-    conn = store.connect(settings.db_path)
-    msgs = [(m.speaker, m.role, m.text) for m in store.list_room_messages(conn, room_id)]
-    conn.close()
-    assert ("sam", "user", "it must mention the order id") in msgs
-    assert ("Interviewer", "assistant", "So, the reply must mention it?") in msgs
+    assert seen == [(room_id, "sam", "did that trial pass?")]  # routed to the ReviewAgent turn
+    # the reply is sent to the session to be voiced (create item + response.create), verbatim
+    item = next(r for r in fake.received if r.get("type") == "conversation.item.create")
+    assert item["item"]["content"][0]["text"] == "The verifier scored that trial 1.0."
+    assert any(r.get("type") == "response.create" for r in fake.received)
+
+
+async def test_session_disables_model_autoresponse_so_reviewagent_is_the_only_voice(tmp_path):
+    # create_response off: the Realtime model transcribes but never answers on its own — every
+    # reply comes from the ReviewAgent (via respond), so voice cannot contradict the text room.
+    settings, room_id = _project(tmp_path)
+    async with FakeRealtime([]) as fake:
+        await _run_bridge(settings, room_id, Hub(), fake)
+    td = fake.received[0]["session"]["audio"]["input"]["turn_detection"]
+    assert td == {"type": "server_vad", "create_response": False}
 
 
 async def test_audio_deltas_broadcast_to_two_clients(tmp_path):

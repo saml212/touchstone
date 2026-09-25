@@ -1,10 +1,12 @@
-"""Realtime voice bridge: one OpenAI Realtime speech-to-speech session per interview room.
+"""Realtime voice bridge: one OpenAI Realtime session per review room, as an STT+TTS front-end.
 
 The server holds the key and opens a single WebSocket to OpenAI per open room. Browsers stream
-push-to-talk PCM16 over the room WebSocket; the bridge appends it to the session, dispatches the
-model's tool calls (`draft_check`/`commit_check`/`show_task`/`next_task`) through the same
-`Interviewer` the text mode uses, and fans the agent's audio + transcripts back out over the room
-`Hub`. The transcript and the committed checks land in the store, so text stays the source of truth.
+push-to-talk PCM16 over the room WebSocket; the bridge appends it to the session. The Realtime model
+only transcribes (`create_response` is off) — it never answers on its own. Each completed user
+transcription is fed to the SAME `ReviewAgent` the text and local-speech paths use, via the injected
+`respond` callback; that runs the review tools (record/propose/apply-change → regrade), posts the
+user + agent messages, and publishes room state. The bridge then asks the session to voice the
+ReviewAgent's reply. So the review agent is always the source of truth; voice is just the surface.
 
 Any OpenAI error posts one room message and falls back to local mode for that room — never a 500.
 A dropped socket reconnects once; a second drop falls back too.
@@ -15,25 +17,30 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from collections.abc import Awaitable, Callable
 
 import websockets
 
 from .. import store
 from ..config import Settings
 from ..llm.keychain import secret
+from ..review.agent import ReviewAgent
 from . import rooms
-from .agent import Interviewer
 from .rooms import Event, Hub
 
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 
+# respond(room_id, speaker, text) -> the ReviewAgent's reply text (or None). Runs the same agent
+# turn the text path runs (tools + hub events); injected by the server so voice == text.
+Respond = Callable[[str, str, str], Awaitable[str | None]]
+
 _REALTIME_GUIDANCE = (
-    "You are Touchstone's voice review agent. Help product people say, in plain words, what good "
-    "behaviour looks like for their AI agent. Ask one concrete question at a time, address people "
-    "by name. Here is what the room is reviewing:\n"
+    "You are the voice of Touchstone's review agent. You transcribe what product people say and "
+    "read back replies you are given, verbatim and naturally. Do not answer on your own or invent "
+    "review verdicts — the review agent decides. Here is what the room is reviewing:\n"
 )
 
-# v3 stage 1 ships no realtime tools; the verifier-correction tool surface is rewritten in stage 4.
+# No realtime tool surface: the review tools run inside ReviewAgent on the text path, not here.
 TOOLS: list[dict] = []
 
 
@@ -48,11 +55,13 @@ class RealtimeBridge:
     """Owns one OpenAI Realtime WebSocket for a room. All methods are safe after `close`."""
 
     def __init__(self, settings: Settings, room_id: str, hub: Hub, *,
-                 url: str | None = None, server_vad: bool = True) -> None:
+                 url: str | None = None, server_vad: bool = True,
+                 respond: Respond | None = None) -> None:
         self.settings = settings
         self.room_id = room_id
         self.hub = hub
         self.server_vad = server_vad
+        self._respond = respond  # runs the ReviewAgent turn for a transcribed user message
         self._url = f"{url or OPENAI_REALTIME_URL}?model={settings.realtime_model}"
         self._ws: websockets.ClientConnection | None = None
         self._task: asyncio.Task | None = None
@@ -150,12 +159,29 @@ class RealtimeBridge:
         kind = event.get("type")
         if kind == "response.output_audio.delta":
             self.hub.publish(self.room_id, Event("audio", {"b64": event.get("delta", "")}))
-        elif kind == "response.output_audio_transcript.done":
-            self._post("Interviewer", "assistant", event.get("transcript", ""))
         elif kind == "conversation.item.input_audio_transcription.completed":
-            self._post(self._ptt_speaker, "user", event.get("transcript", ""))
+            await self._on_user_text(self._ptt_speaker, event.get("transcript", ""))
         elif kind == "error":
             await self._fail("The voice service returned an error.")
+
+    async def _on_user_text(self, speaker: str, text: str) -> None:
+        """A finished user transcription is a user turn: run it through the ReviewAgent (posts the
+        user + agent messages, runs the review tools, publishes state), then voice the reply."""
+        if not text.strip() or self._respond is None:
+            return
+        reply = await self._respond(self.room_id, speaker, text.strip())
+        if reply:
+            await self._speak(reply)
+
+    async def _speak(self, text: str) -> None:
+        """Have the Realtime session read the ReviewAgent's reply aloud (audio only; the reply text
+        is already posted to the room by `respond`)."""
+        await self._send({"type": "conversation.item.create", "item": {
+            "type": "message", "role": "assistant",
+            "content": [{"type": "input_text", "text": text}]}})
+        await self._send({"type": "response.create", "response": {
+            "instructions": "Read the review agent's reply above aloud, verbatim.",
+            "output_modalities": ["audio"]}})
 
     # -- helpers -------------------------------------------------------------
 
@@ -185,15 +211,18 @@ class RealtimeBridge:
         conn = store.connect(self.settings.db_path)
         try:
             room = store.get_room(conn, self.room_id)
-            summary = Interviewer(None, conn, room, self.settings.root).open_statement()
+            summary = ReviewAgent(None, conn, room, self.settings).open_statement()
         finally:
             conn.close()
         return _REALTIME_GUIDANCE + summary
 
     def _session_update(self) -> dict:
         pcm = {"type": "audio/pcm", "rate": 24000}
+        # create_response off: server VAD segments + transcribes the user, but the model never
+        # auto-answers — the ReviewAgent produces every reply and we voice it via `_speak`.
+        vad = {"type": "server_vad", "create_response": False} if self.server_vad else None
         audio_in = {"format": pcm, "transcription": {"model": "gpt-4o-mini-transcribe"},
-                    "turn_detection": {"type": "server_vad"} if self.server_vad else None}
+                    "turn_detection": vad}
         return {"type": "session.update", "session": {
             "type": "realtime",
             "instructions": self._instructions(),
@@ -208,11 +237,12 @@ class Bridges:
     """Per-room `RealtimeBridge` registry: lazy create on first audio, idle-close when empty."""
 
     def __init__(self, settings: Settings, hub: Hub, *, idle_seconds: float = 60.0,
-                 sleep=asyncio.sleep) -> None:
+                 sleep=asyncio.sleep, respond: Respond | None = None) -> None:
         self.settings = settings
         self.hub = hub
         self.idle_seconds = idle_seconds
         self._sleep = sleep
+        self._respond = respond  # the ReviewAgent turn, injected by the server
         self._bridges: dict[str, RealtimeBridge] = {}
         self._idle: dict[str, asyncio.Task] = {}
         self._failed: set[str] = set()
@@ -226,7 +256,7 @@ class Bridges:
             await self.close(room_id)
             return None
         if bridge is None:
-            bridge = RealtimeBridge(self.settings, room_id, self.hub)
+            bridge = RealtimeBridge(self.settings, room_id, self.hub, respond=self._respond)
             self._bridges[room_id] = bridge
             await bridge.start()
         self._cancel_idle(room_id)

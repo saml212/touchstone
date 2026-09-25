@@ -193,6 +193,12 @@ async def _route_client(bridges: Bridges, room_id: str, text: str) -> None:
 # ---- shared request handling ----------------------------------------------
 
 
+async def ingest_turn(app, room_id: str, speaker: str, text: str) -> dict:
+    """Public entry for a participant turn (text, local speech, or realtime voice): all three go
+    through the same ReviewAgent path so voice is never a second, weaker agent."""
+    return await _ingest(app, room_id, speaker, text)
+
+
 async def _ingest(app, room_id: str, speaker: str, text: str) -> dict:
     """Post a participant message, run the agent in a thread, and broadcast every event."""
     settings: Settings = app.state.settings

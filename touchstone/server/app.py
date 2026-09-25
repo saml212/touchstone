@@ -19,6 +19,7 @@ from ..interview.realtime import Bridges
 from ..interview.rooms import Hub
 from ..interview.speech import Speech
 from .routes import ROUTERS
+from .routes.rooms import ingest_turn
 
 STATIC = Path(__file__).parent / "static"
 _NO_STORE = {"Cache-Control": "no-store"}
@@ -48,8 +49,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.hub = Hub()
     app.state.speech = Speech.from_settings(settings)
-    app.state.bridges = Bridges(settings, app.state.hub)
     app.state.provider_factory = _default_provider_factory(settings)
+
+    async def _respond(room_id: str, speaker: str, text: str) -> str | None:
+        """Run a transcribed voice turn through the same ReviewAgent the text path uses, and return
+        the agent's reply for the realtime bridge to voice. A closed/missing room yields None."""
+        try:
+            result = await ingest_turn(app, room_id, speaker, text)
+        except Exception:  # a closed/missing room must not crash the voice bridge
+            return None
+        return (result.get("agent") or {}).get("text")
+
+    app.state.bridges = Bridges(settings, app.state.hub, respond=_respond)
 
     @app.get("/api/health")
     def health() -> dict:
