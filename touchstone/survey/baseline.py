@@ -52,6 +52,23 @@ def _summarize(job_dir: Path, model: str, mode: str) -> dict:
             "rewards": jobs.mean_rewards(job), "passed": passed, "failed": failed}
 
 
+def _reusable(existing: Path, out: Path, force: bool) -> dict | None:
+    """The existing baseline when it already ran every current gated task; else None (re-run). A
+    baseline that predates newly added tasks (its set != the current gated set) is not reused."""
+    if force or not existing.exists():
+        return None
+    data = json.loads(existing.read_text(encoding="utf-8"))
+    return data if not (_current_tasks(out) - set(data.get("pass_rates", {}))) else None
+
+
+def _baseline_extra(cfg: dict, model: str, out: Path, settings) -> list[str]:
+    extra = ["--ak", f"mode={cfg['mode']}"]
+    if run_mod.dataset_is_multi_turn(out):  # conversational tasks need Harbor's simulated user
+        extra += run_mod.simulated_user_args(settings.survey_user_agent,
+                                             settings.survey_user_model or model)
+    return extra
+
+
 def run_baseline(repo, env_result: dict, settings, force: bool = False,
                  skip: bool = False) -> dict | None:
     """Run the agent under test over the gated tasks and write baseline.json. None when skipped or
@@ -61,19 +78,14 @@ def run_baseline(repo, env_result: dict, settings, force: bool = False,
     if skip or cfg is None or not cfg["model_default"]:
         return None
     existing = out / "baseline.json"
-    if existing.exists() and not force:
-        data = json.loads(existing.read_text(encoding="utf-8"))
-        if not (_current_tasks(out) - set(data.get("pass_rates", {}))):
-            return data  # the baseline already ran every current task; reuse it
-        # tasks were added since this baseline (its set != the current gated set) — re-run below.
+    reused = _reusable(existing, out, force)
+    if reused is not None:
+        return reused
     model = _model_ref(cfg)
-    extra = ["--ak", f"mode={cfg['mode']}"]
-    if run_mod.dataset_is_multi_turn(out):  # conversational tasks need Harbor's simulated user
-        extra += run_mod.simulated_user_args(settings.survey_user_agent,
-                                             settings.survey_user_model or model)
     try:
         job_dir = run_mod.run(out, AGENT_PATH, model=model, jobs_dir=out / "jobs",
-                              extra_args=extra, settings=settings)
+                              extra_args=_baseline_extra(cfg, model, out, settings),
+                              settings=settings)
     except (subprocess.SubprocessError, OSError, RuntimeError) as exc:
         return {"error": str(exc)[:2000], "model": model, "mode": cfg["mode"]}
     data = _summarize(job_dir, model, cfg["mode"])

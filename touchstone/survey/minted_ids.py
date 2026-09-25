@@ -13,16 +13,23 @@ from __future__ import annotations
 import json
 
 
+def _union_leaves(values) -> set:
+    out: set = set()
+    for value in values:
+        out |= scalar_leaves(value)
+    return out
+
+
 def scalar_leaves(obj) -> set:
     """Hashable str/int leaves of a nested JSON value — the id candidates (bools excluded)."""
     if isinstance(obj, dict):
-        return set().union(*(scalar_leaves(v) for v in obj.values())) if obj else set()
+        return _union_leaves(obj.values())
     if isinstance(obj, (list, tuple)):
-        return set().union(*(scalar_leaves(v) for v in obj)) if obj else set()
+        return _union_leaves(obj)
     if isinstance(obj, bool):
         return set()
-    if isinstance(obj, str) and obj:
-        return {obj}
+    if isinstance(obj, str):
+        return {obj} if obj else set()
     if isinstance(obj, int):
         return {obj}
     return set()
