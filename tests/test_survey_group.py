@@ -136,3 +136,23 @@ def test_variant_episodes_skips_unresolved():
     events_by_ep = {"e1": [ToolEvent("order_status", {"order_id": "B1"}, {}, "e1")]}
     picked = variant_episodes({"episodes": ["e1"]}, events_by_ep, resolved=set())
     assert picked == []
+
+
+def test_group_slug_is_sanitized_to_a_safe_path_token(tmp_path, conn):
+    # Attack (stage-7 survey): the slug becomes a task *directory* name. A garbled provider answer
+    # with an absolute path, `..` traversal, whitespace, or unicode must not travel verbatim into a
+    # filesystem path — it is folded to a documented kebab-case token, distinct ones dedup.
+    _seed(conn)
+    out = tmp_path / "touchstone"
+    hostile = json.dumps({"groups": [
+        {"label": "escape", "slug": "/etc/passwd", "episodes": ["e1"]},
+        {"label": "traverse", "slug": "../../escape", "episodes": ["e2"]},
+        {"label": "unicode spaces", "slug": "café refund", "episodes": ["e3"]},
+    ]})
+    provider = ScriptedSurveyProvider([hostile])
+    data = group_episodes(conn, tool_events(conn), provider, tmp_path, out, Scrubber())
+    slugs = [g["slug"] for g in data["groups"]]
+    assert slugs == ["cafe-refund", "escape", "etc-passwd"]
+    for slug in slugs:
+        assert "/" not in slug and ".." not in slug and " " not in slug
+        assert slug == slug.lower() and slug.strip("-") == slug

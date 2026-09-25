@@ -12,6 +12,8 @@ by tool-call count, one per distinct seed signature, capped at three (one otherw
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
@@ -135,12 +137,23 @@ def _dedup_slugs(groups: list[dict]) -> None:
             group["slug"] = f"{base}-{seen[base]}"
 
 
+def _slugify(raw: str) -> str:
+    """A safe, documented kebab-case token from a provider-supplied slug. The slug becomes a task
+    *directory name*, so an LLM answer like `/etc/passwd`, `../../escape`, `issue a refund`, or a
+    unicode label must never travel verbatim into a path. NFKD-fold to ASCII, keep [a-z0-9],
+    collapse the rest to single hyphens, strip the ends."""
+    folded = unicodedata.normalize("NFKD", raw or "").encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "-", folded.lower()).strip("-")
+
+
 def _clean_groups(groups: list[dict], known: set[str]) -> list[dict]:
     out = []
-    for group in sorted(groups, key=lambda g: g.get("slug", "")):
+    for group in groups:
         eps = [e for e in group.get("episodes", []) if e in known]
         if eps:
-            out.append({"label": group["label"], "slug": group["slug"], "episodes": sorted(eps)})
+            slug = _slugify(group.get("slug", "")) or _slugify(group.get("label", "")) or "group"
+            out.append({"label": group["label"], "slug": slug, "episodes": sorted(eps)})
+    out.sort(key=lambda g: (g["slug"], g["episodes"]))
     _dedup_slugs(out)
     return out
 
