@@ -22,7 +22,7 @@ from .envs import auth_env_names, placeholder_auth
 from .package_spans import first_user_turn
 from .provider import SurveyProvider
 from .simulate import crossing_services
-from .subproc import cli_src_dir
+from .subproc import cli_import_dir
 from .writes import atomic_write
 
 _ENTRY_TIMEOUT = 180.0
@@ -106,7 +106,7 @@ def _run_entry(repo: Path, entry_path: Path, env_extra: dict, message: str, sett
     env.pop("TOUCHSTONE_MODEL", None)  # the adapter check runs on the code's own default model
     # CLI's touchstone first (running code, not the customer's pin), then the repo (its modules).
     env["PYTHONPATH"] = os.pathsep.join(
-        [cli_src_dir(), str(repo), env.get("PYTHONPATH", "")]).strip(os.pathsep)
+        [cli_import_dir(), str(repo), env.get("PYTHONPATH", "")]).strip(os.pathsep)
     return subprocess.run(_entry_cmd(repo, entry_path, settings), cwd=str(repo), input=message,
                           capture_output=True, text=True, timeout=_ENTRY_TIMEOUT, env=env)
 
