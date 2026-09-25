@@ -67,6 +67,20 @@ def test_derive_returns_required_where_literals():
     assert "w1" in literals and "p1@ex.invalid" in literals
 
 
+def test_added_row_without_identifying_token_emits_no_unscoped_count():
+    # An added row whose columns are all free text (no value the agent supplied) has no column to
+    # scope a WHERE. An unscoped `SELECT COUNT(*) FROM emails` would be a table-total coupled to the
+    # seed — so no criterion is emitted (a scoped check already covers the real effect).
+    effect = {
+        "initial": {"svc": {"emails": {"pk": "id", "rows": [{"id": 7, "body": "old seed mail"}]}}},
+        "final": {"svc": {"emails": {"pk": "id", "rows": [
+            {"id": 7, "body": "old seed mail"}, {"id": 8, "body": "thanks for your order"}]}}},
+    }
+    calls = [ToolEvent("paint", {"widget_id": "w1", "color": "blue"}, {}, "e")]
+    state, _, _ = derive_criteria(effect, episode_services(MAP, calls), MAP, calls)
+    assert not any("COUNT(*) FROM emails" in line for line in _calls(state))  # no table-total
+
+
 def test_read_only_tool_never_required():
     # get is read-only + no state change -> never a tool_used criterion; only avoids mutating
     calls = [ToolEvent("get", {"widget_id": "w1"}, {}, "e")]

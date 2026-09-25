@@ -66,10 +66,6 @@ def count_rows(table: str, conds: list[tuple], n: int) -> str:
     return f"exactly {n} {table} where {where}" if where else f"{table} has {n} rows"
 
 
-def total_rows(table: str, n: int) -> str:
-    return f"{table} has {n} rows"
-
-
 def tool_used(name: str) -> str:
     return f"the agent used {name}"
 

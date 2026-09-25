@@ -125,15 +125,17 @@ def _added_rows(table: str, before: dict, after: dict, db_rel: str, arg_values: 
     if not added:
         return []
     pairs = _identifying_pairs(added[0], pk, arg_values)
-    if pairs:
-        literals.update(str(val) for _, val in pairs)  # values the agent must supply
-        where = " AND ".join(f"{col}={_sql_literal(val)}" for col, val in pairs)
-        query = f"SELECT COUNT(*) FROM {table} WHERE {where}"
-        call = f"rk.sqlite_query_equals({db_rel!r}, {query!r}, {len(added)})"
-        return [(call, descriptions.count_rows(table, pairs, len(added)))]
-    total = len(after.get("rows", []))
-    call = f"rk.sqlite_query_equals({db_rel!r}, {f'SELECT COUNT(*) FROM {table}'!r}, {total})"
-    return [(call, descriptions.total_rows(table, total))]
+    if not pairs:
+        # No identifying column to scope the WHERE. An unscoped `SELECT COUNT(*) FROM <table>` would
+        # be a table-total: coupled to the seed (seed rows + this episode's) and duplicating the
+        # scoped check the same effect already produced (e.g. "exactly one email to <addr>"). Drop
+        # it rather than emit a brittle total.
+        return []
+    literals.update(str(val) for _, val in pairs)  # values the agent must supply
+    where = " AND ".join(f"{col}={_sql_literal(val)}" for col, val in pairs)
+    query = f"SELECT COUNT(*) FROM {table} WHERE {where}"
+    call = f"rk.sqlite_query_equals({db_rel!r}, {query!r}, {len(added)})"
+    return [(call, descriptions.count_rows(table, pairs, len(added)))]
 
 
 def _state_criteria(effect: dict, svc: str, arg_values: set,
