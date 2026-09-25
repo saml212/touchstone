@@ -28,9 +28,17 @@ from . import atif, conversation, keys
 try:  # harbor lives in the run's own environment, not in touchstone's
     from harbor.agents.base import BaseAgent
     from harbor.agents.capabilities import AgentCapabilities
+    from harbor.agents.protocols import ACPAgentMixin
+    from harbor.models.bridge import BridgeKind
 except ImportError:  # importable and unit-testable without harbor installed
     BaseAgent = object
     AgentCapabilities = None
+    ACPAgentMixin = object
+    BridgeKind = None
+
+# When harbor is present the agent also mixes in ACPAgentMixin, so a simulated-user trial can launch
+# it as an ACP server (`--bridge acp`); without harbor there is only the plain base.
+_BASES = (BaseAgent,) if ACPAgentMixin is object else (BaseAgent, ACPAgentMixin)
 
 DEFAULT_MAX_STEPS = 8
 # Where the packaged customer app points its own capture inside the sandbox; _run_packaged downloads
@@ -88,11 +96,11 @@ def _provider_spec(model_name: str) -> str:
     return model_name.replace("/", ":", 1) if model_name else model_name
 
 
-class TouchstoneAgent(BaseAgent):
+class TouchstoneAgent(*_BASES):
     """A Harbor custom agent that runs a recorded tool-calling loop against the sandbox."""
 
     if AgentCapabilities is not None:
-        capabilities = AgentCapabilities(atif=True)
+        capabilities = AgentCapabilities(atif=True, bridges=frozenset({BridgeKind.ACP}))
 
     def __init__(self, logs_dir, model_name: str | None = None, mode: str = "replica",
                  **kwargs) -> None:
@@ -110,6 +118,30 @@ class TouchstoneAgent(BaseAgent):
 
     def version(self) -> str:
         return "1"
+
+    # ---- ACP target (simulated-user trials) --------------------------------
+    # A simulated-user trial does not call run(); it launches the agent as an ACP server and the
+    # user agent sends each turn with `acpx prompt`. acp_command is that server; acp_install ships
+    # the agent dir and the server's deps into the sandbox; acp_env forwards the model key.
+
+    def acp_command(self) -> list[str]:
+        return ["env", f"TOUCHSTONE_ACP_MODE={self.mode}",
+                f"TOUCHSTONE_MODEL_NAME={self.model_name or ''}",
+                f"TOUCHSTONE_AGENT_DIR={AGENT_SANDBOX}",
+                "python", "-m", "touchstone.harbor.acp_server"]
+
+    async def acp_install(self, environment) -> None:
+        await environment.upload_dir(_agent_dir(), AGENT_SANDBOX)
+        # The ACP server runs the loop in the sandbox, so it needs acp + the provider's HTTP client
+        # (touchstone's openai/anthropic providers are httpx-based) that the base image lacks.
+        await environment.exec(
+            "uv pip install --system --quiet agent-client-protocol httpx 2>/dev/null || "
+            "pip install --quiet agent-client-protocol httpx")
+
+    def acp_env(self) -> dict:
+        var = keys.provider_key_var(self.model_name)
+        value = os.environ.get(var) if var else None
+        return {var: value} if var and value else {}
 
     async def setup(self, environment) -> None:
         """Start the dataset's simulators inside the sandbox so both modes can reach them."""

@@ -103,6 +103,20 @@ def test_run_passes_tool_schemas_to_the_model(tmp_path, monkeypatch):
     assert provider.seen[0][0]["function"]["name"] == "lookup"  # tools forwarded to chat
 
 
+def test_acp_command_and_env_carry_mode_model_and_key(tmp_path, monkeypatch):
+    """The simulated-user trial launches the agent as an ACP server via acp_command; the model key
+    rides on acp_env (never on argv)."""
+    from touchstone.harbor.agent import AGENT_SANDBOX
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    ta = TouchstoneAgent(tmp_path / "logs", model_name="openai/gpt-4o-mini", mode="replica")
+    cmd = ta.acp_command()
+    assert cmd[-3:] == ["python", "-m", "touchstone.harbor.acp_server"]
+    assert f"TOUCHSTONE_AGENT_DIR={AGENT_SANDBOX}" in cmd
+    assert "TOUCHSTONE_MODEL_NAME=openai/gpt-4o-mini" in cmd
+    assert "sk-secret" not in " ".join(cmd)  # the key is never in argv
+    assert ta.acp_env() == {"OPENAI_API_KEY": "sk-secret"}
+
+
 def test_replica_writes_output_json_in_the_sandbox(tmp_path, monkeypatch):
     """The verifier collects /app/output.json (the no-PII check reads it), so the replica loop must
     write it in the sandbox — otherwise `harbor job regrade` refuses the trial."""
