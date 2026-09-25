@@ -184,3 +184,41 @@ def test_missing_rsync_or_ssh_binary_gives_a_clear_error(monkeypatch):
         run_mod._call(["rsync", "-az", "a", "b"])
     msg = str(ei.value)
     assert "rsync" in msg and "not installed" in msg and "PATH" in msg
+
+
+# ---- shipping touchstone to the remote host from either layout (checkout vs wheel) --------------
+
+
+def test_generated_pyproject_is_valid_toml_and_lists_the_package():
+    import tomllib
+    doc = tomllib.loads(run_mod.generated_pyproject())
+    assert doc["project"]["name"] == "touchstone-bench"
+    assert doc["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"] == ["touchstone"]
+    assert isinstance(doc["project"]["dependencies"], list)
+    assert doc["build-system"]["build-backend"] == "hatchling.build"
+
+
+def test_stage_src_generates_pyproject_for_a_wheel_layout(tmp_path, monkeypatch):
+    # A wheel install has the package under site-packages with no pyproject: _stage_src copies just
+    # the package and writes a minimal pyproject so `uvx --with <dir>` resolves.
+    import tomllib
+    fake_site = tmp_path / "site-packages"
+    (fake_site / "touchstone").mkdir(parents=True)
+    (fake_site / "touchstone" / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(run_mod, "_src_paths",
+                        lambda: (fake_site, fake_site / "touchstone"))
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    out = run_mod._stage_src(stage)
+    assert out == stage
+    assert (stage / "touchstone" / "__init__.py").is_file()  # package copied
+    doc = tomllib.loads((stage / "pyproject.toml").read_text())
+    assert doc["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"] == ["touchstone"]
+
+
+def test_stage_src_uses_the_checkout_root_when_it_has_a_pyproject(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    (root / "touchstone").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    monkeypatch.setattr(run_mod, "_src_paths", lambda: (root, root / "touchstone"))
+    assert run_mod._stage_src(tmp_path / "unused") == root  # synced as-is, no staging
