@@ -44,12 +44,13 @@ def tools_map(map_data: dict) -> dict:
 
 
 def _mutating_tools(map_data: dict) -> set:
+    tool_names = {t["name"] for t in map_data.get("tools", [])}
     mutating = set()
     for service in map_data.get("services", []):
         for call in service.get("calls", []):
             if (call.get("method") or "").upper() in _MUTATING:
                 mutating.add(call.get("from_tool"))
-    return {t for t in mutating if t}
+    return {t for t in mutating if t in tool_names}  # real model tools only, not harness helpers
 
 
 def _arg_values(calls: list[ToolEvent]) -> set:

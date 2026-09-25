@@ -51,6 +51,17 @@ def test_derive_trajectory_used_and_avoid():
     assert "rk.trajectory_tool_not_used('wipe')" in tool
 
 
+def test_avoid_excludes_non_tool_harness_helpers():
+    # a from_tool that is not a real model tool (e.g. a seed helper) is never an avoid criterion
+    m = {"tools": [{"name": "get", "calls": ["svc"]}],
+         "services": [{"name": "svc", "calls": [
+             {"method": "GET", "path_template": "/w/{id}", "from_tool": "get"},
+             {"method": "POST", "path_template": "/seed", "from_tool": "seed_helper"}]}]}
+    _, tool = derive_criteria({"initial": {}, "final": {}}, [], m,
+                              [ToolEvent("get", {}, {}, "e")])
+    assert not any("seed_helper" in line for line in tool)
+
+
 def test_reproduced_true_and_false():
     calls = [ToolEvent("get", {}, {"id": "w1", "color": "red"}, "e")]
     ok = [{"tool": "get", "got": {"id": "w9", "color": "red"}}]  # id masked -> matches
