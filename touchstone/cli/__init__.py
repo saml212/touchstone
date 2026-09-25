@@ -112,7 +112,7 @@ def _doctor_rows(settings) -> list[tuple[str, str, str]]:
 
 @app.command()
 def doctor() -> None:
-    """Report python, db, SDKs, providers, speech, tools and train backends in one table."""
+    """Report python, db, SDKs, providers, speech, and tools in one table."""
     rows = _doctor_rows(load_settings())
     widths = [max(len(r[i]) for r in [("component", "status", "detail"), *rows]) for i in range(3)]
     header = ("component", "status", "detail")
