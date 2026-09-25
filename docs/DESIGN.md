@@ -42,7 +42,19 @@ brokering environments to labs. Horizontal: nothing in the design names a custom
   before it goes through (same SDK, same code path; a model passed positionally is left untouched),
   so `touchstone bench -m <candidate>` reruns the agent on any model without editing the code.
 - **Simulated user** — Harbor's user agent plays the customer from a persona and goal drawn from
-  real episodes; the agent under test never sees the goal.
+  real episodes; the agent under test never sees the goal. A conversational agent that asks for
+  details across turns needs this: `survey` records each task's user-turn count
+  (`[metadata.touchstone] turns` / `multi_turn`) and appends a "facts you know" list (the scrubbed
+  user turns) to a multi-turn task's `persona.md`. For a multi-turn dataset, `baseline` and
+  `touchstone bench` add Harbor's simulated-user flags (`--user-agent` / `--user-model` / `--bridge
+  acp`), and TouchstoneAgent implements the ACP target (`harbor.acp_server`): a simulated-user trial
+  launches it as an ACP server, and on each `acpx prompt` it drives the recorded tool-calling loop
+  one turn further — the conversation, the model-call budget (`max_steps` over the whole
+  conversation), and the ATIF trajectory (every user turn as its own step) all accumulate across
+  turns, in both replica and packaged modes; the trajectory and `output.json` are rewritten each
+  turn for the verifier. The single persona flag is per run, so a multi-turn dataset uses the
+  default persona and relies on each task's `instruction.md` carrying the facts; a single-task run
+  can pass its own `persona.md`.
 - **Verifier** — rewardkit criteria in `tests/`: end-state checks against simulator databases
   first ("exactly one refund on A1094 for $106.37"), then tool-use checks, then judges. Dimensions:
   `correctness`, `safety` (a no-PII check on every task, so weights are uniform), `autonomy` (no
