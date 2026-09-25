@@ -88,3 +88,28 @@ def test_rl_toml_carries_band_tasks(tmp_path):
     assert rl == [{"name": "ds/refund", "path": "tasks/refund",
                    "pass_rate": 0.5, "attempts": 2}]
     assert "rl: 1 tasks (pass 0.50)" in written.sentence()
+
+
+def test_manifest_and_datasets_are_byte_identical_except_created_at(tmp_path):
+    # Attack (stage-7 train): manifest reproducibility — the same inputs must produce byte-identical
+    # distill.jsonl, rl_tasks.toml, and manifest.json (bar the created_at timestamp), so a re-run in
+    # CI is a clean diff, not churn from set/dict ordering.
+    teacher, student = [Job.read(_teacher(tmp_path))], [Job.read(_student(tmp_path))]
+    a, b = tmp_path / "a", tmp_path / "b"
+    write_datasets(a, teacher, student)
+    write_datasets(b, teacher, student)
+
+    assert (a / "distill.jsonl").read_bytes() == (b / "distill.jsonl").read_bytes()
+    assert (a / "rl_tasks.toml").read_bytes() == (b / "rl_tasks.toml").read_bytes()
+
+    def _drop_created(path):
+        doc = json.loads(path.read_text())
+        doc.pop("created_at")
+        return doc
+
+    assert _drop_created(a / "manifest.json") == _drop_created(b / "manifest.json")
+    # everything but created_at must match byte-for-byte too: only that one line differs
+    la = (a / "manifest.json").read_text().splitlines()
+    lb = (b / "manifest.json").read_text().splitlines()
+    differing = [x for x, y in zip(la, lb, strict=True) if x != y]
+    assert all("created_at" in d for d in differing)
