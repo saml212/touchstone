@@ -18,6 +18,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import tomli_w
+
 MANIFEST = "dataset.toml"
 SUBDIRS = ("tasks", "environment", "agent", "simulators")
 
@@ -58,14 +60,10 @@ class Dataset:
         return sorted(d for d in tasks.iterdir() if (d / "task.toml").is_file())
 
     def _manifest(self) -> str:
-        keywords = ", ".join(f'"{k}"' for k in sorted(self.keywords))
-        # Top-level keys come before the [dataset] table so they don't fall inside it.
-        return (
-            'schema_version = "1.0"\n'
-            "tasks = []\n\n"
-            "[dataset]\n"
-            f'name = "{self.name}"\n'
-            f'version = "{self.version}"\n'
-            f'description = "{self.description}"\n'
-            f"keywords = [{keywords}]\n"
-        )
+        # `tasks` stays empty: Harbor's manifest pins tasks by published digest, so local runs use
+        # the implicit dataset (`harbor run -p <root>/tasks`). This file is metadata only.
+        # Top-level keys are written before the [dataset] table so they don't fall inside it.
+        doc = {"schema_version": "1.0", "tasks": [],
+               "dataset": {"name": self.name, "version": self.version,
+                           "description": self.description, "keywords": sorted(self.keywords)}}
+        return tomli_w.dumps(doc)

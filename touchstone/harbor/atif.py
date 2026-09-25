@@ -7,8 +7,8 @@ Matched against Harbor's pydantic models at
 Mapping: the first llm span's `input.messages` become the leading system/user/agent steps; each
 llm span becomes an agent step (assistant text + tool_calls + token metrics); tool spans between
 one llm span and the next become that step's `observation.results`, with `source_call_id` matched
-to a tool_call id by name. Multi-turn user messages injected mid-episode are not reconstructed
-(single simplification; noted in tests).
+to a tool_call id (by id first, then by tool name). Multi-turn user messages injected mid-episode
+are not reconstructed (single simplification; noted in tests).
 """
 
 from __future__ import annotations
