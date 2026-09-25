@@ -35,6 +35,7 @@ dev = [
     "ruff>=0.5",
     "complexipy==5.5.0",  # cognitive-complexity gate (<= 8/function); pinned — 8.x rescored higher
     "openai>=1.40",  # real-SDK live smoke test (tests/test_live_smoke.py, TOUCHSTONE_LIVE=1)
+    "requests>=2.31",  # network-shim test covers both HTTP libraries (tests/test_survey_netshim.py)
 ]
 
 [tool.hatch.build.targets.wheel]
