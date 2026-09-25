@@ -23,6 +23,10 @@ class Settings:
     speech_mode: str = "local"  # local | realtime
     realtime_model: str = "gpt-realtime-2.1-mini"
     realtime_voice: str = "marin"
+    # `harbor run` executes on this SSH host when the local machine has no Docker daemon; empty
+    # means always run locally. `harbor_remote_root` is the directory on that host to sync into.
+    harbor_host: str = ""
+    harbor_remote_root: str = "~/touchstone-harbor"
     extra: dict = field(default_factory=dict)
 
     @property
@@ -56,6 +60,7 @@ _ENV_KEYS = {
     "TOUCHSTONE_STT": "stt",
     "TOUCHSTONE_TTS": "tts",
     "TOUCHSTONE_SPEECH_MODE": "speech_mode",
+    "TOUCHSTONE_HARBOR_HOST": "harbor_host",
 }
 
 
@@ -72,6 +77,9 @@ def _apply_toml(s: Settings, data: dict) -> None:
     s.speech_mode = speech.get("mode", s.speech_mode)
     s.realtime_model = speech.get("realtime_model", s.realtime_model)
     s.realtime_voice = speech.get("realtime_voice", s.realtime_voice)
+    harbor = data.get("harbor", {})
+    s.harbor_host = harbor.get("host", s.harbor_host)
+    s.harbor_remote_root = harbor.get("remote_root", s.harbor_remote_root)
     s.extra = data
 
 

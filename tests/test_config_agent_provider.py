@@ -51,3 +51,19 @@ def test_speech_mode_from_toml_and_env(tmp_path, monkeypatch):
     assert s.realtime_model == "gpt-realtime-2.1"
     monkeypatch.setenv("TOUCHSTONE_SPEECH_MODE", "local")
     assert load_settings(cfg).speech_mode == "local"
+
+
+def test_harbor_defaults_to_local(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOUCHSTONE_HARBOR_HOST", raising=False)
+    s = load_settings(tmp_path / "missing.toml")
+    assert s.harbor_host == "" and s.harbor_remote_root == "~/touchstone-harbor"
+
+
+def test_harbor_from_toml_and_env(tmp_path, monkeypatch):
+    cfg = tmp_path / "touchstone.toml"
+    cfg.write_text('[harbor]\nhost = "10.0.0.5"\nremote_root = "/data/ts"\n', encoding="utf-8")
+    monkeypatch.delenv("TOUCHSTONE_HARBOR_HOST", raising=False)
+    s = load_settings(cfg)
+    assert s.harbor_host == "10.0.0.5" and s.harbor_remote_root == "/data/ts"
+    monkeypatch.setenv("TOUCHSTONE_HARBOR_HOST", "192.168.1.1")
+    assert load_settings(cfg).harbor_host == "192.168.1.1"
