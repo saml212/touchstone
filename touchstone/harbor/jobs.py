@@ -52,6 +52,7 @@ class Trial:
     rewards: dict
     trajectory_path: Path | None
     exception: str | None
+    error: str | None = None  # the exception message, when the trial raised
 
     @property
     def passed(self) -> bool:
@@ -77,6 +78,7 @@ class Trial:
             rewards=rewards,
             trajectory_path=traj if traj.is_file() else None,
             exception=exc.get("exception_type"),
+            error=exc.get("exception_message"),
         )
 
 

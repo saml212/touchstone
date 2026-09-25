@@ -50,7 +50,8 @@ def test_regrade_job_uses_injected_runner_and_diffs(tmp_path):
         return new_dir
 
     out = regrade.regrade_job(tmp_path, jobs_dir, "src", Settings(), runner=fake_runner)
-    assert out == {"job": "regraded", "deltas": [{"task": "refund", "before": 0.75, "after": 1.0}]}
+    assert out == {"job": "regraded", "deltas": [{"task": "refund", "before": 0.75, "after": 1.0}],
+                   "failed": []}
 
 
 def test_run_regrade_local_builds_command_and_returns_new_job(tmp_path, monkeypatch):
@@ -72,3 +73,28 @@ def test_run_regrade_local_builds_command_and_returns_new_job(tmp_path, monkeypa
     assert cmd[:3] == ["harbor", "job", "regrade"]
     assert str(src.resolve()) in cmd
     assert "-p" in cmd and str(tasks.resolve()) in cmd
+
+
+def test_refused_trials_are_reported_as_failed_not_zero(tmp_path):
+    import json
+
+    from touchstone.review import regrade
+
+    def job(name, trials):
+        d = tmp_path / name
+        for task, body in trials:
+            t = d / f"{task}__x"
+            (t / "verifier").mkdir(parents=True)
+            (t / "result.json").write_text(json.dumps({"task_name": task, **body}))
+            if "reward" in body:
+                (t / "verifier" / "reward.txt").write_text(str(body["reward"]))
+        return d
+
+    job("old", [("a", {"reward": 1.0}), ("b", {"reward": 1.0})])
+    new = job("new", [("a", {"reward": 1.0}),
+                      ("b", {"exception_info": {"exception_type": "RegradeError",
+                                                "exception_message": "/app/output.json missing"}})])
+    result = regrade.regrade_job(tmp_path, tmp_path, "old", settings=None,
+                                 runner=lambda *a, **k: new)
+    assert result["deltas"] == []
+    assert result["failed"] == [{"task": "b", "error": "RegradeError: /app/output.json missing"}]

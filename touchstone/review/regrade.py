@@ -4,7 +4,7 @@
 criterion change is graded in seconds. This reads the source job's rewards, runs the regrade through
 `touchstone.harbor.run` (local or remote, same sync rules as `run`), reads the new job, and diffs
 per-task mean reward so the room can read out the trial that changed and any others that moved with
-it.
+it. Trials Harbor refused to regrade are listed under `failed`, never counted as 0.
 """
 
 from __future__ import annotations
@@ -54,5 +54,18 @@ def regrade_job(dataset_dir: str | Path, jobs_dir: str | Path, job_name: str,
     old = jobs.Job.read(jobs_dir / job_name)
     new_dir = runner(jobs_dir / job_name, dataset_dir / "tasks", settings=settings)
     new = jobs.Job.read(new_dir)
-    deltas = diff_rewards(old, new)
-    return {"job": Path(new_dir).name, "deltas": [d.to_dict() for d in deltas]}
+    graded, failed = _split_failed(new)
+    skip = {f["task"] for f in failed}
+    old_graded = jobs.Job(dir=old.dir, config=old.config,
+                          trials=[t for t in old.trials if t.task_name not in skip])
+    deltas = diff_rewards(old_graded, graded) if graded.trials else []
+    return {"job": Path(new_dir).name, "deltas": [d.to_dict() for d in deltas], "failed": failed}
+
+
+def _split_failed(job: jobs.Job) -> tuple[jobs.Job, list[dict]]:
+    """Trials Harbor refused to regrade (a RegradeError, a missing artifact) are not 0% — they are
+    reported apart, with Harbor's reason, so the room says "could not regrade" instead of "dropped"."""
+    ok = [t for t in job.trials if not t.exception]
+    failed = [{"task": t.task_name, "error": f"{t.exception}: {(t.error or '')[:200]}"}
+              for t in job.trials if t.exception]
+    return jobs.Job(dir=job.dir, config=job.config, trials=ok), failed
