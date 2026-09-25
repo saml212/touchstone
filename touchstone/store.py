@@ -30,16 +30,18 @@ def _loads(text):
 
 
 # v2 (2026-09): authored artifacts (tasks, checks, benchmarks) moved to files; the DB keeps only
-# captured traces and the machine run record. A v1 DB opens fine — the old authored tables and the
-# stale run record are dropped, and `mine` rebuilds tasks/checks from the preserved episodes.
+# captured traces. A v1 DB opens fine — the old authored tables are dropped.
 # v3 (2026-09): span `kind` 'llm' renamed to 'model'; `spans.tool_call_id` links a tool span to
 # the model call that requested it. A v1/v2 DB migrates in place, preserving its spans.
-# v4 (2026-09): `difficulty` table — empirical pass rate per (task, model_spec), the founder's
-# "difficulty measured, not requested". Created via CREATE IF NOT EXISTS on any older DB.
-SCHEMA_VERSION = 4
+# v4 (2026-09): a `difficulty` table (later removed).
+# v5 (2026-09, v3 rework): Harbor is the run record — the `difficulty`, `runs`, and `results` tables
+# are dropped; a `reviews` table records what a review room decided about a task's trial.
+SCHEMA_VERSION = 5
 
 # Tables the v1 schema created that no longer exist; dropped only on the v1 -> v2 migration.
-_DROPPED = ("checks", "tasks", "benchmarks", "room_checks", "runs", "results")
+_DROPPED = ("checks", "tasks", "benchmarks", "room_checks")
+# Machine-run tables removed in v5 — the Harbor job directory is the run record now.
+_DROPPED_V5 = ("difficulty", "runs", "results")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodes (
@@ -52,24 +54,14 @@ CREATE TABLE IF NOT EXISTS spans (
   tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, error TEXT, tool_call_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spans_episode ON spans(episode_id);
-CREATE TABLE IF NOT EXISTS runs (
-  id TEXT PRIMARY KEY, target TEXT, model_spec TEXT,
-  started_at TEXT, finished_at TEXT, meta TEXT
-);
-CREATE TABLE IF NOT EXISTS results (
-  run_id TEXT, task TEXT, passed INTEGER, reward REAL, check_results TEXT, output TEXT,
-  latency_ms INTEGER, cost_usd REAL, error TEXT,
-  PRIMARY KEY (run_id, task)
-);
-CREATE TABLE IF NOT EXISTS difficulty (
-  task TEXT, model_spec TEXT, attempts INTEGER, passes INTEGER, pass_rate REAL, updated_at TEXT,
-  PRIMARY KEY (task, model_spec)
-);
 CREATE TABLE IF NOT EXISTS rooms (
   id TEXT PRIMARY KEY, task_id TEXT, topic TEXT, created_at TEXT, closed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS room_messages (
   id TEXT PRIMARY KEY, room_id TEXT, speaker TEXT, role TEXT, text TEXT, audio_path TEXT, ts TEXT
+);
+CREATE TABLE IF NOT EXISTS reviews (
+  id TEXT PRIMARY KEY, task TEXT, trial TEXT, verdict TEXT, speaker TEXT, note TEXT, ts TEXT
 );
 """
 
@@ -88,8 +80,11 @@ def connect(path: str | Path) -> sqlite3.Connection:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < SCHEMA_VERSION:
         with write(conn):
-            if version == 1:  # v1 -> v2: authored artifacts left the DB; the run record is stale
+            if version == 1:  # v1 -> v2: authored artifacts left the DB
                 for table in _DROPPED:
+                    conn.execute(f"DROP TABLE IF EXISTS {table}")
+            if 1 <= version < 5:  # v5: Harbor is the run record; drop the machine-run tables
+                for table in _DROPPED_V5:
                     conn.execute(f"DROP TABLE IF EXISTS {table}")
             for statement in SCHEMA.split(";"):
                 if statement.strip():
@@ -169,36 +164,14 @@ class Span:
 
 
 @dataclass
-class Run:
-    target: str  # a benchmark name, a tasks/ path, or a glob
-    model_spec: str
-    started_at: str = field(default_factory=now)
-    finished_at: str | None = None
-    meta: dict = field(default_factory=dict)
+class Review:
+    task: str  # the reviewed task directory name
+    trial: str  # the trial (Harbor trial name) the room looked at
+    verdict: str  # e.g. 'agree' | 'disagree'
+    speaker: str
+    note: str | None = None
+    ts: str = field(default_factory=now)
     id: str = field(default_factory=new_id)
-
-
-@dataclass
-class Result:
-    run_id: str
-    task: str  # task directory name
-    passed: int
-    reward: float
-    check_results: dict = field(default_factory=dict)  # keyed by check name
-    output: dict = field(default_factory=dict)
-    latency_ms: int | None = None
-    cost_usd: float | None = None
-    error: str | None = None
-
-
-@dataclass
-class Difficulty:
-    task: str
-    model_spec: str
-    attempts: int = 0
-    passes: int = 0
-    pass_rate: float = 0.0
-    updated_at: str = field(default_factory=now)
 
 
 @dataclass
@@ -225,8 +198,6 @@ class RoomMessage:
 _JSON_COLS = {
     "episodes": {"meta"},
     "spans": {"input", "output"},
-    "runs": {"meta"},
-    "results": {"check_results", "output"},
 }
 
 
@@ -322,88 +293,20 @@ def update_span(conn, id: str, **fields) -> None:
     _update(conn, "spans", "id", id, **fields)
 
 
-# ---- runs ------------------------------------------------------------------
+# ---- reviews ---------------------------------------------------------------
 
 
-def insert_run(conn, run: Run) -> Run:
-    _insert(conn, "runs", run)
-    return run
+def insert_review(conn, review: Review) -> Review:
+    _insert(conn, "reviews", review)
+    return review
 
 
-def get_run(conn, id: str) -> Run | None:
-    row = conn.execute("SELECT * FROM runs WHERE id=?", (id,)).fetchone()
-    return _row_to(Run, "runs", row)
-
-
-def list_runs(conn, target: str | None = None) -> list[Run]:
-    if target is None:
-        rows = conn.execute("SELECT * FROM runs ORDER BY id").fetchall()
+def list_reviews(conn, task: str | None = None) -> list[Review]:
+    if task is None:
+        rows = conn.execute("SELECT * FROM reviews ORDER BY id").fetchall()
     else:
-        rows = conn.execute(
-            "SELECT * FROM runs WHERE target=? ORDER BY id", (target,)
-        ).fetchall()
-    return [_row_to(Run, "runs", r) for r in rows]
-
-
-def finish_run(conn, id: str) -> None:
-    _update(conn, "runs", "id", id, finished_at=now())
-
-
-# ---- results ---------------------------------------------------------------
-
-
-def insert_result(conn, result: Result) -> Result:
-    _insert(conn, "results", result)
-    return result
-
-
-def list_results(conn, run_id: str) -> list[Result]:
-    rows = conn.execute(
-        "SELECT * FROM results WHERE run_id=? ORDER BY task", (run_id,)
-    ).fetchall()
-    return [_row_to(Result, "results", r) for r in rows]
-
-
-# ---- difficulty ------------------------------------------------------------
-
-
-def upsert_difficulty(conn, task: str, model_spec: str, passed: bool) -> Difficulty:
-    """Record one attempt for (task, model_spec) and return the updated running pass rate."""
-    p = 1 if passed else 0
-    params = {"task": task, "model": model_spec, "p": p, "now": now()}
-    with write(conn):
-        conn.execute(
-            "INSERT INTO difficulty (task, model_spec, attempts, passes, pass_rate, updated_at) "
-            "VALUES (:task, :model, 1, :p, :p, :now) "
-            "ON CONFLICT(task, model_spec) DO UPDATE SET "
-            "  attempts = attempts + 1, "
-            "  passes = passes + :p, "
-            "  pass_rate = (passes + :p) * 1.0 / (attempts + 1), "
-            "  updated_at = :now",
-            params,
-        )
-    return get_difficulty(conn, task, model_spec)
-
-
-def get_difficulty(conn, task: str, model_spec: str) -> Difficulty | None:
-    row = conn.execute(
-        "SELECT * FROM difficulty WHERE task=? AND model_spec=?", (task, model_spec)
-    ).fetchone()
-    return _row_to(Difficulty, "difficulty", row)
-
-
-def list_difficulty(conn, *, task: str | None = None,
-                    model_spec: str | None = None) -> list[Difficulty]:
-    clauses, args = [], []
-    if task is not None:
-        clauses.append("task=?")
-        args.append(task)
-    if model_spec is not None:
-        clauses.append("model_spec=?")
-        args.append(model_spec)
-    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-    rows = conn.execute(f"SELECT * FROM difficulty{where} ORDER BY task, model_spec", args)
-    return [_row_to(Difficulty, "difficulty", r) for r in rows.fetchall()]
+        rows = conn.execute("SELECT * FROM reviews WHERE task=? ORDER BY id", (task,)).fetchall()
+    return [_row_to(Review, "reviews", r) for r in rows]
 
 
 # ---- rooms -----------------------------------------------------------------

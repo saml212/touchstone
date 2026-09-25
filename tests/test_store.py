@@ -27,20 +27,16 @@ def test_outcome_update_and_label_filter(conn):
     assert store.list_episodes(conn, "nope") == []
 
 
-def test_runs_and_results_by_target_and_run(conn):
-    r1 = store.insert_run(conn, store.Run(target="demo", model_spec="scripted"))
-    store.insert_run(conn, store.Run(target="other", model_spec="scripted"))
-    assert [r.id for r in store.list_runs(conn, "demo")] == [r1.id]
-    assert len(store.list_runs(conn)) == 2
-
-    store.insert_result(conn, store.Result(run_id=r1.id, task="t1", passed=1, reward=1.0,
-                                           check_results={"c": {"passed": True}}))
-    store.insert_result(conn, store.Result(run_id=r1.id, task="t2", passed=0, reward=0.0))
-    store.insert_result(conn, store.Result(run_id="other", task="t3", passed=1, reward=1.0))
-    res = store.list_results(conn, r1.id)
-    assert len(res) == 2 and {x.task for x in res} == {"t1", "t2"}
-    assert next(x for x in res if x.task == "t1").check_results == {"c": {"passed": True}}
-    assert next(x for x in res if x.task == "t1").reward == 1.0
+def test_reviews_roundtrip_and_filter_by_task(conn):
+    store.insert_review(conn, store.Review(
+        task="t1", trial="t1__abc", verdict="agree", speaker="sam", note="looks right"))
+    store.insert_review(conn, store.Review(
+        task="t2", trial="t2__def", verdict="disagree", speaker="alex"))
+    all_rows = store.list_reviews(conn)
+    assert len(all_rows) == 2
+    one = store.list_reviews(conn, "t1")
+    assert [r.trial for r in one] == ["t1__abc"]
+    assert one[0].verdict == "agree" and one[0].note == "looks right"
 
 
 def test_unicode_and_one_megabyte_output(conn):
@@ -84,8 +80,8 @@ def test_concurrent_writers(db):
 
 
 def test_v1_db_migrates_cleanly(db):
-    """A v1 DB opens fine: episodes/spans are preserved; the authored tables are dropped, and the
-    run record is recreated with the new columns (target, reward, task)."""
+    """A v1 DB opens fine: episodes/spans are preserved; the authored tables and the machine-run
+    tables (checks/tasks/benchmarks/runs/results/difficulty) are dropped; `reviews` is created."""
     Path(db).parent.mkdir(parents=True, exist_ok=True)
     raw = sqlite3.connect(db)
     raw.executescript(
@@ -112,11 +108,9 @@ def test_v1_db_migrates_cleanly(db):
         assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
         assert store.get_episode(conn, "e1").name == "kept"  # trace data preserved
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert not ({"tasks", "checks", "benchmarks", "room_checks"} & tables)
-        run_cols = {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
-        assert "target" in run_cols and "benchmark_id" not in run_cols
-        result_cols = {r[1] for r in conn.execute("PRAGMA table_info(results)")}
-        assert {"task", "reward"} <= result_cols and "task_id" not in result_cols
+        gone = {"tasks", "checks", "benchmarks", "room_checks", "runs", "results", "difficulty"}
+        assert not (gone & tables)
+        assert "reviews" in tables
     finally:
         conn.close()
 
@@ -153,25 +147,21 @@ def test_v2_llm_spans_migrate_to_model(tmp_path):
         conn.close()
 
 
-def test_difficulty_upsert_tracks_running_pass_rate(conn):
-    store.upsert_difficulty(conn, "t1", "openai:gpt-4o-mini", passed=True)
-    store.upsert_difficulty(conn, "t1", "openai:gpt-4o-mini", passed=False)
-    d = store.get_difficulty(conn, "t1", "openai:gpt-4o-mini")
-    assert d.attempts == 2 and d.passes == 1 and d.pass_rate == 0.5
-    # a second (task, model) is independent
-    store.upsert_difficulty(conn, "t2", "openai:gpt-4o-mini", passed=True)
-    assert store.get_difficulty(conn, "t2", "openai:gpt-4o-mini").pass_rate == 1.0
-    assert {d.task for d in store.list_difficulty(conn)} == {"t1", "t2"}
-    assert [d.task for d in store.list_difficulty(conn, task="t1")] == ["t1"]
-
-
-def test_v2_db_gains_difficulty_table(tmp_path):
+def test_v4_db_drops_difficulty_and_gains_reviews(tmp_path):
+    """A v4 DB (spans + a difficulty table) upgrades: difficulty is dropped, reviews is created."""
     path = tmp_path / "old.db"
     _v2_spans_table(path)
+    c = sqlite3.connect(str(path))
+    c.execute("CREATE TABLE difficulty (task TEXT, model_spec TEXT, pass_rate REAL)")
+    c.execute("PRAGMA user_version=4")
+    c.commit()
+    c.close()
     conn = store.connect(path)
     try:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION
-        store.upsert_difficulty(conn, "t1", "scripted", passed=True)
-        assert store.get_difficulty(conn, "t1", "scripted").pass_rate == 1.0
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "difficulty" not in tables and "reviews" in tables
+        store.insert_review(conn, store.Review(task="t1", trial="x", verdict="agree", speaker="s"))
+        assert len(store.list_reviews(conn)) == 1
     finally:
         conn.close()
