@@ -202,18 +202,30 @@ def _write_tests(task_dir: Path, state: list[str], tool: list[str], allowed: lis
     rewardkit.write_test_sh(tests)
 
 
-def _task_toml(name: str, dataset: str, group: dict, ep_id: str, calls: list[ToolEvent]) -> dict:
+def _verifier_artifacts(services: list[dict]) -> list[str]:
+    """The files the verifier reads, declared so Harbor collects them from the trial. A separate
+    verifier restores them to these source paths, which is also what `harbor job regrade` needs."""
+    arts = ["/logs/agent/trajectory.json", "/app/output.json"]
+    arts += [f"/app/simulators/{s['name']}/state.db" for s in services]
+    return arts
+
+
+def _task_toml(name: str, dataset: str, group: dict, ep_id: str, calls: list[ToolEvent],
+               services: list[dict]) -> dict:
     # [task] (a registry package ref) is intentionally omitted: it is optional for local tasks and
     # its name must be exactly org/name, which a per-task slug is not. Provenance lives in metadata.
+    # environment_mode = "separate" grades in a fresh env against the collected artifacts, so
+    # `touchstone review` can `harbor job regrade` a corrected criterion without rerunning agents.
     tools = sorted({c.tool for c in calls if c.tool})
     return {
         "schema_version": "1.3",
         "metadata": {"touchstone": {
             "dataset": dataset, "episodes": [ep_id], "job": group["label"], "tools": tools,
             "created_at": datetime.now(UTC).isoformat(), "version": _touchstone_version()}},
+        "artifacts": _verifier_artifacts(services),
         "environment": {"build_timeout_sec": 600.0},
         "agent": {"timeout_sec": 300.0},
-        "verifier": {"timeout_sec": 300.0},
+        "verifier": {"timeout_sec": 300.0, "environment_mode": "separate"},
     }
 
 
@@ -236,7 +248,8 @@ def _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub,
     atomic_write(task_dir / "instruction.md",
                  _canary(task_dir.name) + text["instruction"].strip() + "\n")
     atomic_write(task_dir / "persona.md", text["persona"].strip() + "\n")
-    _write_task_toml(task_dir, _task_toml(task_dir.name, dataset, group, ep_id, calls))
+    _write_task_toml(task_dir,
+                     _task_toml(task_dir.name, dataset, group, ep_id, calls, ctx["services"]))
     # Every task's environment is the one shared image, layered as a trivial FROM: Harbor requires
     # an environment/ dir to discover the task, and the build is a cache hit on the base.
     atomic_write(task_dir / "environment" / "Dockerfile", f"FROM {ctx['image_tag']}\n")
