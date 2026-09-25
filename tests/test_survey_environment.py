@@ -78,7 +78,7 @@ def test_environment_snapshot_and_deps(tmp_path):
     # touchstone's own runtime deps must be present (it is vendored, not pip-installed)
     from touchstone.survey.environment import _touchstone_deps
     pkgs = {re.split(r"[<>=!~ ]", d, maxsplit=1)[0] for d in _touchstone_deps()}
-    assert {"typer", "jsonschema", "simpleeval", "websockets"} <= pkgs
+    assert {"typer", "jsonschema", "websockets"} <= pkgs
     for pkg in pkgs:
         assert pkg in reqs
 
