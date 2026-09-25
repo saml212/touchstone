@@ -44,10 +44,12 @@ def test_bench_runs_and_prints_scoreboard(tmp_path, monkeypatch):
     jobs = tmp_path / "jobs"
     job_dir = _job(jobs, "2026-01-01__00-00-00")
     _trial(job_dir, "t1__a", "ds/t1", 1.0)
-    monkeypatch.setattr(run_mod, "run", lambda *a, **k: job_dir)
+    seen = {}
+    monkeypatch.setattr(run_mod, "run", lambda *a, **k: seen.update(k) or job_dir)
 
     result = runner.invoke(app, ["bench", "-m", "openai/gpt-4o-mini", "--dataset", str(tmp_path)])
     assert result.exit_code == 0, result.output
+    assert seen["jobs_dir"] == f"{tmp_path}/jobs"  # job dirs default under the dataset root
     assert "ds/t1" in result.output and "100.0%" in result.output and "overall" in result.output
 
 

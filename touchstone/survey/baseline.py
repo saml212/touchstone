@@ -57,7 +57,7 @@ def run_baseline(repo, env_result: dict, settings, force: bool = False,
         return json.loads(existing.read_text(encoding="utf-8"))
     model = _model_ref(cfg)
     try:
-        job_dir = run_mod.run(out, AGENT_PATH, model=model,
+        job_dir = run_mod.run(out, AGENT_PATH, model=model, jobs_dir=out / "jobs",
                               extra_args=["--ak", f"mode={cfg['mode']}"], settings=settings)
     except (subprocess.SubprocessError, OSError, RuntimeError) as exc:
         return {"error": str(exc)[:2000], "model": model, "mode": cfg["mode"]}

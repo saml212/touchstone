@@ -130,8 +130,9 @@ def run_gate(repo: Path, env_result: dict, settings, force: bool = False) -> dic
         return _existing_summary(out, [d for d in dirs if _is_gated(_read_toml(d))])
     try:
         run_mod.build_image(out / "environment", env_result["image_tag"], settings)
-        oracle = _rates(run_mod.run(out, "oracle", settings=settings))
-        nop = _rates(run_mod.run(out, "nop", settings=settings))
+        jobs_dir = out / "jobs"
+        oracle = _rates(run_mod.run(out, "oracle", jobs_dir=jobs_dir, settings=settings))
+        nop = _rates(run_mod.run(out, "nop", jobs_dir=jobs_dir, settings=settings))
     except (subprocess.SubprocessError, OSError, RuntimeError) as exc:
         return _fail_all(pending, out, exc)
     return _apply_gate(pending, out, oracle, nop)

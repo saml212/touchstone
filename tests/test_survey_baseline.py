@@ -19,7 +19,8 @@ def _agent_toml(out, mode="packaged", model="gpt-4o-mini", provider="openai"):
 def _mock_harbor(monkeypatch, rates, capture=None):
     def fake_run(path, agent, **kw):
         if capture is not None:
-            capture.update(agent=agent, model=kw.get("model"), extra=kw.get("extra_args"))
+            capture.update(agent=agent, model=kw.get("model"), extra=kw.get("extra_args"),
+                           jobs_dir=kw.get("jobs_dir"))
         return path / "jobs" / "j1"
     monkeypatch.setattr(baseline.run_mod, "run", fake_run)
     monkeypatch.setattr(baseline.jobs.Job, "read", staticmethod(lambda d: d))
@@ -36,6 +37,7 @@ def test_run_baseline_writes_summary_and_passes_model_and_mode(tmp_path, monkeyp
     assert seen["agent"] == baseline.AGENT_PATH
     assert seen["model"] == "openai/gpt-4o-mini"  # provider/model
     assert seen["extra"] == ["--ak", "mode=packaged"]
+    assert seen["jobs_dir"] == out / "jobs"  # under the dataset root, not cwd
     assert data["passed"] == ["t1", "t3"] and data["failed"] == ["t2"]
     assert data["model"] == "openai/gpt-4o-mini" and data["mode"] == "packaged"
     on_disk = json.loads((out / "baseline.json").read_text())

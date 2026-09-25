@@ -12,3 +12,6 @@ harbor-tasks/
 *.egg-info/
 .DS_Store
 touchstone.toml
+
+# Harbor job directories belong under the dataset root, never in the repo
+jobs/

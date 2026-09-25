@@ -1,9 +1,0 @@
-{
-    "task": {
-        "path": "tasks/check-order-status-2",
-        "source": "tasks"
-    },
-    "trial_name": "check-order-status-2__KKoNirg",
-    "trials_dir": "jobs/2026-09-24__23-04-58",
-    "job_id": "8ea5ebea-6a38-4e7f-bd1b-1f809f4e0771"
-}

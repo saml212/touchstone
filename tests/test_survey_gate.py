@@ -20,10 +20,16 @@ def _task(out: Path, name: str, gated: bool = False) -> None:
     (d / "task.toml").write_text(tomli_w.dumps(doc), encoding="utf-8")
 
 
-def _patch(monkeypatch, oracle: dict, nop: dict, calls: list | None = None):
+def _patch(monkeypatch, oracle: dict, nop: dict, calls: list | None = None,
+           seen: dict | None = None):
     monkeypatch.setattr(gate.run_mod, "build_image", lambda *a, **k: calls.append("build")
                         if calls is not None else None)
-    monkeypatch.setattr(gate.run_mod, "run", lambda out, agent, **k: Path(agent))
+
+    def fake_run(out, agent, **k):
+        if seen is not None:
+            seen["jobs_dir"] = k.get("jobs_dir")
+        return Path(agent)
+    monkeypatch.setattr(gate.run_mod, "run", fake_run)
     monkeypatch.setattr(gate, "_rates", lambda job: oracle if job.name == "oracle" else nop)
 
 
@@ -36,11 +42,13 @@ def test_gate_pass_fail_and_move(tmp_path, monkeypatch):
     _task(out, "good")
     _task(out, "weak-oracle")
     _task(out, "trivial-nop")
+    seen: dict = {}
     _patch(monkeypatch,
            oracle={"good": 1.0, "weak-oracle": 0.5, "trivial-nop": 1.0},
-           nop={"good": 0.0, "weak-oracle": 0.0, "trivial-nop": 1.0})
+           nop={"good": 0.0, "weak-oracle": 0.0, "trivial-nop": 1.0}, seen=seen)
     result = gate.run_gate(tmp_path, _env(), settings=None)
 
+    assert seen["jobs_dir"] == out / "jobs"  # job dirs under the dataset root, not cwd
     assert result["gated"] == ["good"]
     # passing task stays and records its gate result
     doc = tomllib.loads((out / "tasks" / "good" / "task.toml").read_text())

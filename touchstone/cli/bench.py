@@ -38,7 +38,8 @@ def bench(
     agent: str = typer.Option("replica", "--agent", help="packaged | replica."),
     dataset: str = typer.Option("touchstone", "--dataset", help="Dataset root or a task dir."),
     against: str = typer.Option(None, "--against", help="A past job dir to compare against."),
-    jobs_dir: str = typer.Option("jobs", "--jobs-dir", help="Where Harbor writes job dirs."),
+    jobs_dir: str = typer.Option(None, "--jobs-dir",
+                                 help="Where Harbor writes job dirs (default <dataset>/jobs)."),
     n_concurrent: int = typer.Option(4, "-n", "--n-concurrent", help="Concurrent trials."),
 ) -> None:
     """Run a model over the dataset with Harbor and print the pass rate per task."""
@@ -47,7 +48,7 @@ def bench(
 
     if agent not in _MODES:
         raise typer.BadParameter("agent must be 'packaged' or 'replica'")
-    job_dir = run_mod.run(dataset, AGENT_PATH, model=model, jobs_dir=jobs_dir,
+    job_dir = run_mod.run(dataset, AGENT_PATH, model=model, jobs_dir=jobs_dir or f"{dataset}/jobs",
                           n_concurrent=n_concurrent, extra_args=["--ak", f"mode={agent}"])
     job = jobs_mod.Job.read(job_dir)
     typer.echo(f"\n{job_dir}")
@@ -58,7 +59,8 @@ def bench(
 
 @app.command()
 def jobs(
-    jobs_dir: str = typer.Option("jobs", "--jobs-dir", help="Directory holding job dirs."),
+    jobs_dir: str = typer.Option("touchstone/jobs", "--jobs-dir",
+                                 help="Directory holding job dirs (default <dataset>/jobs)."),
 ) -> None:
     """List job directories, each with its pass rate per task."""
     from ..harbor import jobs as jobs_mod
