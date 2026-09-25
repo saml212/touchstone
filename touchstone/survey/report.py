@@ -211,7 +211,7 @@ def first_five_sentence(built_names, convos: int, ran, passed) -> str:
     if n - k > 0:
         return (f"{head}. Your current setup passes {k}. {_plural(n - k, 'failure')} — "
                 f"walk through them? (touchstone review)")
-    return f"{head}. Everything passes — spot-check a few?"
+    return f"{head}. Your current setup passes all {n} — spot-check a few? (touchstone review)"
 
 
 def _baseline_sentence(stats: dict, baseline: dict) -> str:

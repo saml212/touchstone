@@ -92,7 +92,7 @@ class ReviewAgent:
             return "Want to look at the tasks where the models disagree?"
         if c["unreviewed"]:
             return "Want to walk through the ones nobody has reviewed yet?"
-        return "Everything passes — want to spot-check a few?"
+        return "everything passes — want to spot-check a few?"
 
     # ---- a turn ------------------------------------------------------------
 

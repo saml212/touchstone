@@ -94,7 +94,8 @@ from touchstone.survey.report import first_five_sentence  # noqa: E402
 
 def test_sentence_all_pass_when_baseline_covers_every_task():
     s = first_five_sentence(["t1", "t2"], 5, {"t1": 1.0, "t2": 1.0}, ["t1", "t2"])
-    assert s == "Built 2 tasks from 5 conversations. Everything passes — spot-check a few?"
+    assert s == ("Built 2 tasks from 5 conversations. Your current setup passes all 2 — "
+                 "spot-check a few? (touchstone review)")
 
 
 def test_sentence_failures_when_baseline_covers_every_task():
