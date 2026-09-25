@@ -122,6 +122,9 @@ class ReviewAgent:
     # ---- a turn ------------------------------------------------------------
 
     def respond(self, history: list[dict]) -> AgentTurn:
+        if _wants_done(history):
+            rooms.close(self.conn, self.room.id)
+            return AgentTurn(say="Closing the room — thanks all.")
         if self.provider is None:
             return AgentTurn(say="Tell me when to start and I'll pull up the first trial.")
         say = self._run_loop(history)
@@ -272,6 +275,13 @@ class ReviewAgent:
 
 
 # ---- module helpers --------------------------------------------------------
+
+
+def _wants_done(history: list[dict]) -> bool:
+    """The participants asked to close the room since the agent last spoke (`/done`)."""
+    idx = max((i for i, m in enumerate(history) if m.get("role") == "assistant"), default=-1)
+    return any(m.get("role") == "user" and m.get("text", "").strip().lower().startswith("/done")
+               for m in history[idx + 1:])
 
 
 def _as_messages(history: list[dict]) -> list[dict]:

@@ -17,7 +17,7 @@ app = typer.Typer(add_completion=True)
 _LOOP = (
     ("capture", "import touchstone; touchstone.trace()  (or touchstone demo)"),
     ("bench", "touchstone bench -m <provider/model>"),
-    ("review", "touchstone serve  /  touchstone interview"),
+    ("review", "touchstone serve  /  touchstone review"),
 )
 _EMPTY_SIGNALS = {"episodes": 0, "rooms": 0}
 
@@ -168,4 +168,4 @@ def serve(
 
 # Register the remaining top-level commands. Imported last so `app` and the shared helpers above
 # already exist when each module binds onto them.
-from . import bench, interview, survey  # noqa: E402,F401
+from . import bench, interview, review, survey  # noqa: E402,F401

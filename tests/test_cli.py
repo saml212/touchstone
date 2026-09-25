@@ -104,3 +104,19 @@ def test_readonly_db_dir_fails_cleanly(tmp_path, monkeypatch):
         assert init.exit_code == 1  # cannot open the db under a read-only dir
     finally:
         os.chmod(ro, stat.S_IRWXU)
+
+
+def test_review_opens_a_room_with_an_opening(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init"])
+    result = runner.invoke(app, ["review", "--no-open"])
+    assert result.exit_code == 0
+    assert "/rooms/" in result.stdout
+    conn = store.connect(str(tmp_path / ".touchstone" / "touchstone.db"))
+    try:
+        rooms = store.list_rooms(conn)
+        assert len(rooms) == 1
+        msgs = store.list_room_messages(conn, rooms[0].id)
+        assert msgs and msgs[0].role == "assistant"
+    finally:
+        conn.close()

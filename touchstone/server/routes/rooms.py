@@ -29,11 +29,11 @@ from fastapi.responses import FileResponse, Response
 from ... import store
 from ...config import Settings
 from ...interview import rooms
-from ...interview.agent import Interviewer
 from ...interview.realtime import Bridges
 from ...interview.rooms import Event, Hub
 from ...interview.speech import SpeechError, validate_audio
-from ._deps import get_conn, get_root
+from ...review.agent import ReviewAgent
+from ._deps import get_conn, get_settings
 
 router = APIRouter()
 
@@ -51,23 +51,21 @@ def list_rooms(conn=Depends(get_conn)) -> dict:
 
 
 @router.get("/api/rooms/{room_id}")
-def get_room(room_id: str, request: Request, conn=Depends(get_conn),
-             root=Depends(get_root)) -> dict:
-    state = _room_state(conn, root, room_id, request.app.state.settings.speech_mode)
+def get_room(room_id: str, conn=Depends(get_conn), settings=Depends(get_settings)) -> dict:
+    state = _room_state(conn, settings, room_id)
     if state is None:
         raise HTTPException(404, f"no room with id {room_id}")
     return state
 
 
 @router.post("/api/rooms")
-def create_room(body: dict, request: Request, conn=Depends(get_conn),
-                root=Depends(get_root)) -> dict:
-    topic = (body.get("topic") or "").strip() or "quality review"
+def create_room(body: dict, conn=Depends(get_conn), settings=Depends(get_settings)) -> dict:
+    topic = (body.get("topic") or "").strip() or "review"
     task_id = body.get("task_id") or body.get("task")
     room = rooms.open(conn, task_id=task_id, topic=topic)
-    opening = Interviewer(None, conn, room, root).open_statement()
+    opening = ReviewAgent(None, conn, room, settings).open_statement()
     rooms.post(conn, room.id, "agent", "assistant", opening)
-    return _room_state(conn, root, room.id, request.app.state.settings.speech_mode)
+    return _room_state(conn, settings, room.id)
 
 
 @router.post("/api/rooms/{room_id}/messages")
@@ -122,13 +120,13 @@ def get_audio(room_id: str, message_id: str, request: Request, conn=Depends(get_
 
 @router.post("/api/rooms/{room_id}/close")
 async def close_room(room_id: str, request: Request, conn=Depends(get_conn),
-                     root=Depends(get_root)) -> dict:
+                     settings=Depends(get_settings)) -> dict:
     if store.get_room(conn, room_id) is None:
         raise HTTPException(404, f"no room with id {room_id}")
     rooms.close(conn, room_id)
     await request.app.state.bridges.close(room_id)
     request.app.state.hub.publish(room_id, Event("closed", {}))
-    return _room_state(conn, root, room_id, request.app.state.settings.speech_mode)
+    return _room_state(conn, settings, room_id)
 
 
 @router.websocket("/ws/rooms/{room_id}")
@@ -137,7 +135,7 @@ async def room_feed(websocket: WebSocket, room_id: str) -> None:
     settings: Settings = websocket.app.state.settings
     conn = store.connect(settings.db_path)
     try:
-        state = _room_state(conn, settings.root, room_id, settings.speech_mode)
+        state = _room_state(conn, settings, room_id)
     finally:
         conn.close()
     if state is None:
@@ -218,11 +216,12 @@ async def _ingest(app, room_id: str, speaker: str, text: str) -> dict:
     )
 
     hub.publish(room_id, Event("message", step["agent"]))
-    hub.publish(room_id, Event("draft", {"checks": step["draft"]}))
+    hub.publish(room_id, Event("draft", {"change": step["draft"]}))
     if step["turn"]["commit"]:
-        hub.publish(room_id, Event("committed", {"checks": step["turn"]["commit"]}))
+        hub.publish(room_id, Event("committed", {"applied": step["turn"]["commit"]}))
     if step["closed"]:
         hub.publish(room_id, Event("closed", {}))
+    hub.publish(room_id, Event("review", step["review"]))
     return {"user": user_view, **step}
 
 
@@ -230,7 +229,7 @@ def _agent_step(settings: Settings, provider_factory, room_id: str, history: lis
     conn = store.connect(settings.db_path)
     try:
         room = store.get_room(conn, room_id)
-        agent = Interviewer(provider_factory(), conn, room, settings.root)
+        agent = ReviewAgent(provider_factory(), conn, room, settings)
         turn = agent.respond(history)
         agent_msg = rooms.post(conn, room_id, "agent", "assistant", turn.say)
         closed = store.get_room(conn, room_id).closed_at is not None
@@ -239,6 +238,7 @@ def _agent_step(settings: Settings, provider_factory, room_id: str, history: lis
             "agent": _msg_view(agent_msg),
             "draft": agent.draft(),
             "committed": agent.committed(),
+            "review": agent.review_state(),
             "closed": closed,
         }
     finally:
@@ -265,15 +265,16 @@ def _history(conn, room_id: str) -> list[dict]:
     return [_msg_view(m) for m in store.list_room_messages(conn, room_id) if m.role != "draft"]
 
 
-def _room_state(conn, root, room_id: str, mode: str = "local") -> dict | None:
+def _room_state(conn, settings: Settings, room_id: str) -> dict | None:
     room = store.get_room(conn, room_id)
     if room is None:
         return None
-    agent = Interviewer(None, conn, room, root)
+    agent = ReviewAgent(None, conn, room, settings)
     return {
         "room": asdict(room),
-        "mode": mode,
+        "mode": settings.speech_mode,
         "messages": _history(conn, room_id),
         "draft": agent.draft(),
         "committed": agent.committed(),
+        "review": agent.review_state(),
     }

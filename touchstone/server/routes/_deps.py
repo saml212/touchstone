@@ -23,5 +23,9 @@ def get_root(request: Request):
     return request.app.state.settings.root
 
 
+def get_settings(request: Request):
+    return request.app.state.settings
+
+
 def paginate(items: list, limit: int | None, offset: int):
     return items[offset : offset + limit] if limit is not None else items[offset:]
