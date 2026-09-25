@@ -1,0 +1,21 @@
+# The survey agent's benchmark targets. Each was recorded against a local fake of its external
+# service (with openai/gpt-4o-mini) so .touchstone/ holds real conversations, then surveyed with
+# `touchstone survey <repo>`. `touchstone survey-bench <this file>` scores the resulting outputs.
+# `run` documents how each target's conversations were recorded (not executed by survey-bench).
+# The two open-source clones live under ~/Pebble/Github/survey-targets/ as gitignored scratch and
+# are never redistributed; book-flight-llm ships no license, so it is a private test target only.
+
+[[target]]
+name = "touchstone-example"
+repo = "~/Pebble/Github/touchstone-example"
+run = "python demo-style capture already shipped with the example (httpx, ORDERS_URL env base)"
+
+[[target]]
+name = "weather-gpt-assistant"
+repo = "~/Pebble/Github/survey-targets/weather-gpt-assistant"
+run = "python scripts/record.py against a local WeatherAPI fake (requests, hardcoded host via net shim)"
+
+[[target]]
+name = "book-flight-llm"
+repo = "~/Pebble/Github/survey-targets/book-flight-llm"
+run = "python scripts/record.py against a local flight-backend fake (requests, FLIGHT_API_BASE_URL env)"

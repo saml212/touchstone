@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 
 from . import app
-from ._common import _fail
+from ._common import _fail, _fail_on
 
 
 @app.command()
@@ -28,3 +28,17 @@ def survey(
     except (ValueError, FileNotFoundError) as exc:
         _fail(f"survey failed: {exc}")
     typer.echo(line)
+
+
+@app.command("survey-bench")
+def survey_bench(
+    config: str = typer.Argument("benchmarks/survey/targets.toml",
+                                 help="TOML listing target repos to score."),
+    out: str = typer.Option(".", "--out", help="Root under which benchmarks/survey/ is written."),
+) -> None:
+    """Score the survey agent across the targets in <config> (the survey's own scoreboard)."""
+    from ..survey.benchmark import survey_bench as _run
+
+    with _fail_on((FileNotFoundError, ValueError, KeyError, OSError), "survey-bench failed: {exc}"):
+        doc = _run(config, out)
+    typer.echo(f"scored {len(doc['targets'])} target(s); wrote benchmarks/survey/")
