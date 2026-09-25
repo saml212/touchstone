@@ -12,9 +12,7 @@ The dataset's `agent/` directory is found via TOUCHSTONE_AGENT_DIR (default: ./a
 
 from __future__ import annotations
 
-import asyncio
 import importlib.util
-import inspect
 import json
 import os
 import shlex
@@ -25,7 +23,7 @@ from pathlib import Path
 
 from .. import store
 from ..llm import provider_from_spec
-from . import atif, keys
+from . import atif, conversation, keys
 
 try:  # harbor lives in the run's own environment, not in touchstone's
     from harbor.agents.base import BaseAgent
@@ -137,8 +135,9 @@ class TouchstoneAgent(BaseAgent):
             provider = provider_from_spec(_provider_spec(self.model_name))
             messages = [{"role": "system", "content": config.system},
                         {"role": "user", "content": instruction}]
-            usage = await self._loop(provider, config, messages, environment, conn, ep.id)
-            await _write_output(environment, _final_text(messages))
+            _, usage, _ = await conversation.run_until_reply(
+                provider, config, messages, environment, conn, ep.id, config.max_steps)
+            await conversation.write_output(environment, conversation.final_text(messages))
             traj = atif.to_atif(conn, ep.id)
             conn.close()
         return usage, traj
@@ -179,83 +178,6 @@ class TouchstoneAgent(BaseAgent):
         if self.model_name and "/" in self.model_name:
             return self.model_name.split("/", 1)[1]
         return self.model_name or config.model_default or ""
-
-    async def _loop(self, provider, config, messages, environment, conn, episode_id) -> dict:
-        totals = {"tokens_in": 0, "tokens_out": 0}
-        for _ in range(config.max_steps):
-            reply = await asyncio.to_thread(provider.chat, messages, config.tools or None)
-            _add_usage(totals, reply.usage)
-            _record_model_span(conn, episode_id, list(messages), config.tools, reply)
-            messages.append({"role": "assistant", "content": reply.content,
-                             "tool_calls": reply.tool_calls})
-            if not reply.tool_calls:
-                break
-            for tool_call in reply.tool_calls:
-                await self._run_tool(config, tool_call, environment, messages, conn, episode_id)
-        return totals
-
-    async def _run_tool(self, config, tool_call, environment, messages, conn, episode_id) -> None:
-        name = tool_call.get("name") or "tool"
-        try:
-            arguments = json.loads(tool_call.get("arguments") or "{}")
-        except json.JSONDecodeError:
-            arguments = {}
-        result = await _dispatch(config.call, name, arguments, environment)
-        result = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
-        call_id = tool_call.get("id")
-        store.insert_span(conn, store.Span(
-            episode_id=episode_id, kind="tool", name=name,
-            input={"name": name, "arguments": arguments},
-            output={"result": result}, tool_call_id=call_id))
-        messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
-
-
-def _final_text(messages: list[dict]) -> str:
-    """The last assistant reply — the run's answer, written to output.json for the verifier."""
-    for msg in reversed(messages):
-        if msg.get("role") == "assistant" and msg.get("content"):
-            return str(msg["content"])
-    return ""
-
-
-async def _write_output(environment, answer: str) -> None:
-    """Write {"answer": <final reply>} to output.json inside the sandbox, so the verifier can
-    collect the /app/output.json artifact and grade the answer. The replica loop otherwise writes
-    only the host-side trajectory; without this file `harbor job regrade` refuses the trial.
-    Packaged mode writes the same file from the customer's own entrypoint (TOUCHSTONE_OUTPUT)."""
-    payload = json.dumps({"answer": answer}, ensure_ascii=False)
-    path = os.environ.get("TOUCHSTONE_OUTPUT", PACKAGED_OUTPUT)
-    await environment.exec(
-        f"mkdir -p $(dirname {shlex.quote(path)}) && printf %s {shlex.quote(payload)} "
-        f"> {shlex.quote(path)}")
-
-
-async def _dispatch(call, name: str, arguments: dict, environment):
-    """Call the task's tool dispatch off the event loop unless it is a coroutine function."""
-    if call is None:
-        return ""
-    if inspect.iscoroutinefunction(call):
-        return await call(name, arguments, environment)
-    return await asyncio.to_thread(call, name, arguments, environment)
-
-
-def _record_model_span(conn, episode_id: str, history: list[dict], tools, reply) -> None:
-    output: dict = {"message": {"role": "assistant", "content": reply.content,
-                                "tool_calls": reply.tool_calls}}
-    if reply.usage:
-        output["usage"] = reply.usage
-    store.insert_span(conn, store.Span(
-        episode_id=episode_id, kind="model", name="model",
-        input={"messages": history, "tools": tools or [], "params": {}}, output=output,
-        tokens_in=(reply.usage or {}).get("tokens_in"),
-        tokens_out=(reply.usage or {}).get("tokens_out")))
-
-
-def _add_usage(totals: dict, usage: dict | None) -> None:
-    if usage:
-        totals["tokens_in"] += usage.get("tokens_in") or 0
-        totals["tokens_out"] += usage.get("tokens_out") or 0
-
 
 def _apply_usage(context, usage: dict) -> None:
     context.n_input_tokens = usage["tokens_in"] or None
