@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -18,6 +19,7 @@ from functools import wraps
 
 from .. import store
 
+_log = logging.getLogger("touchstone")
 _db_path: str | None = None
 _local = threading.local()
 _current: ContextVar[EpisodeHandle | None] = ContextVar("touchstone_episode", default=None)
@@ -33,6 +35,17 @@ def configure(db_path: str) -> None:
 
 def is_configured() -> bool:
     return _db_path is not None
+
+
+def _safe(action: str, fn, default=None):
+    """Run `fn`; if recording fails (e.g. a non-writable db), log one warning and return `default`.
+    Capture must never raise into the user's application — the explicit helpers (`episode`, `tool`,
+    `outcome`) funnel through here just as the SDK patches funnel through `spans._recorder`."""
+    try:
+        return fn()
+    except Exception as exc:
+        _log.warning("touchstone %s failed: %r", action, exc)
+        return default
 
 
 def get_conn():
@@ -51,19 +64,28 @@ class EpisodeHandle:
     id: str
 
     def outcome(self, score: float | None, label: str | None) -> None:
-        store.outcome(get_conn(), self.id, score, label)
+        if not self.id:  # detached handle from a failed episode start; nothing to record
+            return
+        _safe("outcome", lambda: store.outcome(get_conn(), self.id, score, label))
+
+
+def _start_episode(name: str, meta: dict | None, source: str) -> EpisodeHandle:
+    conn = get_conn()
+    ep = store.insert_episode(conn, store.Episode(name=name, source=source, meta=meta or {}))
+    return EpisodeHandle(ep.id)
 
 
 @contextmanager
 def episode(name: str, meta: dict | None = None, source: str = "app"):
-    conn = get_conn()
-    ep = store.insert_episode(conn, store.Episode(name=name, source=source, meta=meta or {}))
-    handle = EpisodeHandle(ep.id)
+    handle = _safe("episode start", lambda: _start_episode(name, meta, source))
+    if handle is None:  # capture unavailable; the app must still run its `with` body
+        yield EpisodeHandle("")
+        return
     token = _current.set(handle)
     try:
         yield handle
     finally:
-        store.end_episode(conn, ep.id)
+        _safe("episode end", lambda: store.end_episode(get_conn(), handle.id))
         _current.reset(token)
 
 
@@ -168,10 +190,13 @@ def _resolve_tool_call_id(tname: str) -> str | None:
 
 
 def _record_tool(tname, bound, tool_call_id, started, *, result=None, error=None) -> None:
-    call_id = tool_call_id if tool_call_id is not None else _resolve_tool_call_id(tname)
-    output = None if error else {"result": jsonable(result)}
-    add_span("tool", tname, input={"name": tname, "arguments": bound}, output=output,
-             error=error, started_at=started, tool_call_id=call_id)
+    def _do():
+        call_id = tool_call_id if tool_call_id is not None else _resolve_tool_call_id(tname)
+        output = None if error else {"result": jsonable(result)}
+        add_span("tool", tname, input={"name": tname, "arguments": bound}, output=output,
+                 error=error, started_at=started, tool_call_id=call_id)
+
+    _safe("tool span", _do)  # a recording failure must never lose the tool's own result
 
 
 def tool(fn=None, *, name: str | None = None):

@@ -9,6 +9,7 @@ It never raises if neither is installed.
 from __future__ import annotations
 
 import json
+import logging
 
 from . import capture
 from .capture import episode, tool
@@ -19,6 +20,7 @@ from .messages import canonical
 
 __all__ = ["trace", "episode", "outcome", "tool", "record_llm_call"]
 
+_log = logging.getLogger("touchstone")
 _traced = False
 
 
@@ -47,7 +49,10 @@ def trace(db: str | None = None, otel: bool = False) -> dict:
 
 
 def outcome(score: float | None, label: str | None) -> None:
-    capture.current_episode().outcome(score, label)
+    try:  # resolving the current/untracked episode can touch the db; never raise into the app
+        capture.current_episode().outcome(score, label)
+    except Exception as exc:
+        _log.warning("touchstone outcome failed: %r", exc)
 
 
 def _normalize_calls(items) -> list[dict]:
@@ -75,6 +80,13 @@ def _normalize_reply(reply) -> tuple[str, list[dict], dict | None]:
 
 def record_llm_call(model, messages, reply, tools=None, usage=None) -> None:
     """Record an llm call made outside a patched SDK (e.g. via a Provider)."""
+    try:  # capture must never raise into the app (db unwritable, bad reply shape, …)
+        _record_llm_call(model, messages, reply, tools, usage)
+    except Exception as exc:
+        _log.warning("touchstone record_llm_call failed: %r", exc)
+
+
+def _record_llm_call(model, messages, reply, tools, usage) -> None:
     content, tool_calls, reply_usage = _normalize_reply(reply)
     u = usage or reply_usage or {}
     convo = canonical(
