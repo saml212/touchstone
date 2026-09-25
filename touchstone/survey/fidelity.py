@@ -1,10 +1,10 @@
 """Measure how faithfully a simulator reproduces the recorded calls.
 
-Start the simulator on a free port, seed it, replay every recorded call for the service through the
-customer's real tool functions (pointed at the simulator), and compare each returned value with the
-recorded one — after masking volatile fields (ids, tickets, timestamps, tokens) so a fresh id does
-not count as a mismatch. The simulator process is always killed. A simulator that never becomes
-healthy scores 0.0 with the traceback tail, so the survey can continue and flag it.
+Start the simulator on a free port, seed it, replay every recorded call through the customer's real
+tool functions (pointed at the simulator), and compare each returned value with the recorded one —
+after masking volatile fields (ids, timestamps, tokens) so a fresh id is not a mismatch. The process
+is always killed; a simulator that never becomes healthy scores 0.0 with its log tail, so the survey
+continues and flags it.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ import contextlib
 import json
 import os
 import socket
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -23,6 +22,7 @@ from pathlib import Path
 import httpx
 
 from ..config import Settings
+from .fidelity_db import dump_db  # noqa: F401 re-exported (task criteria import it from here)
 from .fidelity_mask import _compare, _mask, _mask_field, masked_equal  # noqa: F401 re-exported
 from .recordings import ToolEvent
 from .scrub import Scrubber
@@ -130,15 +130,15 @@ def _external_host(host: str | None) -> bool:
 
 
 def _shim_host(host: str | None, base_url_env) -> bool:
-    """Rewrite the host with the net shim when it is the only redirect (no base_url_env), or as a
-    shield for a real external host — so a base_url_env the map got wrong (e.g. an API-key var) can
-    never let replay reach the real service."""
+    """Shim the host when it is the only redirect (no base_url_env) or a real external host — so a
+    base_url_env the map got wrong (an API-key var) can't let replay reach the real service."""
     return bool(host) and (not base_url_env or _external_host(host))
 
 
 def _replay_spec(calls: list[ToolEvent], base: str, ctx: dict) -> dict:
     """A replay spec that repoints the service at `base`: by env var when the map has one, and/or by
-    rewriting the host with the net shim (simulators = {host: base})."""
+    rewriting the host with the net shim (simulators = {host: base}). `invoke` in ctx routes calls
+    through the generated agent/invoke.py."""
     spec = {"tools": ctx["tools"],
             "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
     if ctx.get("base_url_env"):
@@ -146,6 +146,8 @@ def _replay_spec(calls: list[ToolEvent], base: str, ctx: dict) -> dict:
         spec["base_url"] = base
     if _shim_host(ctx.get("host"), ctx.get("base_url_env")):
         spec["simulators"] = {ctx["host"]: base}
+    if ctx.get("invoke"):
+        spec["invoke"] = ctx["invoke"]
     return spec
 
 
@@ -197,38 +199,6 @@ def _redirectable(ctx: dict) -> bool:
 # ---- state capture (for task criteria) -------------------------------------
 
 
-def _table_names(conn) -> list[str]:
-    q = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-    return [row[0] for row in conn.execute(q).fetchall()]
-
-
-def _pk_col(conn, table: str) -> str:
-    for row in conn.execute(f"PRAGMA table_info({table})"):
-        if row["pk"]:
-            return row["name"]
-    return "rowid"
-
-
-def _dump_table(conn, table: str) -> dict:
-    pk = _pk_col(conn, table)
-    select = "*" if pk != "rowid" else "rowid AS rowid, *"
-    rows = [dict(r) for r in conn.execute(f"SELECT {select} FROM {table}").fetchall()]
-    return {"pk": pk, "rows": rows}
-
-
-def dump_db(db_path: Path) -> dict:
-    """Every table's rows keyed by name, with the primary-key column. Missing db -> empty dict."""
-    path = Path(db_path)
-    if not path.exists():
-        return {}
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    try:
-        return {table: _dump_table(conn, table) for table in _table_names(conn)}
-    finally:
-        conn.close()
-
-
 def _start_mounts(mounts: list[dict]) -> list[dict]:
     started: list[dict] = []
     for mount in mounts:
@@ -273,7 +243,7 @@ def simulators_running(mounts: list[dict]):
 
 
 def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolEvent],
-                  settings: Settings) -> dict:
+                  settings: Settings, invoke: str | None = None) -> dict:
     """Start each simulator, seed it, dump state, replay `calls` (real tool functions), dump again.
 
     `mounts` is [{"sim_dir", "env"}]. Returns {"initial", "final", "replayed"} keyed by simulator
@@ -284,6 +254,8 @@ def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolE
         initial = _snapshots(started)
         spec = {"base_urls": _base_urls(started), "simulators": _sim_hosts(started), "tools": tools,
                 "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
+        if invoke:
+            spec["invoke"] = invoke
         replayed = _run_spec(repo, spec, settings)
         return {"initial": initial, "final": _snapshots(started), "replayed": replayed}
     except _SimError as exc:
@@ -294,13 +266,14 @@ def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolE
 
 
 def measure_service(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict,
-                    settings: Settings, scrub: Scrubber) -> dict:
+                    settings: Settings, scrub: Scrubber, invoke: str | None = None) -> dict:
     """Fidelity of the simulator in `sim_dir` against `calls`. Always kills the process."""
+    if invoke:
+        ctx = {**ctx, "invoke": invoke}
     threshold = settings.survey_fidelity_threshold
     if calls and not _redirectable(ctx):
-        # Nothing can repoint the tool at the simulator (no env var, and no http host the net shim
-        # can rewrite): the real tool would hit its constant, possibly production base URL. Survey
-        # must never do that, so flag the simulator (below-threshold) with an honest reason.
+        # Nothing can repoint the tool at the simulator, so the real (maybe prod) base URL would be
+        # hit. Never do that: flag the simulator below-threshold with an honest reason instead.
         return _failed_result(calls, threshold, _NO_REDIRECT)
     port = _free_port()
     log_path = sim_dir / ".sim.log"

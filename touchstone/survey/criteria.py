@@ -190,12 +190,13 @@ def _mounts(services: list[dict], out: Path, base_url_envs: dict) -> list[dict]:
              "host": service_host(s)} for s in services]
 
 
-def capture_effect(services, out, base_url_envs, repo, tools, calls, settings) -> dict:
+def capture_effect(services, out, base_url_envs, repo, tools, calls, settings,
+                   invoke=None) -> dict:
     """Replay `calls` against the simulators and return {"initial", "final", "replayed"}."""
     if not services:
         return {"initial": {}, "final": {}, "replayed": []}
     mounts = _mounts(services, out, base_url_envs)
-    return fidelity.capture_state(mounts, repo, tools, calls, settings)
+    return fidelity.capture_state(mounts, repo, tools, calls, settings, invoke)
 
 
 def reproduced(calls: list[ToolEvent], replayed: list[dict]) -> bool:

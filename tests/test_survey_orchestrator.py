@@ -44,7 +44,16 @@ store.insert_span(conn, store.Span(episode_id=ep.id, kind="model", name="model",
 conn.close()
 print("red")
 '''
-PIPELINE = [json.dumps(MAP), json.dumps(SIM), json.dumps(GROUPS), json.dumps(TEXT), ENTRY]
+# A canned agent/invoke.py: calls the customer tool by name (adapter check hits the live simulator).
+INVOKE_PY = '''\
+import customer_tools
+
+
+def invoke(name, arguments):
+    return getattr(customer_tools, name)(**arguments)
+'''
+PIPELINE = [json.dumps(MAP), json.dumps(SIM), INVOKE_PY, json.dumps(GROUPS), json.dumps(TEXT),
+            ENTRY]
 
 
 def _seed_db(repo, tool_name="get_widget"):
@@ -112,11 +121,11 @@ def test_survey_idempotent_then_force(tmp_path, monkeypatch):
     provider = ScriptedSurveyProvider(PIPELINE * 2)
     _use(monkeypatch, provider)
     run_survey(repo, settings=_settings(), skip_gate=True)
-    assert len(provider.calls) == 5  # map, sim, group, task text, entry.py
+    assert len(provider.calls) == 6  # map, sim, invoke.py, group, task text, entry.py
     run_survey(repo, settings=_settings(), skip_gate=True)
-    assert len(provider.calls) == 5  # everything reused (agent read back from agent.toml)
+    assert len(provider.calls) == 6  # everything reused (agent read back from agent.toml)
     run_survey(repo, force=True, settings=_settings(), skip_gate=True)
-    assert len(provider.calls) == 10  # force reruns every step
+    assert len(provider.calls) == 12  # force reruns every step
 
 
 def test_survey_no_network_tools(tmp_path, monkeypatch):

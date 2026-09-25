@@ -17,17 +17,19 @@ from pathlib import Path
 from .. import store
 from ..config import Settings, load_settings
 from ..harbor.dataset import Dataset
+from . import fidelity
 from .baseline import run_baseline
 from .environment import build_environment
 from .gate import run_gate
 from .group import group_episodes
+from .invoke import build_invoke
 from .map import build_map
 from .package import build_package
 from .provider import survey_provider
 from .recordings import tool_events
 from .report import render_report, summary
 from .scrub import Scrubber
-from .simulate import crossing_services, generate_simulator, service_tools
+from .simulate import _replay_ctx, crossing_services, generate_simulator, service_tools
 from .sort import sort_tools
 from .tasks import write_tasks
 from .writes import atomic_write, atomic_write_json
@@ -67,7 +69,35 @@ def _map_and_fidelity(repo, prov, out, events, scrub, settings, force):
     return map_data, fidelity_data
 
 
-def _build_tasks(repo, conn, map_data, out, events, scrub, prov, settings, force):
+def _invoke_step(repo, map_data, prov, events, out, scrub, settings, fidelity_data, force):
+    """Generate agent/invoke.py (call the tools by name) and, when it passes its adapter check,
+    re-measure any below-threshold simulator through it. Returns the invoke.py path or None."""
+    if not events:
+        return None
+    _log("invoke: generating agent/invoke.py and adapter-checking it")
+    result = build_invoke(repo, map_data, prov, events, out, settings, force)
+    invoke = result.get("path")
+    if invoke:
+        _remeasure(repo, map_data, events, out, scrub, settings, invoke, fidelity_data)
+        atomic_write_json(out / "fidelity.json", fidelity_data)
+    return invoke
+
+
+def _remeasure(repo, map_data, events, out, scrub, settings, invoke, fidelity_data) -> None:
+    threshold = settings.survey_fidelity_threshold
+    for service in crossing_services(map_data):
+        name = service["name"]
+        if fidelity_data.get(name, {}).get("score", 1.0) >= threshold:
+            continue
+        tools = service_tools(map_data, service)
+        ctx = _replay_ctx(service, tools)
+        calls = [e for e in events if e.tool in {t["name"] for t in tools}]
+        _log(f"invoke: re-measuring {name} through invoke.py")
+        fidelity_data[name] = fidelity.measure_service(
+            out / "simulators" / name, repo, calls, ctx, settings, scrub, invoke)
+
+
+def _build_tasks(repo, conn, map_data, out, events, scrub, prov, settings, force, invoke):
     """group -> environment -> tasks. Returns (groups, env_result, task_result)."""
     if conn is None:
         return None, None, None
@@ -75,6 +105,7 @@ def _build_tasks(repo, conn, map_data, out, events, scrub, prov, settings, force
     groups = group_episodes(conn, events, prov, repo, out, scrub, force)
     _log("environment: snapshotting the repo into an image")
     env_result = build_environment(repo, map_data, out, force)
+    env_result["invoke"] = invoke  # replica dispatch + task criteria route through invoke.py
     _log("tasks: writing Harbor tasks")
     tasks = write_tasks(repo, conn, map_data, groups, events, env_result, prov, scrub,
                         settings, force)
@@ -125,8 +156,10 @@ def run_survey(repo: str | Path, force: bool = False, provider: str | None = Non
     try:
         events = tool_events(conn) if conn else []
         map_data, fidelity_data = _map_and_fidelity(repo, prov, out, events, scrub, settings, force)
+        invoke = _invoke_step(repo, map_data, prov, events, out, scrub, settings, fidelity_data,
+                              force)
         groups, env_result, tasks = _build_tasks(
-            repo, conn, map_data, out, events, scrub, prov, settings, force)
+            repo, conn, map_data, out, events, scrub, prov, settings, force, invoke)
         package = _package_agent(repo, conn, map_data, env_result, prov, out, settings, force)
         gate, baseline = _gate_and_baseline(
             repo, env_result, settings, force, skip_gate, skip_baseline)

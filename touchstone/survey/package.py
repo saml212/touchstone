@@ -54,6 +54,7 @@ TOOLS = {tools!r}
 _IMPORTS = {imports!r}
 _BASE_URLS = {base_urls!r}
 _SIMULATORS = {simulators!r}
+_INVOKE = {invoke!r}  # container path to agent/invoke.py (call tools by name), or None
 
 
 def _env():
@@ -63,14 +64,20 @@ def _env():
     return env
 
 
+def _cmd(name, path, payload):
+    if _INVOKE:  # tools that need a constructed client / central dispatch go through invoke.py
+        return ("python -m touchstone.survey.replay --invoke-one " + shlex.quote(_INVOKE)
+                + " " + shlex.quote(name) + " " + shlex.quote(payload))
+    return ("python -m touchstone.survey.replay --one "
+            + shlex.quote(path) + " " + shlex.quote(payload))
+
+
 async def call(name, arguments, environment):
     path = _IMPORTS.get(name)
-    if path is None:
+    if path is None and not _INVOKE:
         return ""
     payload = json.dumps(arguments, ensure_ascii=False)
-    cmd = ("python -m touchstone.survey.replay --one "
-           + shlex.quote(path) + " " + shlex.quote(payload))
-    result = await environment.exec(cmd, cwd="/app", env=_env())
+    result = await environment.exec(_cmd(name, path or "", payload), cwd="/app", env=_env())
     return result.stdout
 '''
 
@@ -130,11 +137,14 @@ def _sim_manifest(env_result: dict) -> list:
 
 
 def _write_tools_py(agent_dir: Path, map_data: dict, env_result: dict) -> None:
+    from .environment import IMAGE_INVOKE
+
     schemas = map_data.get("schemas") or {}
     tools = [schemas[t["name"]] for t in map_data.get("tools", []) if t.get("name") in schemas]
+    invoke = IMAGE_INVOKE if env_result.get("invoke") else None
     atomic_write(agent_dir / "tools.py", TOOLS_TEMPLATE.format(
         tools=tools, imports=tools_map(map_data), base_urls=_base_urls(env_result),
-        simulators=_simulators_map(env_result)))
+        simulators=_simulators_map(env_result), invoke=invoke))
 
 
 def _write_agent_toml(agent_dir: Path, system: str, model_id: str, mode: str,

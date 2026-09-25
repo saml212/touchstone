@@ -147,6 +147,20 @@ def _vendor_touchstone(dest: Path) -> None:
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"), dirs_exist_ok=True)
 
 
+# The container path the replica dispatch runs invoke.py from (copied here when the survey generated
+# and adapter-passed one). On PYTHONPATH root; loaded by file path, so it need not be a package.
+IMAGE_INVOKE = "/app/_touchstone/invoke.py"
+
+
+def _copy_invoke(out: Path, dest: Path) -> None:
+    """Copy the generated agent/invoke.py into the image so the replica dispatch can call tools by
+    name inside the sandbox. Absent when the survey wrote none (or its adapter check failed)."""
+    src = out / "agent" / "invoke.py"
+    if src.is_file():
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest / "invoke.py")
+
+
 def _pyproject_deps(repo: Path) -> list[str] | None:
     path = repo / "pyproject.toml"
     if not path.is_file():
@@ -231,6 +245,7 @@ def build_environment(repo: Path, map_data: dict, out: Path, force: bool = False
         _copy_simulators(out / "simulators", env_dir / "simulators")
         atomic_write(env_dir / "simulators" / "start.sh", START_SH)
         _vendor_touchstone(env_dir / "_touchstone")
+        _copy_invoke(out, env_dir / "_touchstone")
         atomic_write(env_dir / "_touchstone" / "sitecustomize.py", SITECUSTOMIZE)
         atomic_write(env_dir / "requirements.txt", _requirements_text(deps or []))
         atomic_write(env_dir / "Dockerfile", DOCKERFILE)

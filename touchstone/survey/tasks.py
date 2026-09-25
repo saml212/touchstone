@@ -145,7 +145,7 @@ def _build_task(task_dir, name, dataset, group, ep_id, conn, map_data, env_resul
     services = episode_services(map_data, calls)
     tools = tools_map(map_data)
     effect = capture_effect(services, repo / "touchstone", env_result["base_url_envs"], repo,
-                            tools, calls, settings)
+                            tools, calls, settings, env_result.get("invoke"))
     if "error" in effect:
         return {"skipped": {"episode": ep_id, "task": name, "reason": effect["error"][:200]}}
     if not reproduced(calls, effect["replayed"]):
