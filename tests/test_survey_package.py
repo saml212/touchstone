@@ -9,7 +9,7 @@ import tomllib
 
 from touchstone import store
 from touchstone.config import Settings
-from touchstone.survey import package
+from touchstone.survey import package, package_entry
 from touchstone.survey.provider import ScriptedSurveyProvider
 
 MAP = {
@@ -149,11 +149,11 @@ def test_build_package_replica_when_no_entrypoint(tmp_path):
 
 
 def test_strip_fence_handles_prose_and_fences():
-    assert package._strip_fence("```python\nimport os\n```").strip() == "import os"
+    assert package_entry._strip_fence("```python\nimport os\n```").strip() == "import os"
     # a chatty preamble before the code is dropped
     prose = "Good enough — here it is:\nimport os\nprint(1)\n"
-    assert package._strip_fence(prose).strip() == "import os\nprint(1)"
-    assert package._strip_fence('"""doc"""\nx = 1').strip() == '"""doc"""\nx = 1'
+    assert package_entry._strip_fence(prose).strip() == "import os\nprint(1)"
+    assert package_entry._strip_fence('"""doc"""\nx = 1').strip() == '"""doc"""\nx = 1'
 
 
 def test_build_package_idempotent(tmp_path):

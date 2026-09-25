@@ -57,7 +57,7 @@ def _map_digest(map_data: dict) -> str:
 
 
 def _generate(provider: SurveyProvider, repo: Path, map_data: dict, tools: list[dict]) -> str:
-    from .package import _strip_fence
+    from .package_entry import _strip_fence
 
     prompt = INVOKE_PROMPT.format(map=_map_digest(map_data), tool_source=_tool_source(repo, tools))
     return _strip_fence(provider.run(prompt, repo))

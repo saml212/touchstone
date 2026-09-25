@@ -106,12 +106,15 @@ def _replay_cmd(repo: Path, spec_path: str, settings: Settings) -> list[str]:
 
 
 def _run_spec(repo: Path, spec: dict, settings: Settings) -> list[dict]:
+    from .subproc import with_cli_path
+
     fd, spec_path = tempfile.mkstemp(suffix=".json", prefix="ts-replay-")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(spec, fh, default=str)
     try:
         proc = subprocess.run(_replay_cmd(repo, spec_path, settings), cwd=str(repo),
-                              capture_output=True, text=True, timeout=_REPLAY_TIMEOUT)
+                              capture_output=True, text=True, timeout=_REPLAY_TIMEOUT,
+                              env=with_cli_path(dict(os.environ)))
     finally:
         os.unlink(spec_path)
     if proc.returncode != 0:
