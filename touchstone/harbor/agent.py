@@ -66,6 +66,13 @@ def _agent_dir() -> Path:
     return Path(os.environ.get("TOUCHSTONE_AGENT_DIR", "agent"))
 
 
+def _host_agent_dir() -> Path:
+    """The agent dir as an absolute host path, for uploading into the sandbox. Harbor resolves a
+    relative upload source against the task's environment/ dir, not the dataset root, so the agent
+    dir (which lives at the dataset root, one level above tasks/) must be resolved absolutely."""
+    return _agent_dir().resolve()
+
+
 def _load_tools(agent_dir: Path):
     """Import `agent/tools.py`; return (TOOLS list, call callable). Missing file -> no tools."""
     path = agent_dir / "tools.py"
@@ -131,12 +138,12 @@ class TouchstoneAgent(*_BASES):
                 "python", "-m", "touchstone.harbor.acp_server"]
 
     async def acp_install(self, environment) -> None:
-        await environment.upload_dir(_agent_dir(), AGENT_SANDBOX)
         # The ACP server runs the loop in the sandbox, so it needs acp + the provider's HTTP client
         # (touchstone's openai/anthropic providers are httpx-based) that the base image lacks.
         await environment.exec(
             "uv pip install --system --quiet agent-client-protocol httpx 2>/dev/null || "
             "pip install --quiet agent-client-protocol httpx")
+        await environment.upload_dir(_host_agent_dir(), AGENT_SANDBOX)
 
     def acp_env(self) -> dict:
         var = keys.provider_key_var(self.model_name)
@@ -177,7 +184,7 @@ class TouchstoneAgent(*_BASES):
     async def _run_packaged(self, instruction: str, environment) -> tuple[dict, dict]:
         """Upload the agent dir into the sandbox, run the customer's real entrypoint (run.sh) with
         the model as a setting, then download the trace db its own capture wrote and convert it."""
-        await environment.upload_dir(_agent_dir(), AGENT_SANDBOX)
+        await environment.upload_dir(_host_agent_dir(), AGENT_SANDBOX)
         env = self._packaged_env(load_config())
         cmd = f"printf '%s' {shlex.quote(instruction)} | bash {AGENT_SANDBOX}/run.sh"
         result = await environment.exec(cmd, cwd="/app", env=env)
