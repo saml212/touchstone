@@ -74,25 +74,37 @@ def connect(path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     _ensure_wal(conn)
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA foreign_keys=ON")
+    for pragma in ("synchronous=NORMAL", "busy_timeout=5000", "foreign_keys=ON"):
+        conn.execute(f"PRAGMA {pragma}")
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < SCHEMA_VERSION:
-        with write(conn):
-            if version == 1:  # v1 -> v2: authored artifacts left the DB
-                for table in _DROPPED:
-                    conn.execute(f"DROP TABLE IF EXISTS {table}")
-            if 1 <= version < 5:  # v5: Harbor is the run record; drop the machine-run tables
-                for table in _DROPPED_V5:
-                    conn.execute(f"DROP TABLE IF EXISTS {table}")
-            for statement in SCHEMA.split(";"):
-                if statement.strip():
-                    conn.execute(statement)
-            if version >= 1:  # existing spans predate v3
-                _migrate_spans_v3(conn)
-            conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        _migrate(conn, version)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection, version: int) -> None:
+    """Bring an older (or empty) database up to SCHEMA_VERSION, in one transaction."""
+    with write(conn):
+        _drop_retired_tables(conn, version)
+        _create_tables(conn)
+        if version >= 1:  # existing spans predate v3
+            _migrate_spans_v3(conn)
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
+
+def _drop_retired_tables(conn: sqlite3.Connection, version: int) -> None:
+    if version == 1:  # v1 -> v2: authored artifacts left the DB
+        for table in _DROPPED:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+    if 1 <= version < 5:  # v5: Harbor is the run record; drop the machine-run tables
+        for table in _DROPPED_V5:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+
+def _create_tables(conn: sqlite3.Connection) -> None:
+    for statement in SCHEMA.split(";"):
+        if statement.strip():
+            conn.execute(statement)
 
 
 def _migrate_spans_v3(conn: sqlite3.Connection) -> None:
