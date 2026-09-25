@@ -34,6 +34,12 @@ app.py requirements:
   uvicorn.run(app, host="127.0.0.1", port=port).
 - Reproduce EXACTLY the same routes, path templates, request and response bodies, and HTTP status
   codes as the real service. Do not invent routes that are not used.
+- Emit the RAW upstream response body — the bytes the tool receives BEFORE it parses them. Each
+  recorded call's "returned" value is what the TOOL FUNCTION returned AFTER parsing that body (read
+  "Tool source" to see how). Return the raw body the tool source parses into "returned", reproducing
+  the upstream wire shape, NOT the parsed result: if the tool returns response.json() unchanged the
+  body equals "returned"; if it extracts nested fields (e.g. `data["current"]["temp_c"]`) the body
+  must nest them exactly so (a `current` object here), or the real tool will raise KeyError on replay.
 - Back it with a SQLite file named state.db beside app.py.
 - Load seed.json into state.db on startup AND on `POST /__reset` (drop and recreate tables first).
 - `GET /__health` returns 200 with a JSON body.
@@ -51,7 +57,8 @@ simulates, which routes, and how it was derived.
 {service_source}
 ## API docs / OpenAPI
 {docs}
-## Recorded calls (scrubbed; tool, arguments, returned)
+## Recorded calls (scrubbed; tool, arguments, and the tool's PARSED return — reconstruct the raw
+## response body from the tool source above)
 {examples}
 {hint}
 Return only the JSON object."""

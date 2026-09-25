@@ -237,3 +237,51 @@ def test_loopback_default_host_is_not_shimmed_when_env_overrides():
            "tools": {"t": "m:t"}}
     spec = _replay_spec([ToolEvent("t", {}, {}, "e")], "http://127.0.0.1:8000", ctx)
     assert "simulators" not in spec
+
+
+# A tool that TRANSFORMS the response (extracts nested fields) — the recorded output is the parsed
+# value, so the simulator must emit the raw wire body the tool parses, not the parsed value itself.
+TRANSFORM_TOOL = '''\
+import os
+import httpx
+
+BASE = os.environ.get("WIDGET_URL", "http://127.0.0.1:9")
+
+
+def get_widget(widget_id: str) -> dict:
+    data = httpx.get(f"{BASE}/widgets/{widget_id}", timeout=5).json()
+    return {"id": widget_id, "color": data["result"]["color"]}
+'''
+
+TRANSFORM_SIM = '''\
+import sys
+
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/__health")
+def health():
+    return {"ok": True}
+
+
+@app.get("/widgets/{widget_id}")
+def get_widget(widget_id: str):
+    return {"result": {"color": "red"}, "meta": {"served": True}}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=int(sys.argv[1]))
+'''
+
+
+def test_transforming_tool_needs_raw_wire_body(tmp_path):
+    (tmp_path / "customer_tools.py").write_text(TRANSFORM_TOOL, encoding="utf-8")
+    answer = json.dumps({"app.py": TRANSFORM_SIM, "seed.json": {}, "README.md": "x"})
+    # recorded output is the tool's PARSED return; the sim emits the nested wire body it parses.
+    events = [ToolEvent("get_widget", {"widget_id": "w1"}, {"id": "w1", "color": "red"}, "e1")]
+    result = generate_simulator(tmp_path, ScriptedSurveyProvider([answer]), SERVICE, TOOLS, events,
+                                tmp_path / "touchstone" / "simulators", Scrubber(), _settings())
+    assert result["score"] == 1.0 and result["failures"] == []
