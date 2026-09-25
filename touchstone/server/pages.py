@@ -285,10 +285,25 @@ def task_detail(dataset_dir: Path, jobs_dir: Path, name: str) -> dict | None:
 # ---- Trials (job picker + one trial) ---------------------------------------
 
 
+def _mark_superseded(summaries: list[dict]) -> None:
+    """Flag each row `kept` (a model run that is the latest for its agent+model — what the review
+    room walks) or `superseded` (an older non-gate run); gate rows are neither."""
+    latest: dict[tuple, str] = {}
+    for s in summaries:  # ascending timestamped name -> last wins
+        if not s["gate"]:
+            latest[(s["agent"], s["model"])] = s["job"]
+    for s in summaries:
+        s["kept"] = not s["gate"] and latest.get((s["agent"], s["model"])) == s["job"]
+        s["superseded"] = not s["gate"] and not s["kept"]
+
+
 def jobs(jobs_dir: Path) -> list[dict]:
-    """Every job dir as a picker row, newest first."""
-    return sorted((_job_summary(d) for d in _all_job_dirs(jobs_dir)),
-                  key=lambda r: r["job"], reverse=True)
+    """Every job dir as a picker row, newest first, each marked kept / superseded / gate so the UI
+    can default to the runs the review room keeps and reveal the rest behind a toggle."""
+    summaries = [_job_summary(d) for d in _all_job_dirs(jobs_dir)]
+    _mark_superseded(summaries)
+    summaries.sort(key=lambda r: r["job"], reverse=True)
+    return summaries
 
 
 def job_rewards(jobs_dir: Path, job: str) -> dict | None:

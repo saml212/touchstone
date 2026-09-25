@@ -18,6 +18,7 @@ from touchstone.config import Settings
 from touchstone.server import create_app
 
 MODEL_JOB = "2026-01-01__00-00-00"
+OLD_JOB = "2025-12-31__00-00-00"
 GATE_JOB = "2026-01-01__01-00-00"
 
 
@@ -71,6 +72,8 @@ def _seed(db: str) -> Path:
     model_job = _job(ds, MODEL_JOB, "touchstone.harbor.agent:TouchstoneAgent", "openai/gpt-4o-mini")
     _trial(model_job, "issue-a-refund-1", 0.5, "gpt-4o-mini")   # verifier unsure
     _trial(model_job, "check-order-status-1", 1.0, "gpt-4o-mini")
+    old_job = _job(ds, OLD_JOB, "touchstone.harbor.agent:TouchstoneAgent", "openai/gpt-4o-mini")
+    _trial(old_job, "issue-a-refund-1", 1.0, "gpt-4o-mini")   # same model, older -> superseded
     gate_job = _job(ds, GATE_JOB, "oracle", "oracle")
     _trial(gate_job, "issue-a-refund-1", 1.0, "oracle")
     _write(ds / "groups.json", json.dumps({"groups": [
@@ -147,10 +150,11 @@ def test_task_detail_has_instruction_weights_and_trials(db):
 def test_jobs_picker_and_per_job_rewards(db):
     _seed(db)
     c = _client(db)
-    jobs = c.get("/api/pages/jobs").json()["jobs"]
-    assert [j["job"] for j in jobs] == [GATE_JOB, MODEL_JOB]   # newest first
-    gate = next(j for j in jobs if j["job"] == GATE_JOB)
-    assert gate["gate"] is True
+    jobs = {j["job"]: j for j in c.get("/api/pages/jobs").json()["jobs"]}
+    assert list(jobs) == [GATE_JOB, MODEL_JOB, OLD_JOB]        # newest first
+    assert jobs[GATE_JOB]["gate"] is True and jobs[GATE_JOB]["kept"] is False
+    assert jobs[MODEL_JOB]["kept"] is True and jobs[MODEL_JOB]["superseded"] is False
+    assert jobs[OLD_JOB]["kept"] is False and jobs[OLD_JOB]["superseded"] is True
     rewards = c.get(f"/api/pages/jobs/{MODEL_JOB}").json()
     assert rewards["model"] == "openai/gpt-4o-mini"
     by_task = {r["task"]: r["reward"] for r in rewards["rewards"]}

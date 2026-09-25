@@ -80,12 +80,22 @@ async function overviewPage() {
   }
   view.innerHTML = `
     <div class="lede">${esc(o.sentence)}</div>
-    <a class="cta" href="#/review">Walk through the trials →</a>
+    <button class="cta" id="ctaReview">${esc(ctaLabel(o.sentence))} →</button>
     ${o.map ? `<p class="map">${esc(o.map)}</p>` : ""}
     ${overviewJobs(o.jobs_to_be_done)}
     ${overviewServices(o.services)}
     ${overviewLatest(o.latest_jobs)}
     ${overviewTrust(o.trust)}`;
+  document.getElementById("ctaReview").onclick = () => openNewRoom("review");
+}
+
+function ctaLabel(sentence) {
+  return /spot-check/i.test(sentence) ? "Spot-check a few" : "Walk through them";
+}
+
+async function openNewRoom(topic) {
+  const state = await api("/api/rooms", "POST", { topic });
+  location.href = `/rooms/${state.room.id}`;
 }
 
 function overviewJobs(jobs) {
@@ -207,14 +217,38 @@ async function trialsPage(args) {
     view.innerHTML = `<h2>Trials</h2><p class="muted">No jobs yet — run <code>touchstone bench</code>.</p>`;
     return;
   }
-  const rows = jobs.map((j) => [
-    link(`/trials/${encodeURIComponent(j.job)}`, fmtJob(j.job)),
-    esc(j.model || j.agent), `${esc(j.passed)}/${esc(j.tasks)}`,
-    j.gate ? badge("gate") : "",
-  ]);
-  view.innerHTML = `<h2>Trials <span class="count">${jobs.length}</span></h2>
-    <p class="muted">Pick a job to see its per-task rewards.</p>
-    ${table(["job", "agent / model", "passed", ""], rows)}`;
+  const kept = jobs.filter((j) => j.kept).length;
+  view.innerHTML = `<h2>Trials <span class="count">${jobs.length} · showing
+      <span id="shown">${kept}</span></span></h2>
+    <p class="muted">The latest run per model — what the review room walks. Pick one for its
+      per-task rewards.</p>
+    <label class="toggle"><input type="checkbox" id="showAll"> show all runs (gate &amp; superseded)</label>
+    ${jobsTable(jobs)}`;
+  const showAll = document.getElementById("showAll");
+  const extras = view.querySelectorAll("tr.extra");
+  extras.forEach((tr) => (tr.hidden = true));
+  showAll.onchange = () => {
+    extras.forEach((tr) => (tr.hidden = !showAll.checked));
+    document.getElementById("shown").textContent = showAll.checked ? jobs.length : kept;
+  };
+}
+
+function jobRunMark(j) {
+  if (j.gate) return badge("gate");
+  if (j.superseded) return badge("superseded");
+  return badge("model run", "outcome");
+}
+
+function jobsTable(jobs) {
+  const head = ["job", "agent / model", "passed", "run"].map((h) => `<th>${esc(h)}</th>`).join("");
+  const body = jobs.map((j) => {
+    const cells = [
+      link(`/trials/${encodeURIComponent(j.job)}`, fmtJob(j.job)),
+      esc(j.model || j.agent), `${esc(j.passed)}/${esc(j.tasks)}`, jobRunMark(j),
+    ];
+    return `<tr class="${j.kept ? "" : "extra"}">${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`;
+  }).join("");
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 async function jobRewards(job) {
@@ -290,10 +324,7 @@ async function reviewPage() {
     <button id="startRoom">Start a review</button>
     <h3>Rooms</h3>
     ${rows.length ? table(["room", "task", "state"], rows) : `<p class="muted">No rooms yet.</p>`}`;
-  document.getElementById("startRoom").onclick = async () => {
-    const state = await api("/api/rooms", "POST", { topic: "review" });
-    location.href = `/rooms/${state.room.id}`;
-  };
+  document.getElementById("startRoom").onclick = () => openNewRoom("review");
 }
 
 // ---- Train -----------------------------------------------------------------
@@ -307,12 +338,16 @@ async function trainPage() {
   }
   const c = t.counts;
   const tiles = [
-    ["Distill", c.distill], ["RL", c.rl], ["Hold-out", c.hold_out], ["Stuck", c.stuck],
+    ["tasks → distill", c.distill], ["tasks → RL", c.rl], ["tasks → hold-out", c.hold_out],
+    ["tasks → stuck", c.stuck], ["distill trajectories", t.trajectories],
   ].map(([k, v]) => `<div class="tile"><div class="num">${esc(v)}</div><div class="lbl">${esc(k)}</div></div>`).join("");
   view.innerHTML = `<h2>Train</h2>
-    <p class="muted">Each task routes by its pass rate: 0 → distill · 0–1 → RL · 1 → hold out.
-      ${t.trajectories} distill trajectories · threshold ${esc(t.threshold)}.</p>
+    <p class="muted">Each task routes by the student's pass rate across its trials; threshold
+      ${esc(t.threshold)}.</p>
     <div class="tiles">${tiles}</div>
+    <p class="legend"><b>distill</b> — the student copies the teacher's passing runs ·
+      <b>rl</b> — tasks the student passes sometimes (0&lt;rate&lt;1), trained against the verifier ·
+      <b>hold-out</b> — already passes, kept for evaluation · <b>stuck</b> — neither passes.</p>
     <h3>Re-run</h3>
     <pre id="cmd">${esc(t.command)}</pre>
     <button id="copyCmd" class="ghost">Copy command</button>

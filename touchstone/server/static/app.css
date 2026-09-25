@@ -338,3 +338,8 @@ td ul.mini { padding-left: 16px; }
 .dimblock { margin-bottom: 12px; }
 .dimhead { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
 .dimhead code { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--brick); }
+
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin: 4px 0 12px; cursor: pointer; }
+.toggle input { accent-color: var(--brick); }
+.legend { font-size: 13px; color: var(--muted); max-width: 760px; margin: 10px 0 4px; line-height: 1.5; }
+.legend b { color: var(--ink); }
