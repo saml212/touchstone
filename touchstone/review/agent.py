@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .. import store
 from ..harbor import run as run_mod
@@ -242,9 +243,14 @@ class ReviewAgent:
         targets = _shared_tasks(self.dataset_dir, task) if args.get("always") else [task]
         for name in targets:  # refuse an unvalidated/malformed change before writing any file
             changes.validate(self.dataset_dir / "tasks" / name, change)
+        backups = {name: _read_tests(self.dataset_dir / "tasks" / name) for name in targets}
         for name in targets:
             changes.apply(self.dataset_dir / "tasks" / name, change)
         result = self._regrade_current()
+        if len(result.get("failed", [])) >= len(targets) > 0:  # broke the verifier everywhere
+            for name, files in backups.items():
+                _write_tests(self.dataset_dir / "tasks" / name, files)
+            result["reverted"] = targets
         self._note_applied(change, targets, result)
         return {"applied_to": targets, **result}
 
@@ -316,6 +322,18 @@ class ReviewAgent:
         if not current:
             return None
         return trials.read(self.dataset_dir, self.jobs_dir, current["task"], current["trial"])
+
+
+def _read_tests(task_dir: Path) -> dict[Path, str]:
+    """Every file under tests/, so a change that breaks the verifier can be put back."""
+    tests = task_dir / "tests"
+    return {p.relative_to(tests): p.read_text(encoding="utf-8")
+            for p in tests.rglob("*") if p.is_file()}
+
+
+def _write_tests(task_dir: Path, files: dict[Path, str]) -> None:
+    for rel, text in files.items():
+        (task_dir / "tests" / rel).write_text(text, encoding="utf-8")
 
 
 def _applied(call: dict, result: str) -> dict | None:

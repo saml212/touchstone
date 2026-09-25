@@ -370,3 +370,24 @@ def test_applied_reply_reads_out_deltas_and_failures():
     assert "Applied to refund-order-2." in text
     assert "refund-order-2 100% → 88%" in text or "refund-order-2 100% → 87%" in text
     assert "Could not regrade: x (RegradeError: no artifact)" in text
+
+
+def test_apply_reverts_when_the_change_breaks_every_verifier(tmp_path):
+    from touchstone.harbor import rewardkit
+    from touchstone.review import agent as review_agent
+
+    ds = tmp_path / "touchstone"
+    task = ds / "tasks" / "t1"
+    (task / "tests" / "correctness").mkdir(parents=True)
+    (task / "task.toml").write_text("[metadata.touchstone]\n")
+    rewardkit.write_criteria(task / "tests" / "correctness", "state", ["rk.file_exists('a')"])
+    before = (task / "tests" / "correctness" / "state.py").read_text()
+    ra = review_agent.ReviewAgent.__new__(review_agent.ReviewAgent)
+    ra.dataset_dir = ds
+    proposed = {"op": "remove", "file": "tests/correctness/state.py", "criterion": 1}
+    ra.scratch = review_agent._Scratch(current={"task": "t1", "trial": "j/t"}, proposed=proposed)
+    failed = [{"task": "t1", "error": "RewardFileNotFoundError: x"}]
+    ra._regrade_current = lambda: {"job": "j2", "deltas": [], "failed": failed}
+    out = ra._apply_change({"task": "t1"})
+    assert out["reverted"] == ["t1"]
+    assert (task / "tests" / "correctness" / "state.py").read_text() == before

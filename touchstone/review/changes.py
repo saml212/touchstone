@@ -71,12 +71,38 @@ def _rk_call_source(node: ast.stmt, source: str) -> str | None:
     return ast.get_source_segment(source, node.value)
 
 
+# The rewardkit built-ins a change may call (docs: built-in criteria). A model that invents a name
+# or prefixes it with "rk." is corrected or refused here, before anything is written.
+KNOWN_CRITERIA = {
+    "sqlite_query_equals", "json_key_equals", "csv_cell_equals", "xlsx_cell_equals",
+    "file_exists", "file_contains", "trajectory_tool_used", "trajectory_tool_not_used",
+    "trajectory_turn_count", "http_get_status",
+}
+
+
 def _render_call(params: dict) -> str:
-    fn = params.get("fn")
+    fn = (params.get("fn") or "").removeprefix("rk.")
     if not fn:
         raise ChangeError("a criterion change needs params.fn (the rewardkit function).")
+    if fn not in KNOWN_CRITERIA:
+        raise ChangeError(f"unknown criterion {fn!r}; use one of {sorted(KNOWN_CRITERIA)}.")
     args = ", ".join(repr(a) for a in params.get("args", []))
     return f"rk.{fn}({args})"
+
+
+def _with_expected(source: str, expected) -> str:
+    """The same call with its last argument (what the check expects) replaced — the edit a product
+    person makes most: "the number should be X". Keeps the db, query, and function untouched."""
+    node = ast.parse(source).body[0].value
+    old = node.args[-1].value if node.args and isinstance(node.args[-1], ast.Constant) else None
+    if isinstance(old, (int, float)) and isinstance(expected, str):
+        try:
+            expected = float(expected) if "." in expected else int(expected)
+        except ValueError as exc:
+            raise ChangeError(f"expected {expected!r} is not a number like the current "
+                              "value.") from exc
+    node.args[-1] = ast.Constant(value=expected)
+    return ast.unparse(node)
 
 
 def _index(criterion, count: int) -> int:
@@ -94,7 +120,10 @@ def _apply_py(path: Path, op: str, criterion, params: dict | None) -> None:
     if op == "add":
         calls.append(_render_call(params or {}))
     elif op == "edit":
-        calls[_index(criterion, len(calls))] = _render_call(params or {})
+        i = _index(criterion, len(calls))
+        params = params or {}
+        calls[i] = (_with_expected(calls[i], params["expected"]) if "expected" in params
+                    else _render_call(params))
     elif op == "remove":
         calls.pop(_index(criterion, len(calls)))
     else:

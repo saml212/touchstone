@@ -10,17 +10,15 @@ from __future__ import annotations
 # never invents its own keys (an {"action": ...} shape silently does nothing).
 CHANGE_SCHEMA = (
     "`change` is ONE object (or a list of them) using EXACTLY these keys — never invent others. "
-    "For a check in a tests/*.py file: "
-    "{\"op\": \"edit\"|\"add\"|\"remove\", \"file\": \"<from the criterion handle>\", "
-    "\"criterion\": <1-based index from the handle>, "
-    "\"params\": {\"fn\": \"<rewardkit fn>\", \"args\": [...]}}. "
-    "Examples — edit: {\"op\":\"edit\",\"file\":\"tests/correctness/state.py\",\"criterion\":2,"
-    "\"params\":{\"fn\":\"sqlite_query_equals\","
-    "\"args\":[\"s/state.db\",\"SELECT refunded\",200]}}; "
-    "add: {\"op\":\"add\",\"file\":\"tests/correctness/state.py\","
-    "\"params\":{\"fn\":\"sqlite_query_equals\","
-    "\"args\":[\"s/state.db\",\"SELECT status\",\"done\"]}}; "
-    "remove: {\"op\":\"remove\",\"file\":\"tests/correctness/state.py\",\"criterion\":3}. "
+    "To change what a check expects (the usual case) keep everything else and set only the value: "
+    "{\"op\":\"edit\",\"file\":\"<from the criterion handle>\",\"criterion\":<1-based index>,"
+    "\"params\":{\"expected\": <new value, a number stays a number>}}. "
+    "To remove a check: {\"op\":\"remove\",\"file\":\"...\",\"criterion\":<index>}. "
+    "To add a check, give the full call with a bare rewardkit name (never \"rk.\"): "
+    "{\"op\":\"add\",\"file\":\"tests/correctness/state.py\",\"params\":{\"fn\":"
+    "\"sqlite_query_equals\",\"args\":[\"<db path from a sibling check>\",\"<full SQL>\","
+    "<expected>]}}. Always include \"description\": one plain sentence a product person can "
+    "say yes to. "
     "A dimension weight: {\"op\":\"edit\",\"file\":\"tests/reward.toml\",\"criterion\":\"safety\","
     "\"weight\":1.0}. Instruction/persona wording: "
     "{\"op\":\"text\",\"file\":\"instruction.md\",\"text\":\"<full new text>\"}."
@@ -60,7 +58,8 @@ TOOLS = [
         "description": "Apply the change you just proposed and read back, regrade the trial's job, "
                        "and report the new reward and any other trials that moved. Takes no change "
                        "argument — it always writes the last proposed change, never a new one. "
-                       "always=true applies it to every task with the same job.",
+                       "always=true ONLY when the person said every/all/always/everywhere; "
+                       "otherwise false.",
         "parameters": {"type": "object", "properties": {
             "task": {"type": "string"},
             "always": {"type": "boolean"}}}}},

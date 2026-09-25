@@ -159,3 +159,28 @@ def test_describe_uses_plain_words_never_raw_code():
     assert "returns 183.18" in changes.describe(edit)
     assert changes.describe({**edit, "description": "order B1 shows $183.18 refunded"}) == \
         "change check 1 to order B1 shows $183.18 refunded"
+
+
+def test_expected_shortcut_keeps_the_query_and_coerces_numbers(tmp_path):
+    from touchstone.harbor import rewardkit
+    from touchstone.review import changes
+
+    tests = tmp_path / "tests" / "correctness"
+    tests.mkdir(parents=True)
+    sql = "SELECT refunded FROM orders WHERE id='B1'"
+    line = f"rk.sqlite_query_equals('s/state.db', {sql!r}, 100.0)"
+    rewardkit.write_criteria(tests, "state", [line])
+    changes.apply(tmp_path, {"op": "edit", "file": "tests/correctness/state.py", "criterion": 1,
+                             "params": {"expected": "183.18"}})
+    line = (tests / "state.py").read_text().splitlines()[-1]
+    assert line.endswith("WHERE id='B1'\", 183.18)") and "SELECT refunded FROM orders" in line
+
+
+def test_criterion_names_are_normalised_or_refused(tmp_path):
+    import pytest
+
+    from touchstone.review import changes
+
+    assert changes._render_call({"fn": "rk.file_exists", "args": ["x"]}) == "rk.file_exists('x')"
+    with pytest.raises(changes.ChangeError):
+        changes._render_call({"fn": "made_up", "args": []})

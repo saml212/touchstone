@@ -83,4 +83,7 @@ def applied_reply(result: dict) -> str:
     if failed:
         broken = "; ".join(f"{f['task']} ({f['error']})" for f in failed)
         lines.append(f"Could not regrade: {broken}")
+    if result.get("reverted"):
+        lines.append("That change broke the verifier on every task it touched, so I put the files "
+                     "back as they were.")
     return " ".join(lines) + " Want to look at the next trial?"
