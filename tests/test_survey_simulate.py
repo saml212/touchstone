@@ -201,3 +201,39 @@ def test_generated_simulator_is_forced_to_bind_loopback(tmp_path):
     written = (repo / "touchstone" / "simulators" / "widget" / "app.py").read_text()
     assert 'host="127.0.0.1"' in written
     assert "0.0.0.0" not in written
+
+
+def test_crossing_services_skips_a_service_no_tool_calls():
+    # The model SDK the agent thinks with often shows up as a service with no tool referencing it;
+    # it is swapped by setting, not simulated, so it must be dropped (not given an empty simulator).
+    from touchstone.survey.simulate import crossing_services
+    map_data = {
+        "tools": [{"name": "get_today_weather", "calls": ["WeatherAPI"]}],
+        "services": [{"name": "OpenAI", "kind": "sdk", "base_url_env": None, "calls": []},
+                     {"name": "WeatherAPI", "kind": "http", "base_url_env": None,
+                      "base_url_default": "http://api.weatherapi.com/v1", "calls": []}],
+    }
+    assert [s["name"] for s in crossing_services(map_data)] == ["WeatherAPI"]
+
+
+def test_external_host_is_shielded_by_the_shim_even_with_a_base_url_env():
+    # If the map wrongly records an API-key var as base_url_env, the env override would not repoint
+    # the hard-coded external host. The shim shield rewrites that host so replay never hits it.
+    from touchstone.survey.fidelity import _replay_spec
+    from touchstone.survey.recordings import ToolEvent
+    ctx = {"base_url_env": "WEATHER_API_KEY", "host": "api.weatherapi.com", "kind": "http",
+           "tools": {"t": "m:t"}}
+    spec = _replay_spec([ToolEvent("t", {}, {}, "e")], "http://127.0.0.1:9999", ctx)
+    assert spec["base_url_env"] == "WEATHER_API_KEY"
+    assert spec["simulators"] == {"api.weatherapi.com": "http://127.0.0.1:9999"}
+
+
+def test_loopback_default_host_is_not_shimmed_when_env_overrides():
+    # A dev-default loopback host with a real base_url_env is repointed by the env var alone; the
+    # shim must not broadly rewrite 127.0.0.1.
+    from touchstone.survey.fidelity import _replay_spec
+    from touchstone.survey.recordings import ToolEvent
+    ctx = {"base_url_env": "ORDERS_URL", "host": "127.0.0.1", "kind": "http",
+           "tools": {"t": "m:t"}}
+    spec = _replay_spec([ToolEvent("t", {}, {}, "e")], "http://127.0.0.1:8000", ctx)
+    assert "simulators" not in spec

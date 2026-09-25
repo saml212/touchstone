@@ -6,7 +6,8 @@ import subprocess
 from touchstone.survey.environment import build_environment
 
 MAP = {
-    "tools": [{"name": "get_widget", "calls": ["widget"]}],
+    "tools": [{"name": "get_widget", "calls": ["widget"]},
+              {"name": "get_paint", "calls": ["paint"]}],
     "services": [{"name": "widget", "kind": "http", "base_url_env": "WIDGET_URL", "calls": []},
                  {"name": "paint", "kind": "http", "base_url_env": "PAINT_URL", "calls": []}],
 }

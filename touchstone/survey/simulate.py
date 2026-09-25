@@ -58,10 +58,16 @@ Return only the JSON object."""
 
 
 def crossing_services(map_data: dict) -> list[dict]:
-    """Services reached over the network, one per base-url env var (else per name)."""
+    """Services a tool actually reaches over the network, one per base-url env var (else per name).
+
+    A service no tool calls (commonly the model SDK the agent thinks with) is not a boundary to
+    simulate — the model is swapped by setting — so it is dropped rather than given an empty sim."""
+    called = {c for t in map_data.get("tools", []) for c in (t.get("calls") or [])}
     seen: set = set()
     out: list[dict] = []
     for service in map_data.get("services", []):
+        if service.get("name") not in called:
+            continue
         key = service.get("base_url_env") or f"name:{service.get('name')}"
         if key not in seen:
             seen.add(key)

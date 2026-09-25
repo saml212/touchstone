@@ -122,15 +122,29 @@ def _run_spec(repo: Path, spec: dict, settings: Settings) -> list[dict]:
         raise _SimError(f"replay output was not JSON:\n{proc.stdout[-500:]}") from exc
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
+
+def _external_host(host: str | None) -> bool:
+    return bool(host) and host not in _LOOPBACK_HOSTS and not host.startswith("127.")
+
+
+def _shim_host(host: str | None, base_url_env) -> bool:
+    """Rewrite the host with the net shim when it is the only redirect (no base_url_env), or as a
+    shield for a real external host — so a base_url_env the map got wrong (e.g. an API-key var) can
+    never let replay reach the real service."""
+    return bool(host) and (not base_url_env or _external_host(host))
+
+
 def _replay_spec(calls: list[ToolEvent], base: str, ctx: dict) -> dict:
-    """A replay spec that repoints the service at `base`: by env var when the map has one, else by
-    rewriting the constant host with the net shim (simulators = {host: base})."""
+    """A replay spec that repoints the service at `base`: by env var when the map has one, and/or by
+    rewriting the host with the net shim (simulators = {host: base})."""
     spec = {"tools": ctx["tools"],
             "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
     if ctx.get("base_url_env"):
         spec["base_url_env"] = ctx["base_url_env"]
         spec["base_url"] = base
-    else:
+    if _shim_host(ctx.get("host"), ctx.get("base_url_env")):
         spec["simulators"] = {ctx["host"]: base}
     return spec
 
@@ -238,8 +252,9 @@ def _base_urls(started: list[dict]) -> dict:
 
 
 def _sim_hosts(started: list[dict]) -> dict:
-    """host -> simulator base for a constant-host service (no env var): the net-shim rewrite map."""
-    return {s["host"]: s["base"] for s in started if s.get("host") and not s["env"]}
+    """host -> simulator base for the net-shim rewrite: services with no env var, plus a shield for
+    any real external host so a wrong base_url_env can never reach the real service."""
+    return {s["host"]: s["base"] for s in started if _shim_host(s.get("host"), s["env"])}
 
 
 @contextlib.contextmanager

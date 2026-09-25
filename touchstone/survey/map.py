@@ -99,8 +99,17 @@ JSON object and nothing else (no prose, no markdown fences). Use this exact shap
 
 A "tool" is a function the model can call. A "service" is anything a tool reaches over the
 network: an HTTP API, a database driver, or a vendor SDK. A tool that reaches no service has an
-empty "calls" list. Report every tool and every service you find. Keep "text" to 200 characters.
-Return only the JSON object."""
+empty "calls" list. Do not list the model/LLM SDK the agent calls to think (e.g. the OpenAI or
+Anthropic client behind model_call) as a service unless a TOOL calls it — the model is swapped by
+setting, not simulated.
+
+"base_url_env" is the environment variable that holds the service's BASE URL or host, and nothing
+else. An API key, token, or secret env var (e.g. WEATHER_API_KEY, STRIPE_API_KEY, X_API_KEY) is NOT
+a base_url_env — if only the key comes from the environment and the host is written into the source,
+set "base_url_env" to null and put the hard-coded host in "base_url_default".
+
+Report every tool and every service you find. Keep "text" to 200 characters. Return only the JSON
+object."""
 
 
 def _parse_and_validate(text: str) -> dict:
