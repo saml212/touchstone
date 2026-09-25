@@ -94,6 +94,18 @@ def test_open_statement_names_jobs_and_pass_count(tmp_path, conn):
     assert "2 tasks" in opening and "passes 1" in opening
 
 
+def test_open_statement_flags_gated_tasks_the_baseline_never_ran(tmp_path, conn):
+    """A baseline that covered only some of the gated tasks reads as "K of the R run (U not run)",
+    the same shared counting the first-five sentence uses — never "passes 2 of 2"."""
+    dataset = _dataset(tmp_path)
+    # a third gated task exists, but the baseline (2 tasks) never ran it
+    _task(dataset, "issue-a-refund-3")
+    agent = ReviewAgent(None, conn, _room(conn), _settings(tmp_path))
+    opening = agent.open_statement()
+    assert "3 tasks" in opening and "passes 1 of the 2 run" in opening
+    assert "1 not run yet" in opening
+
+
 def test_present_a_trial_sets_current(tmp_path, conn):
     _dataset(tmp_path)
     room = _room(conn)

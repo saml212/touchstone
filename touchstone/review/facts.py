@@ -62,6 +62,29 @@ def _task_count(dataset_dir: Path) -> int:
     return sum(1 for d in tasks.glob("*") if (d / "task.toml").is_file()) if tasks.is_dir() else 0
 
 
+def _gated_tasks(dataset_dir: Path) -> list[str]:
+    """The names of the tasks currently in the dataset (a gated task has a task.toml)."""
+    tasks = dataset_dir / "tasks"
+    if not tasks.is_dir():
+        return []
+    return sorted(d.name for d in tasks.glob("*") if (d / "task.toml").is_file())
+
+
+def _baseline_sets(dataset_dir: Path) -> dict | None:
+    """{"ran": [names the latest baseline ran], "passed": [names it passed]} or None when there is
+    no baseline yet — so the opening can say "K passed of R run, U not run" like the first-five
+    sentence, instead of pretending every gated task was benchmarked."""
+    baseline = dataset_dir / "baseline.json"
+    if not baseline.is_file():
+        return None
+    try:
+        data = json.loads(baseline.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return {"ran": list((data.get("pass_rates") or {}).keys()),
+            "passed": list(data.get("passed") or [])}
+
+
 def _join(items: list[str]) -> str:
     items = [i.lower() for i in items]
     if len(items) <= 1:

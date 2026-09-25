@@ -187,17 +187,22 @@ def _task_clause(stats: dict) -> str:
     return head + f" ({stats.get('gated', 0)} gated, {stats.get('needs_review', 0)} needs review)."
 
 
+def passes_counts(built_names, ran, passed) -> tuple[int, int, int, int]:
+    """(N, K, R, U) over the tasks built now: N built, K of them passed in the latest baseline,
+    R were run by it, U were not run (new since that baseline). Shared by the first-five sentence
+    and the review room's opening so both count the same way."""
+    built = set(built_names)
+    n = len(built)
+    return n, len(built & set(passed)), len(built & set(ran)), n - len(built & set(ran))
+
+
 def first_five_sentence(built_names, convos: int, ran, passed) -> str:
     """The first-five-minutes sentence, shared by the CLI summary and the Overview page.
 
     N = tasks built now; among them, K passed in the LATEST baseline, R were run, U were not run
     (new since that baseline). When U > 0 the baseline is stale — point to `touchstone bench` — so
     the sentence never says "everything passes" while some gated tasks were never actually run."""
-    built = set(built_names)
-    n = len(built)
-    k = len(built & set(passed))
-    r = len(built & set(ran))
-    u = n - r
+    n, k, r, u = passes_counts(built_names, ran, passed)
     head = f"Built {_plural(n, 'task')}" + (f" from {_plural(convos, 'conversation')}" if convos
                                             else "")
     if u > 0:

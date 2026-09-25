@@ -16,14 +16,15 @@ from dataclasses import dataclass, field
 from .. import store
 from ..harbor import run as run_mod
 from ..interview import rooms
+from ..survey.report import passes_counts
 from . import changes, regrade, replies, trials
 from .facts import (
-    _baseline_counts,
+    _baseline_sets,
     _editable,
+    _gated_tasks,
     _job_labels,
     _join,
     _shared_tasks,
-    _task_count,
 )
 from .prompt import SYSTEM, TOOLS
 
@@ -73,14 +74,24 @@ class ReviewAgent:
 
     def open_statement(self) -> str:
         jobs_done = _job_labels(self.dataset_dir)
-        counts = _baseline_counts(self.dataset_dir)
-        if not jobs_done and not counts:
+        built = _gated_tasks(self.dataset_dir)
+        if not jobs_done and not built:
             return (f"Let's review “{self.room.topic}”. I couldn't find a benchmark here "
                     "yet — run `touchstone survey` first, then reopen this room.")
         does = _join(jobs_done) or "several jobs"
-        tail = (f"{counts['tasks']} tasks, your current setup passes {counts['passed']}."
-                if counts else f"{_task_count(self.dataset_dir)} tasks.")
-        return f"Your agent handles {does}; {tail} {self._offer()}"
+        return f"Your agent handles {does}; {self._pass_tail(built)} {self._offer()}"
+
+    def _pass_tail(self, built: list[str]) -> str:
+        """"N tasks, your current setup passes K [of the R run (U not run yet)]" — the same shared
+        counting the first-five sentence uses, so a baseline that ran only some gated tasks never
+        reads as "passes N of N"."""
+        sets = _baseline_sets(self.dataset_dir)
+        if sets is None:
+            return f"{len(built)} tasks."
+        n, k, r, u = passes_counts(built, sets["ran"], sets["passed"])
+        if u > 0:
+            return f"{n} tasks, your current setup passes {k} of the {r} run ({u} not run yet)."
+        return f"{n} tasks, your current setup passes {k}."
 
     def _offer(self) -> str:
         """The opening's offer, chosen from what is actually there to review."""
