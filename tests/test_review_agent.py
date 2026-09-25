@@ -358,3 +358,14 @@ def test_change_tools_fall_back_to_the_open_trial_task(tmp_path, monkeypatch):
     assert ra._task_arg({"task": "refund-order"}) == "refund-order-2"
     assert ra._task_arg({"task": "refund-order-2"}) == "refund-order-2"
     assert ra._task_arg({}) == "refund-order-2"
+
+
+def test_applied_reply_reads_out_deltas_and_failures():
+    from touchstone.review import replies
+
+    text = replies.applied_reply({"applied_to": ["refund-order-2"], "job": "j2",
+                                  "deltas": [{"task": "refund-order-2", "before": 1.0, "after": 0.875}],
+                                  "failed": [{"task": "x", "error": "RegradeError: no artifact"}]})
+    assert "Applied to refund-order-2." in text
+    assert "refund-order-2 100% → 88%" in text or "refund-order-2 100% → 87%" in text
+    assert "Could not regrade: x (RegradeError: no artifact)" in text

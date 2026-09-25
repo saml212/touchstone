@@ -141,6 +141,9 @@ class ReviewAgent:
             for call in reply.tool_calls:
                 result = self._dispatch(call)
                 last_error = replies.error_of(result)  # the latest tool call's error, or None
+                applied = _applied(call, result)
+                if applied is not None:  # a successful apply ends the turn with a fixed read-out
+                    return replies.applied_reply(applied)
                 messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                  "name": call.get("name"), "content": result})
         return replies.tool_error_reply(last_error)  # hit MAX_STEPS -> surface the last error
@@ -304,3 +307,11 @@ class ReviewAgent:
         if not current:
             return None
         return trials.read(self.dataset_dir, self.jobs_dir, current["task"], current["trial"])
+
+
+def _applied(call: dict, result: str) -> dict | None:
+    """The apply_change result dict when the call succeeded, else None."""
+    if call.get("name") != "apply_change":
+        return None
+    data = json.loads(result)
+    return data if isinstance(data, dict) and "applied_to" in data else None

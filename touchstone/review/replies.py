@@ -65,3 +65,21 @@ def as_messages(history: list[dict]) -> list[dict]:
         text = m.get("text", "")
         out.append({"role": role, "content": f"{who}: {text}" if role == "user" else text})
     return out
+
+
+def applied_reply(result: dict) -> str:
+    """The read-out after a successful apply, composed here so it never depends on the model
+    having a step left: what was applied where, what the regrade moved, what could not regrade."""
+    tasks = result.get("applied_to") or []
+    lines = [f"Applied to {', '.join(tasks)}." if tasks else "Applied."]
+    deltas = result.get("deltas") or []
+    if deltas:
+        moved = "; ".join(f"{d['task']} {reward_pct(d['before'])} → {reward_pct(d['after'])}"
+                          for d in deltas)
+        lines.append(f"Regraded: {moved}. Nothing else moved.")
+    elif result.get("job"):
+        lines.append("Regraded: no reward changed.")
+    failed = result.get("failed") or []
+    if failed:
+        lines.append("Could not regrade: " + "; ".join(f"{f['task']} ({f['error']})" for f in failed))
+    return " ".join(lines) + " Want to look at the next trial?"
