@@ -1,8 +1,9 @@
 """`claude-cli` provider: runs `claude -p --output-format json` as a subprocess.
 
 Uses the Claude Code subscription, not an API key: ANTHROPIC_API_KEY is stripped from the
-child's environment. Messages + tools are serialized into one prompt fed on stdin; the CLI's
-`result` text is parsed back into a Reply (tool calls via the JSON convention, JSON extraction).
+child's environment. System messages + tool schemas go on `--system-prompt`; the conversation is
+fed on stdin; the CLI's `result` text is parsed back into a Reply (tool calls via the JSON
+convention, JSON extraction).
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import json
 from . import _cli
 from ._http import ProviderError
 from .base import Reply
-from .prompt import parse_cli_result, serialize_messages
+from .prompt import parse_cli_result, split_for_cli
 
 _MISSING = "The `claude` CLI is not on PATH; install Claude Code to use the claude-cli provider."
 
@@ -24,18 +25,21 @@ class ClaudeCLIProvider:
         self.timeout = timeout
         self.name = f"claude-cli:{model}" if model else "claude-cli"
 
-    def _cmd(self) -> list[str]:
-        cmd = ["claude", "-p", "--output-format", "json"]
+    def _cmd(self, system: str) -> list[str]:
+        # Instructions travel on the CLI's real system prompt, never inside the user turn.
+        cmd = ["claude", "-p", "--output-format", "json", "--permission-mode", "default"]
+        if system:
+            cmd += ["--system-prompt", system]
         if self.model:
             cmd += ["--model", self.model]
         return cmd
 
     def _run(self, messages, tools, want_json, timeout) -> Reply:
-        prompt = serialize_messages(messages, tools)
+        system, prompt = split_for_cli(messages, tools)
         env = _cli.scrubbed_env("ANTHROPIC_API_KEY")
         with _cli.temp_dir() as cwd:
             proc = _cli.run_retrying(
-                self._cmd(),
+                self._cmd(system),
                 label="claude CLI",
                 cwd=cwd,
                 env=env,

@@ -11,6 +11,11 @@ import json
 
 from .base import Reply
 
+_TRANSCRIPT_NOTE = (
+    "The user message is the conversation so far, one turn per line labelled USER, ASSISTANT, "
+    "or TOOL RESULT. Continue it as the ASSISTANT: reply with your next turn only."
+)
+
 _TOOL_INSTRUCTION = (
     "You may call a tool. To do so, reply with ONLY a JSON object of the form "
     '{"tool_calls": [{"name": "<tool>", "arguments": {<args>}}]}. '
@@ -40,8 +45,10 @@ def _chat_turn(msg: dict, role: str) -> str:
     return f"{role.upper()}: {text}".rstrip()
 
 
-def serialize_messages(messages: list[dict], tools: list[dict] | None = None) -> str:
-    """Flatten OpenAI-style messages (+ optional tools) into a single prompt string."""
+def _split(messages: list[dict], tools: list[dict] | None) -> tuple[str, str]:
+    """(system text, conversation text). The system text carries every instruction — the system
+    messages, the tool schemas, and the tool-call convention; the conversation is the plain
+    dialogue, labelled by role, that the model continues as the assistant."""
     systems: list[str] = []
     turns: list[str] = []
     for msg in messages:
@@ -53,14 +60,28 @@ def serialize_messages(messages: list[dict], tools: list[dict] | None = None) ->
             turns.append(f"TOOL RESULT ({name}): {_content_text(msg.get('content'))}")
         else:
             turns.append(_chat_turn(msg, role))
-
-    blocks: list[str] = []
-    if systems:
-        blocks.append("SYSTEM:\n" + "\n".join(s for s in systems if s))
+    blocks = [s for s in systems if s]
     if tools:
         blocks.append("TOOLS AVAILABLE (JSON schemas):\n" + json.dumps(tools, ensure_ascii=False))
         blocks.append(_TOOL_INSTRUCTION)
-    blocks.extend(turns)
+    if turns:
+        blocks.append(_TRANSCRIPT_NOTE)
+    return "\n\n".join(blocks), "\n\n".join(turns)
+
+
+def split_for_cli(messages: list[dict], tools: list[dict] | None = None) -> tuple[str, str]:
+    """For a CLI that takes a real system prompt (claude -p --system-prompt): instructions and
+    tool schemas go in the system prompt, the labelled conversation goes on stdin. Keeping the
+    instructions out of the user turn is what stops the CLI's model from reading the transcript
+    as an injected fake conversation."""
+    return _split(messages, tools)
+
+
+def serialize_messages(messages: list[dict], tools: list[dict] | None = None) -> str:
+    """Flatten OpenAI-style messages (+ optional tools) into a single prompt string, for a CLI
+    with no system-prompt flag (codex exec)."""
+    system, conversation = _split(messages, tools)
+    blocks = [f"SYSTEM:\n{system}" if system else "", conversation]
     return "\n\n".join(b for b in blocks if b)
 
 

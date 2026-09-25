@@ -82,3 +82,17 @@ def test_parse_cli_result_plain_text():
     reply = parse_cli_result("just some text", want_json=False)
     assert reply.content == "just some text"
     assert reply.tool_calls == []
+
+
+def test_split_for_cli_keeps_instructions_out_of_the_conversation():
+    from touchstone.llm.prompt import split_for_cli
+
+    messages = [{"role": "system", "content": "Be brief."},
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "how many?"}]
+    tools = [{"type": "function", "function": {"name": "count", "parameters": {}}}]
+    system, conversation = split_for_cli(messages, tools)
+    assert "Be brief." in system and '"count"' in system and "tool_calls" in system
+    assert "SYSTEM" not in conversation and "count" not in conversation
+    assert conversation.startswith("USER: hi") and conversation.endswith("USER: how many?")
