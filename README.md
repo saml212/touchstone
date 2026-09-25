@@ -30,6 +30,7 @@ touchstone survey <repo>                 # read-only: map the code, simulate its
 touchstone bench -m <provider/model>     # run a model over the dataset; print pass rate per task
 touchstone jobs                          # list Harbor job dirs with their pass rate per task
 touchstone serve  /  touchstone review     # open the review room (voice or text)
+touchstone train                         # turn finished jobs into distill + RL datasets
 ```
 
 `touchstone survey` reads the recordings and the code with a read-only coding agent
@@ -97,6 +98,15 @@ the instruction wording — reads it back, and on "yes" writes the `tests/` file
 recorded artifacts, no agent), then reads out the new reward and any other trials that moved.
 "Always" applies the same criterion to every task with the same job. Everything the room decides is
 a row in `reviews` and a file change under `touchstone/` — nothing else.
+
+## Training data
+
+`touchstone train` reads the Harbor job directories (`trajectory.json` + `reward.json` per trial)
+and writes, under `touchstone/train/`, `distill.jsonl` (full trajectories from trials that scored at
+or above the threshold, for a student to copy), `rl_tasks.toml` (tasks in the learnability band —
+pass rate strictly between 0 and 1 — with the verifier as the reward), and `manifest.json` (per-task
+pass rate per model and where each task went). `touchstone train --teacher <spec>` runs the teacher
+job first. Training itself stops at the exact GPU command; Touchstone produces the data, not the run.
 
 ## Storage
 
