@@ -9,6 +9,7 @@ Services sharing a base-url env var collapse to one simulator.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -39,7 +40,7 @@ app.py requirements:
   "Tool source" to see how). Return the raw body the tool source parses into "returned", reproducing
   the upstream wire shape, NOT the parsed result: if the tool returns response.json() unchanged the
   body equals "returned"; if it extracts nested fields (e.g. `data["current"]["temp_c"]`) the body
-  must nest them exactly so (a `current` object here), or the real tool will raise KeyError on replay.
+  must nest them so (a `current` object here), else the real tool raises KeyError on replay.
 - Back it with a SQLite file named state.db beside app.py.
 - Load seed.json into state.db on startup AND on `POST /__reset` (drop and recreate tables first).
 - `GET /__health` returns 200 with a JSON body.
@@ -53,6 +54,9 @@ simulates, which routes, and how it was derived.
 {routes}
 ## Tool source (the code that calls the service)
 {tool_source}
+## Response keys the tool reads (static analysis of the tool source) — the raw response body the
+## simulator returns MUST provide these nested paths, or the real tool raises KeyError on replay
+{keys}
 ## Real service source (same repo, may be copied closely)
 {service_source}
 ## API docs / OpenAPI
@@ -118,6 +122,38 @@ def _tool_source(repo: Path, tools: list[dict]) -> str:
     return "\n\n".join(blocks) or "(tool source not found)"
 
 
+def _const_str(node) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _subscript_path(node: ast.Subscript) -> list[str]:
+    """The dot path of constant string keys read off a subscript chain (data['a']['b'] -> a.b)."""
+    keys: list[str] = []
+    while isinstance(node, ast.Subscript):
+        key = _const_str(node.slice)
+        if key is None:
+            break
+        keys.append(key)
+        node = node.value
+    return list(reversed(keys))
+
+
+def response_key_paths(source: str) -> list[str]:
+    """Nested key paths the tool source reads off an HTTP response (subscript chains), so the
+    simulator knows the raw body shape the recordings never show. Longest paths only."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    paths: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            keys = _subscript_path(node)
+            if keys:
+                paths.add(".".join(keys))
+    return sorted(p for p in paths if not any(o != p and o.startswith(p + ".") for o in paths))
+
+
 def _route_needles(service: dict) -> list[str]:
     needles = []
     for call in service.get("calls", []):
@@ -160,12 +196,19 @@ def _examples(calls: list[ToolEvent], scrub: Scrubber) -> list[dict]:
              "returned": scrub.scrub(c.output)} for c in calls[:_MAX_EXAMPLES]]
 
 
+def _keys_text(source: str) -> str:
+    paths = response_key_paths(source)
+    return "\n".join(f"- {p}" for p in paths) if paths else "(none detected)"
+
+
 def _prompt(repo: Path, service: dict, tools: list[dict], examples: list[dict],
             hint: str = "") -> str:
+    source = _tool_source(repo, tools)
     return SIM_PROMPT.format(
         name=service.get("name"), kind=service.get("kind"),
         env=service.get("base_url_env"), routes=_routes_text(service),
-        tool_source=_tool_source(repo, tools), service_source=_service_source(repo, service),
+        tool_source=source, keys=_keys_text(source),
+        service_source=_service_source(repo, service),
         docs=_openapi(repo), examples=json.dumps(examples, indent=2, ensure_ascii=False),
         hint=hint)
 
@@ -215,10 +258,25 @@ def _restore(sim_dir: Path, snapshot: dict) -> None:
         atomic_write(sim_dir / name, text)
 
 
+_KEYERROR = re.compile(r"KeyError: ['\"]([^'\"]+)['\"]")
+
+
+def _missing_keys(failures: list[dict]) -> list[str]:
+    """Keys the real tool looked for but the simulator's body did not provide (from KeyError)."""
+    found: list[str] = []
+    for f in failures:
+        err = (f.get("got") or {}).get("__error__", "") if isinstance(f.get("got"), dict) else ""
+        found += _KEYERROR.findall(err)
+    return sorted(set(found))
+
+
 def _failure_hint(result: dict) -> str:
     failures = result.get("failures", [])[:5]
+    missing = _missing_keys(result.get("failures", []))
+    miss = (f"\nThe tool raised KeyError for these keys — the response body MUST include them at "
+            f"the right nesting: {missing}\n" if missing else "")
     return ("## Your previous simulator failed these examples; fix them:\n"
-            + json.dumps(failures, indent=2, ensure_ascii=False))
+            + json.dumps(failures, indent=2, ensure_ascii=False) + miss)
 
 
 def _measure(sim_dir, repo, calls, ctx, settings, scrub):

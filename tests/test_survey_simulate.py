@@ -285,3 +285,26 @@ def test_transforming_tool_needs_raw_wire_body(tmp_path):
     result = generate_simulator(tmp_path, ScriptedSurveyProvider([answer]), SERVICE, TOOLS, events,
                                 tmp_path / "touchstone" / "simulators", Scrubber(), _settings())
     assert result["score"] == 1.0 and result["failures"] == []
+
+
+def test_response_key_paths_finds_nested_reads():
+    from touchstone.survey.simulate import response_key_paths
+    src = (
+        "def get(r):\n"
+        "    d = r.json()\n"
+        "    return {'t': d['current']['temp_c'], 'c': d['current']['condition']['text'],\n"
+        "            'e': d['error']['message']}\n"
+    )
+    paths = response_key_paths(src)
+    assert "current.temp_c" in paths
+    assert "current.condition.text" in paths
+    assert "error.message" in paths
+    assert "current" not in paths  # pure prefixes dropped
+
+
+def test_failure_hint_names_missing_keyerror_keys():
+    from touchstone.survey.simulate import _failure_hint
+    result = {"failures": [{"tool": "t", "got": {"__error__": "KeyError: 'current'"}},
+                           {"tool": "t", "got": {"__error__": "KeyError: 'forecast'"}}]}
+    hint = _failure_hint(result)
+    assert "current" in hint and "forecast" in hint and "MUST include them" in hint
