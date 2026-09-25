@@ -9,6 +9,10 @@ Spec: {"base_url_env": str|null, "base_url": str, "tools": {name: "module:functi
        "calls": [{"tool": name, "arguments": <obj|value>}]}
 `base_urls` ({env: url}) may point several services at their simulators at once; it is applied
 before the single `base_url_env`/`base_url` pair (both are optional).
+
+`--one <module:function> '<json arguments>'` replays a single call and prints its JSON result — the
+form the packaged/replica agent execs per tool call. It reads the service base URL from the process
+environment the caller set (no spec), so the tool module resolves its URL at import time as usual.
 """
 
 from __future__ import annotations
@@ -53,8 +57,21 @@ def replay(spec: dict) -> list[dict]:
     return results
 
 
+def replay_one(import_path: str, arguments_json: str):
+    """Run a single recorded call through its real tool function and return the raw result."""
+    arguments = json.loads(arguments_json) if arguments_json else {}
+    try:
+        return _invoke(_load(import_path), arguments)
+    except Exception as exc:  # noqa: BLE001 — a tool failure is data, not a crash
+        return {"__error__": f"{type(exc).__name__}: {exc}"}
+
+
 def main() -> None:
-    with open(sys.argv[1], encoding="utf-8") as fh:
+    argv = sys.argv[1:]
+    if argv and argv[0] == "--one":
+        json.dump(replay_one(argv[1], argv[2] if len(argv) > 2 else ""), sys.stdout, default=str)
+        return
+    with open(argv[0], encoding="utf-8") as fh:
         spec = json.load(fh)
     json.dump(replay(spec), sys.stdout, default=str)
 

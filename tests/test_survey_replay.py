@@ -53,3 +53,26 @@ def test_base_url_env_set_before_use(tmp_path, monkeypatch):
     replay.replay({"base_url_env": "WIDGET_URL", "base_url": "http://x", "tools": {}, "calls": []})
     import os
     assert os.environ["WIDGET_URL"] == "http://x"
+
+
+def test_replay_one_returns_single_result(tmp_path, monkeypatch):
+    _install(tmp_path, monkeypatch)
+    assert replay.replay_one("replaymod:echo", '{"a": 1}') == {"kw": {"a": 1}}
+
+
+def test_replay_one_empty_arguments(tmp_path, monkeypatch):
+    _install(tmp_path, monkeypatch)
+    assert replay.replay_one("replaymod:echo", "") == {"kw": {}}
+
+
+def test_replay_one_error_is_data(tmp_path, monkeypatch):
+    _install(tmp_path, monkeypatch)
+    got = replay.replay_one("replaymod:boom", "{}")
+    assert "ValueError" in got["__error__"]
+
+
+def test_replay_one_via_main(tmp_path, monkeypatch, capsys):
+    _install(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["replay", "--one", "replaymod:shout", '"hi"'])
+    replay.main()
+    assert capsys.readouterr().out == '"HI"'
