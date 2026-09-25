@@ -170,3 +170,17 @@ def test_run_local_raises_if_no_job_created(tmp_path, monkeypatch):
     monkeypatch.setattr(run_mod, "_has_docker", lambda: True)
     with pytest.raises(FileNotFoundError):
         run_mod.run(_task(tmp_path), "oracle", jobs_dir=tmp_path / "jobs", settings=Settings())
+
+
+def test_missing_rsync_or_ssh_binary_gives_a_clear_error(monkeypatch):
+    # Attack (stage-7 harbor): rsync (or ssh) is not installed. A raw FileNotFoundError
+    # ("[Errno 2] No such file or directory: 'rsync'") is opaque; the caller must get a clear,
+    # actionable RuntimeError naming the tool, and (via _call) the gate records it in needs-review.
+    def missing(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory", "rsync")
+
+    monkeypatch.setattr(run_mod.subprocess, "run", missing)
+    with pytest.raises(RuntimeError) as ei:
+        run_mod._call(["rsync", "-az", "a", "b"])
+    msg = str(ei.value)
+    assert "rsync" in msg and "not installed" in msg and "PATH" in msg

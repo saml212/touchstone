@@ -63,7 +63,12 @@ def _call(cmd: list[str], env: dict | None = None, stdin_data: str | None = None
     `stdin_data` is fed on stdin (never argv, never printed) — the channel that forwards an API key
     to the remote shell. `env` replaces the child environment when given."""
     print("$ " + " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True, env=env, input=stdin_data)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env, input=stdin_data)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"'{cmd[0]}' is not installed or not on PATH — it is required to reach the harbor "
+            "host; install it (e.g. `brew install rsync openssh`) and retry") from exc
     output = (proc.stdout or "") + (proc.stderr or "")
     if output:
         print(output, end="" if output.endswith("\n") else "\n")
