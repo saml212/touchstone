@@ -46,8 +46,12 @@ app.py requirements:
 - `GET /__health` returns 200 with a JSON body.
 - Use only the standard library, fastapi, uvicorn, and pydantic.
 
-seed.json is the initial state derived from the recorded calls. README.md explains what this
-simulates, which routes, and how it was derived.
+seed.json is the initial state derived from the recorded calls. When one recorded call MINTS an id
+(e.g. save returns passenger_id=PAX-9) that a LATER recorded call references (book is called with
+passenger_id=PAX-9), the simulator must make that id resolvable on replay: derive a minted id
+deterministically from the request (so the same input yields the same id the recording saw), or seed
+the referenced entity, so replaying the dependent call in isolation still finds it. README.md
+explains what this simulates, which routes, and how it was derived.
 
 ## Service: {name}  (kind={kind}, base_url_env={env})
 ## Routes observed
