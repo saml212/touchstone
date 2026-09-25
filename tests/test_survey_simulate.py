@@ -143,3 +143,17 @@ def test_regenerate_keeps_better_of_two(tmp_path):
                                 repo / "touchstone" / "simulators", Scrubber(), _settings())
     assert result["score"] == 1.0
     assert len(provider.calls) == 2
+
+
+def test_two_services_same_env_collapse_to_one():
+    from touchstone.survey.simulate import crossing_services, service_tools
+    map_data = {
+        "services": [
+            {"name": "orders", "base_url_env": "SHARED_URL", "calls": []},
+            {"name": "billing", "base_url_env": "SHARED_URL", "calls": []},
+        ],
+        "tools": [{"name": "t1", "calls": ["orders"]}, {"name": "t2", "calls": ["billing"]}],
+    }
+    services = crossing_services(map_data)
+    assert [s["name"] for s in services] == ["orders"]  # one per base_url_env
+    assert [t["name"] for t in service_tools(map_data, services[0])] == ["t1"]

@@ -168,4 +168,4 @@ def serve(
 
 # Register the remaining top-level commands. Imported last so `app` and the shared helpers above
 # already exist when each module binds onto them.
-from . import bench, interview  # noqa: E402,F401
+from . import bench, interview, survey  # noqa: E402,F401
