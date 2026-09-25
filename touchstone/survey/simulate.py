@@ -9,7 +9,6 @@ Services sharing a base-url env var collapse to one simulator.
 
 from __future__ import annotations
 
-import ast
 import json
 import re
 from pathlib import Path
@@ -20,6 +19,7 @@ from . import fidelity
 from .provider import SurveyProvider
 from .recordings import ToolEvent
 from .scrub import Scrubber
+from .tool_reads import response_key_paths
 from .writes import atomic_write
 
 _SKIP_DIRS = {".venv", ".git", "__pycache__", "touchstone", ".touchstone", "node_modules"}
@@ -120,38 +120,6 @@ def _tool_source(repo: Path, tools: list[dict]) -> str:
     files = dict.fromkeys(t.get("file") for t in tools if t.get("file"))
     blocks = [f"### {f}\n{_read(repo / f)}" for f in files if _read(repo / f)]
     return "\n\n".join(blocks) or "(tool source not found)"
-
-
-def _const_str(node) -> str | None:
-    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
-
-
-def _subscript_path(node: ast.Subscript) -> list[str]:
-    """The dot path of constant string keys read off a subscript chain (data['a']['b'] -> a.b)."""
-    keys: list[str] = []
-    while isinstance(node, ast.Subscript):
-        key = _const_str(node.slice)
-        if key is None:
-            break
-        keys.append(key)
-        node = node.value
-    return list(reversed(keys))
-
-
-def response_key_paths(source: str) -> list[str]:
-    """Nested key paths the tool source reads off an HTTP response (subscript chains), so the
-    simulator knows the raw body shape the recordings never show. Longest paths only."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return []
-    paths: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Subscript):
-            keys = _subscript_path(node)
-            if keys:
-                paths.add(".".join(keys))
-    return sorted(p for p in paths if not any(o != p and o.startswith(p + ".") for o in paths))
 
 
 def _route_needles(service: dict) -> list[str]:

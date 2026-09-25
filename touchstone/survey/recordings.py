@@ -51,6 +51,22 @@ def _results_in(inp: dict) -> list[tuple[str | None, str | None, object]]:
     return [r for msg in (messages or []) if (r := _tool_result(msg))]
 
 
+def _collect_calls(span, calls: dict, order: list) -> None:
+    for call in _calls_in(span.output or {}):
+        cid = call.get("id")
+        if cid and cid not in calls:
+            calls[cid] = call
+            order.append(cid)
+
+
+def _collect_results(span, by_id: dict, by_name: dict) -> None:
+    for cid, name, output in _results_in(span.input or {}):
+        if cid is not None:
+            by_id.setdefault(cid, output)
+        elif name:
+            by_name[name].append(output)
+
+
 def _collect(spans) -> tuple[dict, list, dict, dict]:
     """Across the episode's spans: the tool calls (by id, in order), results keyed by id, and
     id-less results queued by tool name (for the legacy function form that threads no id)."""
@@ -59,16 +75,8 @@ def _collect(spans) -> tuple[dict, list, dict, dict]:
     by_id: dict[str, object] = {}
     by_name: dict[str, deque] = defaultdict(deque)
     for span in spans:
-        for call in _calls_in(span.output or {}):
-            cid = call.get("id")
-            if cid and cid not in calls:
-                calls[cid] = call
-                order.append(cid)
-        for cid, name, output in _results_in(span.input or {}):
-            if cid is not None:
-                by_id.setdefault(cid, output)
-            elif name:
-                by_name[name].append(output)
+        _collect_calls(span, calls, order)
+        _collect_results(span, by_id, by_name)
     return calls, order, by_id, by_name
 
 
