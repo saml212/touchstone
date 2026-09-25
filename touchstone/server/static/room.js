@@ -84,8 +84,10 @@ function renderChips(review) {
 function criterionRow(c) {
   const ok = c.score === 1 || c.score === true;
   const mark = c.score === null || c.score === undefined ? "" : ok ? "✓" : "✗";
+  const raw = c.raw && c.raw !== c.description ? ` title="${esc(c.raw)}"` : "";
   return `<li class="crit ${ok ? "pass" : "fail"}"><span class="dim">${esc(c.dimension)}</span>` +
-    `<span class="desc">${esc(c.description)}</span><span class="mark">${mark} ${pct(c.score)}</span></li>`;
+    `<span class="desc"${raw}>${esc(c.description)}</span>` +
+    `<span class="mark">${mark} ${pct(c.score)}</span></li>`;
 }
 
 function renderProposed(review) {

@@ -32,7 +32,8 @@ from ...interview import rooms
 from ...interview.realtime import Bridges
 from ...interview.rooms import Event, Hub
 from ...interview.speech import SpeechError, validate_audio
-from ...review.agent import ReviewAgent
+from ...llm._http import ProviderError
+from ...review.agent import AgentTurn, ReviewAgent
 from ._deps import get_conn, get_settings
 
 router = APIRouter()
@@ -237,7 +238,7 @@ def _agent_step(settings: Settings, provider_factory, room_id: str, history: lis
     try:
         room = store.get_room(conn, room_id)
         agent = ReviewAgent(provider_factory(), conn, room, settings)
-        turn = agent.respond(history)
+        turn = _safe_respond(agent, conn, room_id, history)
         agent_msg = rooms.post(conn, room_id, "agent", "assistant", turn.say)
         closed = store.get_room(conn, room_id).closed_at is not None
         return {
@@ -250,6 +251,21 @@ def _agent_step(settings: Settings, provider_factory, room_id: str, history: lis
         }
     finally:
         conn.close()
+
+
+_PROVIDER_DOWN = "I hit a problem generating a reply — say that again and I'll continue."
+
+
+def _safe_respond(agent, conn, room_id: str, history: list[dict]) -> AgentTurn:
+    """Run the agent turn; a provider failure becomes a visible reply (with the error in the room
+    log), never a 500 or a silent room. Anything the tools committed first (a review, a regrade)
+    stays committed."""
+    try:
+        return agent.respond(history)
+    except ProviderError as exc:
+        rooms.post(conn, room_id, "system", "note",
+                   f"(provider error: {str(exc).splitlines()[0]})")
+        return AgentTurn(say=_PROVIDER_DOWN)
 
 
 async def _pump(websocket: WebSocket, queue: asyncio.Queue) -> None:

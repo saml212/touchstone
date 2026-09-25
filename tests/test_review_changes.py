@@ -114,6 +114,33 @@ def test_describe_reads_back_in_plain_words(tmp_path):
     assert "change check 1" in text
 
 
+def test_descriptions_stay_in_sync_on_add_edit_remove(tmp_path):
+    from touchstone.survey import descriptions
+    task = _task(tmp_path)
+    tests = task / "tests"
+    # seed two descriptions matching the two seeded state criteria
+    descriptions.write(tests, {"tests/correctness/state.py:1": "the refund is 183.18",
+                               "tests/correctness/state.py:2": "one email was sent"})
+    # add a third check with its own description
+    changes.apply(task, {"op": "add", "file": "tests/correctness/state.py",
+                         "description": "a tracking ticket was opened",
+                         "params": {"fn": "sqlite_query_equals",
+                                    "args": ["s/state.db", "SELECT COUNT(*) FROM tickets", 1]}})
+    d = tomllib.loads((tests / "descriptions.toml").read_text())
+    assert d["tests/correctness/state.py:3"] == "a tracking ticket was opened"
+    # remove #1 -> #2 and #3 shift down to #1 and #2
+    changes.apply(task, {"op": "remove", "file": "tests/correctness/state.py", "criterion": 1})
+    d = tomllib.loads((tests / "descriptions.toml").read_text())
+    assert d["tests/correctness/state.py:1"] == "one email was sent"
+    assert d["tests/correctness/state.py:2"] == "a tracking ticket was opened"
+    assert "tests/correctness/state.py:3" not in d
+    # edit #2 without a description -> derived from the call, path-free
+    changes.apply(task, {"op": "edit", "file": "tests/correctness/state.py", "criterion": 2,
+                         "params": {"fn": "trajectory_tool_used", "args": ["refund"]}})
+    d = tomllib.loads((tests / "descriptions.toml").read_text())
+    assert d["tests/correctness/state.py:2"] == "the agent used refund"
+
+
 def test_apply_list_applies_both(tmp_path):
     task = _task(tmp_path)
     touched = changes.apply(task, [

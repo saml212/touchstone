@@ -157,6 +157,28 @@ def test_two_turns_each_push_full_state(db):
     assert states[1] > states[0]  # the second turn's state reflects the new messages
 
 
+async def test_provider_error_becomes_a_visible_reply(db):
+    from touchstone.llm._http import ProviderError
+
+    class Boom:
+        name = "boom"
+
+        def chat(self, *a, **k):
+            raise ProviderError('claude CLI exited with code 1: API Error 400 tool not found')
+
+    app = _app(db)
+    app.state.provider_factory = lambda: Boom()
+    async with _client(app) as c:
+        made = await c.post("/api/rooms", json={"task_id": _seed_task(db)})
+        room_id = made.json()["room"]["id"]
+        r = await c.post(f"/api/rooms/{room_id}/messages", json={"speaker": "sam", "text": "hi"})
+        assert r.status_code == 200  # never a 500
+        msgs = (await c.get(f"/api/rooms/{room_id}")).json()["messages"]
+        replies = [m["text"] for m in msgs if m["role"] == "assistant"]
+        assert any("say that again" in t for t in replies)      # a visible reply, not silence
+        assert any("provider error" in m["text"] for m in msgs)  # the cause is in the room log
+
+
 def test_websocket_on_missing_room_closes(db):
     from starlette.websockets import WebSocketDisconnect
 

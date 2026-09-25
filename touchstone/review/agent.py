@@ -120,8 +120,18 @@ class ReviewAgent:
         does = _join(jobs_done) or "several jobs"
         tail = (f"{counts['tasks']} tasks, your current setup passes {counts['passed']}."
                 if counts else f"{_task_count(self.dataset_dir)} tasks.")
-        return (f"Your agent handles {does}; {tail} "
-                "Want to walk through the trials the verifier was unsure about?")
+        return f"Your agent handles {does}; {tail} {self._offer()}"
+
+    def _offer(self) -> str:
+        """The opening's offer, chosen from what is actually there to review."""
+        c = trials.counts(self._scan())
+        if c["unsure"]:
+            return "Want to walk through the trials the verifier was unsure about?"
+        if c["disagree"]:
+            return "Want to look at the tasks where the models disagree?"
+        if c["unreviewed"]:
+            return "Want to walk through the ones nobody has reviewed yet?"
+        return "Everything passes — want to spot-check a few?"
 
     # ---- a turn ------------------------------------------------------------
 

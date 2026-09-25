@@ -25,6 +25,7 @@ from .. import store
 from ..harbor import rewardkit
 from ..harbor.atif import to_atif
 from ..llm.prompt import extract_json
+from . import descriptions
 from .criteria import (
     capture_effect,
     derive_criteria,
@@ -183,23 +184,37 @@ def _write_solution(task_dir: Path, spec: dict, trajectory: dict, answer: str,
     _write_solve_sh(sol, services, ports, base_url_envs)
 
 
-def _write_tests(task_dir: Path, state: list[str], tool: list[str], allowed: list[str]) -> None:
+def _criteria_descriptions(state: list[tuple[str, str]], tool: list[tuple[str, str]]) -> dict:
+    """The plain-English description per criterion, keyed '<file>:<index>' for descriptions.toml."""
+    mapping: dict[str, str] = {}
+    for rel, pairs in (("tests/correctness/state.py", state),
+                       ("tests/correctness/trajectory.py", tool)):
+        for i, (_, desc) in enumerate(pairs, 1):
+            mapping[descriptions.key(rel, i)] = desc
+    mapping[descriptions.key("tests/safety/no_pii.py", 1)] = descriptions.no_pii()
+    return mapping
+
+
+def _write_tests(task_dir: Path, state: list[tuple[str, str]], tool: list[tuple[str, str]],
+                 allowed: list[str]) -> None:
     """Correctness (state + trajectory) plus a safety no-PII dimension on EVERY task, so reward
     weights are uniform across the dataset. The safety check allow-lists the PII the task itself
     stated (`allowed`) — the agent may repeat an address the user gave it; only unstated PII fails.
+    A parallel descriptions.toml carries a product-readable sentence per criterion (no file paths).
     """
     tests = task_dir / "tests"
     correctness = tests / "correctness"
     correctness.mkdir(parents=True, exist_ok=True)
     if state:
-        rewardkit.write_criteria(correctness, "state", state)
+        rewardkit.write_criteria(correctness, "state", [call for call, _ in state])
     if tool:
-        rewardkit.write_criteria(correctness, "trajectory", tool)
+        rewardkit.write_criteria(correctness, "trajectory", [call for call, _ in tool])
     safety = tests / "safety"
     safety.mkdir(parents=True, exist_ok=True)
     rewardkit.write_no_pii_criterion(safety, allowed=allowed)
     rewardkit.write_reward_toml(tests, ["correctness", "safety"])
     rewardkit.write_test_sh(tests)
+    descriptions.write(tests, _criteria_descriptions(state, tool))
 
 
 def _verifier_artifacts(services: list[dict]) -> list[str]:
@@ -275,13 +290,14 @@ def _facts_line(literals: list[str]) -> str:
     return ", ".join(literals) if literals else "(none)"
 
 
-def _knowable_state(state: list[str], literals: list[str], text: dict) -> list[str]:
+def _knowable_state(state: list[tuple[str, str]], literals: list[str],
+                    text: dict) -> list[tuple[str, str]]:
     """Keep only state criteria whose required literal is actually knowable — present in the
     instruction or persona. A literal the writer failed to state (so the agent could never produce
     it) has its criterion dropped rather than made impossible; the gate still needs oracle==1."""
     blob = (text.get("instruction", "") + " " + text.get("persona", "")).lower()
     absent = [lit for lit in literals if lit.lower() not in blob]
-    return [line for line in state if not any(a in line for a in absent)]
+    return [pair for pair in state if not any(a in pair[0] for a in absent)]
 
 
 def _build_task(task_dir, name, dataset, group, ep_id, conn, map_data, env_result,

@@ -14,10 +14,12 @@ for the agent to present. Needs-review tasks (gate failures) are read separately
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..harbor import jobs
+from ..survey import descriptions
 
 # Priority of the four buckets the design walks in order; lower sorts first.
 _ORDER = {"unsure": 0, "disagree": 1, "unreviewed": 2, "reviewed": 3}
@@ -187,12 +189,17 @@ def _load_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+_CANARY = re.compile(r"<!--.*?(?:BENCHMARK DATA|harbor-canary).*?-->", re.S | re.I)
+
+
+def _strip_canary(text: str) -> str:
+    """Remove Harbor's canary comment from anything shown to a person; kept in instruction.md."""
+    return _CANARY.sub("", text).strip()
+
+
 def _instruction(dataset_dir: Path, task: str) -> str:
     """The instruction with the canary comment stripped (the room speaks in plain words)."""
-    text = _read_text(dataset_dir / "tasks" / task / "instruction.md")
-    if text.startswith("<!--"):
-        text = text.split("-->", 1)[-1].strip()
-    return text
+    return _strip_canary(_read_text(dataset_dir / "tasks" / task / "instruction.md"))
 
 
 def _agent_line(step: dict, message: str) -> str | None:
@@ -212,6 +219,7 @@ def _step_line(step: dict) -> str | None:
     if source == "system":
         return None
     if source == "user":
+        message = _strip_canary(message)
         return f"User: {message}" if message else None
     return _agent_line(step, message)
 
@@ -236,18 +244,32 @@ def _trajectory(trial_dir: Path) -> list[str]:
     return [line for step in traj.get("steps", []) if (line := _step_line(step))]
 
 
-def _flatten_criteria(details: dict) -> list[dict]:
-    """reward-details.json -> a flat [{dimension, description, score}] list, in file order."""
+def _crit_view(crit: dict, dimension: str, rel: str, index: int, descs: dict) -> dict:
+    """One criterion as a person reads it: the plain description, with the raw call on hover."""
+    raw = crit.get("description", crit.get("name", ""))
+    plain = descs.get(descriptions.key(rel, index)) or raw
+    return {"dimension": dimension, "description": plain, "raw": raw, "score": crit.get("value")}
+
+
+def _component_file(dimension: str, component: dict, crit: dict) -> str:
+    """The criteria file a reward-details criterion came from, to look up its description."""
+    name = component.get("name") or crit.get("name", "")
+    return f"tests/{dimension}/{name}.py"
+
+
+def _flatten_criteria(details: dict, descs: dict) -> list[dict]:
+    """reward-details.json -> a flat [{dimension, description, raw, score}] list, in file order,
+    each with the product-readable description from descriptions.toml when one exists."""
     out: list[dict] = []
     for dimension, block in details.items():
         if not isinstance(block, dict):
             continue
         for component in block.get("components", [block]):
             detail = component.get("detail", component)
-            for crit in detail.get("criteria", []):
-                out.append({"dimension": dimension,
-                            "description": crit.get("description", crit.get("name", "")),
-                            "score": crit.get("value")})
+            crits = detail.get("criteria", [])
+            for i, crit in enumerate(crits, 1):
+                rel = _component_file(dimension, component, crit)
+                out.append(_crit_view(crit, dimension, rel, i, descs))
     return out
 
 
@@ -258,12 +280,13 @@ def read(dataset_dir: Path, jobs_dir: Path, task: str, trial_id: str) -> dict | 
         return None
     trial = jobs.Trial.read(trial_dir)
     details = _load_json(trial_dir / "verifier" / "reward-details.json")
+    descs = descriptions.load(dataset_dir / "tasks" / task / "tests")
     return {
         "task": task, "trial": trial_id, "reward": trial.reward, "rewards": trial.rewards,
         "instruction": _instruction(dataset_dir, task),
         "persona": _read_text(dataset_dir / "tasks" / task / "persona.md"),
         "trajectory": _trajectory(trial_dir),
-        "criteria": _flatten_criteria(details),
+        "criteria": _flatten_criteria(details, descs),
     }
 
 

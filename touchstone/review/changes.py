@@ -25,6 +25,7 @@ from pathlib import Path
 import tomli_w
 
 from ..harbor import rewardkit
+from ..survey import descriptions
 from ..survey.writes import atomic_write
 
 
@@ -190,11 +191,44 @@ def _apply_one(task_dir: Path, change: dict) -> str:
         _apply_reward(path, change.get("criterion"), change.get("weight"))
     elif path.suffix == ".py":
         _apply_py(path, op, change.get("criterion"), change.get("params"))
+        _sync_descriptions(task_dir, rel, path, change)
     elif path.suffix == ".toml":
         _apply_judge(path, change)
     else:
         raise ChangeError(f"don't know how to change {path.name}.")
     return rel
+
+
+def _change_desc(change: dict) -> str:
+    """The description for an added/edited criterion: the change's text, else one from the call."""
+    if change.get("description"):
+        return str(change["description"])
+    params = change.get("params") or {}
+    return descriptions.describe_call(params.get("fn", ""), params.get("args", []))
+
+
+def _sync_descriptions(task_dir: Path, rel: str, path: Path, change: dict) -> None:
+    """Keep tests/descriptions.toml aligned after a .py criteria edit: indexes shift on add/remove,
+    and a new or edited criterion takes the change's description (or one derived from its call)."""
+    tests_dir = task_dir / "tests"
+    mapping = descriptions.load(tests_dir)
+    prefix = f"{rel}:"
+    entries = {int(k[len(prefix):]): v for k, v in mapping.items() if k.startswith(prefix)}
+    for k in [k for k in mapping if k.startswith(prefix)]:
+        del mapping[k]
+    op = change.get("op", "edit")
+    if op == "remove":
+        i = int(change["criterion"])
+        entries.pop(i, None)
+        entries = {(x - 1 if x > i else x): d for x, d in entries.items()}
+    elif op == "edit":
+        entries[int(change["criterion"])] = _change_desc(change) or \
+            entries.get(int(change["criterion"]), "")
+    elif op == "add":
+        entries[len(parse_criteria(path))] = _change_desc(change) or "an added check"
+    for idx, desc in entries.items():
+        mapping[descriptions.key(rel, idx)] = desc
+    descriptions.write(tests_dir, mapping)
 
 
 def as_list(change) -> list[dict]:

@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import fidelity
+from . import descriptions, fidelity
 from .recordings import ToolEvent
 from .simulate import crossing_services
 
@@ -78,18 +78,20 @@ def _rows_by_pk(dump: dict) -> dict:
 
 
 def _cell_lines(table: str, pk: str, key, old: dict, row: dict, db_rel: str,
-                literals: set) -> list[str]:
+                literals: set) -> list[tuple[str, str]]:
     out = []
     for col, val in row.items():
         if col != pk and not _VOLATILE.search(col) and old.get(col) != val:
             query = f"SELECT {col} FROM {table} WHERE {pk}={_sql_literal(key)}"
-            out.append(f"rk.sqlite_query_equals({db_rel!r}, {query!r}, {val!r})")
+            call = f"rk.sqlite_query_equals({db_rel!r}, {query!r}, {val!r})"
+            out.append((call, descriptions.cell(table, col, key, val)))
     if out:
         literals.add(str(key))  # the WHERE key the agent must target
     return out
 
 
-def _changed_cells(table: str, before: dict, after: dict, db_rel: str, literals: set) -> list[str]:
+def _changed_cells(table: str, before: dict, after: dict, db_rel: str,
+                   literals: set) -> list[tuple[str, str]]:
     pk = after.get("pk", "rowid")
     before_rows, after_rows = _rows_by_pk(before), _rows_by_pk(after)
     lines = []
@@ -116,7 +118,7 @@ def _identifying_pairs(row: dict, pk: str, arg_values: set) -> list[tuple]:
 
 
 def _added_rows(table: str, before: dict, after: dict, db_rel: str, arg_values: set,
-                literals: set) -> list[str]:
+                literals: set) -> list[tuple[str, str]]:
     pk = after.get("pk", "rowid")
     before_keys = set(_rows_by_pk(before))
     added = [row for key, row in _rows_by_pk(after).items() if key not in before_keys]
@@ -127,12 +129,15 @@ def _added_rows(table: str, before: dict, after: dict, db_rel: str, arg_values: 
         literals.update(str(val) for _, val in pairs)  # values the agent must supply
         where = " AND ".join(f"{col}={_sql_literal(val)}" for col, val in pairs)
         query = f"SELECT COUNT(*) FROM {table} WHERE {where}"
-        return [f"rk.sqlite_query_equals({db_rel!r}, {query!r}, {len(added)})"]
+        call = f"rk.sqlite_query_equals({db_rel!r}, {query!r}, {len(added)})"
+        return [(call, descriptions.count_rows(table, pairs, len(added)))]
     total = len(after.get("rows", []))
-    return [f"rk.sqlite_query_equals({db_rel!r}, {f'SELECT COUNT(*) FROM {table}'!r}, {total})"]
+    call = f"rk.sqlite_query_equals({db_rel!r}, {f'SELECT COUNT(*) FROM {table}'!r}, {total})"
+    return [(call, descriptions.total_rows(table, total))]
 
 
-def _state_criteria(effect: dict, svc: str, arg_values: set, literals: set) -> list[str]:
+def _state_criteria(effect: dict, svc: str, arg_values: set,
+                    literals: set) -> list[tuple[str, str]]:
     db_rel = f"simulators/{svc}/state.db"
     initial = effect["initial"].get(svc, {})
     final = effect["final"].get(svc, {})
@@ -152,18 +157,26 @@ def _avoid_tools(map_data: dict, calls: list[ToolEvent]) -> list[str]:
     return sorted(_mutating_tools(map_data) - used)[:_MAX_AVOID]
 
 
-def _tool_criteria(map_data: dict, calls: list[ToolEvent], has_state: bool) -> list[str]:
+def _used(t: str) -> tuple[str, str]:
+    return f"rk.trajectory_tool_used({t!r})", descriptions.tool_used(t)
+
+
+def _not_used(t: str) -> tuple[str, str]:
+    return f"rk.trajectory_tool_not_used({t!r})", descriptions.tool_not_used(t)
+
+
+def _tool_criteria(map_data: dict, calls: list[ToolEvent],
+                   has_state: bool) -> list[tuple[str, str]]:
     """Trajectory criteria that don't over-fit: require a mutating tool the episode used only when
     its effect is NOT already captured by a state criterion; forbid the mutating tools it avoided;
     never require a read-only tool. Fall back to requiring the used tools only when nothing else
     would verify the task at all."""
     used_mutating = sorted({c.tool for c in calls if c.tool in _mutating_tools(map_data)})
     avoid = _avoid_tools(map_data, calls)
-    lines = [] if has_state else [f"rk.trajectory_tool_used({t!r})" for t in used_mutating]
-    lines += [f"rk.trajectory_tool_not_used({t!r})" for t in avoid]
+    lines = [] if has_state else [_used(t) for t in used_mutating]
+    lines += [_not_used(t) for t in avoid]
     if not lines and not has_state:
-        used = sorted({c.tool for c in calls if c.tool})
-        lines = [f"rk.trajectory_tool_used({t!r})" for t in used]
+        lines = [_used(t) for t in sorted({c.tool for c in calls if c.tool})]
     return lines
 
 
@@ -196,14 +209,15 @@ def reproduced(calls: list[ToolEvent], replayed: list[dict]) -> bool:
     return True
 
 
-def derive_criteria(effect: dict, services: list[dict], map_data: dict,
-                    calls: list[ToolEvent]) -> tuple[list[str], list[str], list[str]]:
-    """Return (state lines, trajectory lines, required literals) for the replayed episode. Every
-    literal is a value used in a state criterion's WHERE that the agent must know — so the task
-    writer can make it knowable (state it in the instruction) or drop the criterion."""
+def derive_criteria(effect: dict, services: list[dict], map_data: dict, calls: list[ToolEvent]
+                    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
+    """Return (state, trajectory, required literals) for the replayed episode; state and trajectory
+    are (rewardkit call, plain-English description) pairs. Every literal is a value used in a state
+    criterion's WHERE that the agent must know — so the task writer can make it knowable (state it
+    in the instruction) or drop the criterion."""
     arg_values = _arg_values(calls)
     literals: set = set()
-    state: list[str] = []
+    state: list[tuple[str, str]] = []
     for service in services:
         state += _state_criteria(effect, service["name"], arg_values, literals)
     tool = _tool_criteria(map_data, calls, bool(state))

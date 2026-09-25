@@ -37,7 +37,7 @@ class CodexCLIProvider:
                 "-o", outfile,
                 prompt,
             ]
-            proc = _cli.run(
+            proc = _cli.run_retrying(
                 cmd,
                 label="codex CLI",
                 cwd=cwd,

@@ -34,7 +34,7 @@ class ClaudeCLIProvider:
         prompt = serialize_messages(messages, tools)
         env = _cli.scrubbed_env("ANTHROPIC_API_KEY")
         with _cli.temp_dir() as cwd:
-            proc = _cli.run(
+            proc = _cli.run_retrying(
                 self._cmd(),
                 label="claude CLI",
                 cwd=cwd,

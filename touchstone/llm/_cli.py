@@ -10,10 +10,16 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 
 from ._http import ProviderError
+
+# Markers of a transient CLI-side API failure (a Claude Code / Codex hiccup, not a bad request from
+# us) that is worth one retry: the harness returns a non-zero exit with an error JSON result.
+_TRANSIENT = ("is_error", "api_error", "api error", "overloaded", "rate limit", "429",
+              "not found in available tools", "internal server error", "503", "500")
 
 
 def require_binary(binary: str, hint: str) -> None:
@@ -62,3 +68,23 @@ def run(
         head = detail[0] if detail else "no output"
         raise ProviderError(f"{label} exited with code {proc.returncode}: {head}")
     return proc
+
+
+def _is_transient(message: str) -> bool:
+    m = message.lower()
+    return "exited with code" in m and any(t in m for t in _TRANSIENT)
+
+
+def run_retrying(cmd: Sequence[str], *, label: str, cwd: str, env: dict, timeout: float,
+                 stdin_text: str | None = None, retries: int = 1, pause: float = 1.5,
+                 sleep=time.sleep) -> subprocess.CompletedProcess:
+    """Like `run`, but a non-zero exit that looks like a transient API error is retried once after a
+    short pause. A timeout, a missing binary, or a plain bad request is raised immediately."""
+    for attempt in range(retries + 1):
+        try:
+            return run(cmd, label=label, cwd=cwd, env=env, timeout=timeout, stdin_text=stdin_text)
+        except ProviderError as exc:
+            if attempt == retries or not _is_transient(str(exc)):
+                raise
+            sleep(pause)
+    raise AssertionError("unreachable")  # pragma: no cover
