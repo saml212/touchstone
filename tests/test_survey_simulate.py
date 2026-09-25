@@ -308,3 +308,14 @@ def test_failure_hint_names_missing_keyerror_keys():
                            {"tool": "t", "got": {"__error__": "KeyError: 'forecast'"}}]}
     hint = _failure_hint(result)
     assert "current" in hint and "forecast" in hint and "MUST include them" in hint
+
+
+def test_routes_include_base_path_only_for_constant_base_url_service():
+    from touchstone.survey.simulate import _routes_text
+    const = {"base_url_env": None, "base_url_default": "http://api.weatherapi.com/v1",
+             "calls": [{"method": "GET", "path_template": "/current.json", "from_tool": "t"}]}
+    env = {"base_url_env": "ORDERS_URL", "base_url_default": "http://127.0.0.1:8710",
+           "calls": [{"method": "GET", "path_template": "/orders/{id}", "from_tool": "t"}]}
+    assert "GET /v1/current.json" in _routes_text(const)  # shim keeps the /v1 base path
+    assert "GET /orders/{id}" in _routes_text(env)  # env override replaces the whole base
+    assert "/v1" not in _routes_text(env)

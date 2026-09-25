@@ -185,8 +185,22 @@ def _openapi(repo: Path) -> str:
     return "(none)"
 
 
+def _base_path(service: dict) -> str:
+    """The path prefix the simulator must serve under. A constant-base-URL service is reached by the
+    net shim, which rewrites only scheme+host and keeps the path, so the base URL's own path (e.g.
+    /v1) is part of every request and the routes must include it. An env-configurable service is
+    repointed by replacing the whole base URL (path included), so its routes are the templates.
+    """
+    from urllib.parse import urlsplit
+
+    if service.get("base_url_env"):
+        return ""
+    return urlsplit(service.get("base_url_default") or "").path.rstrip("/")
+
+
 def _routes_text(service: dict) -> str:
-    lines = [f"{c.get('method')} {c.get('path_template')} (from {c.get('from_tool')})"
+    bp = _base_path(service)
+    lines = [f"{c.get('method')} {bp}{c.get('path_template')} (from {c.get('from_tool')})"
              for c in service.get("calls", [])]
     return "\n".join(lines) or "(none recorded)"
 
