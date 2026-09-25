@@ -12,7 +12,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import re
 import socket
 import sqlite3
 import subprocess
@@ -24,51 +23,16 @@ from pathlib import Path
 import httpx
 
 from ..config import Settings
+from .fidelity_mask import _compare, _mask, _mask_field, masked_equal  # noqa: F401 re-exported
 from .recordings import ToolEvent
 from .scrub import Scrubber
 
-_VOLATILE_EXACT = {"id", "ticket", "timestamp", "ts", "token"}
-_ISO = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
 _HEALTH_TIMEOUT = 20.0
 _REPLAY_TIMEOUT = 180.0
 
 
 class _SimError(RuntimeError):
     """The simulator could not be started, seeded, or replayed against."""
-
-
-def _is_volatile(key: str) -> bool:
-    k = key.lower()
-    return (k in _VOLATILE_EXACT or k.endswith("_id")
-            or k.startswith("created") or k.startswith("updated"))
-
-
-def _mask(value, masked: set):
-    if isinstance(value, dict):
-        return {k: _mask_field(k, v, masked) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_mask(v, masked) for v in value]
-    if isinstance(value, str) and _ISO.search(value):
-        masked.add("<iso-timestamp>")
-        return "<ts>"
-    return value
-
-
-def _mask_field(key: str, value, masked: set):
-    if _is_volatile(key):
-        masked.add(key)
-        return "<masked>"
-    return _mask(value, masked)
-
-
-def _compare(expected, got) -> tuple[bool, set]:
-    masked: set = set()
-    return _mask(expected, masked) == _mask(got, masked), masked
-
-
-def masked_equal(expected, got) -> bool:
-    """True when `got` matches `expected` after masking volatile fields (ids, timestamps, …)."""
-    return _compare(expected, got)[0]
 
 
 # ---- simulator process -----------------------------------------------------
@@ -158,11 +122,22 @@ def _run_spec(repo: Path, spec: dict, settings: Settings) -> list[dict]:
         raise _SimError(f"replay output was not JSON:\n{proc.stdout[-500:]}") from exc
 
 
+def _replay_spec(calls: list[ToolEvent], base: str, ctx: dict) -> dict:
+    """A replay spec that repoints the service at `base`: by env var when the map has one, else by
+    rewriting the constant host with the net shim (simulators = {host: base})."""
+    spec = {"tools": ctx["tools"],
+            "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
+    if ctx.get("base_url_env"):
+        spec["base_url_env"] = ctx["base_url_env"]
+        spec["base_url"] = base
+    else:
+        spec["simulators"] = {ctx["host"]: base}
+    return spec
+
+
 def _run_replay(repo: Path, calls: list[ToolEvent], base: str, ctx: dict,
                 settings: Settings) -> list[dict]:
-    spec = {"base_url_env": ctx["base_url_env"], "base_url": base, "tools": ctx["tools"],
-            "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
-    return _run_spec(repo, spec, settings)
+    return _run_spec(repo, _replay_spec(calls, base, ctx), settings)
 
 
 def _failure(call: ToolEvent, got, scrub: Scrubber) -> dict:
@@ -194,9 +169,15 @@ def _failed_result(calls: list[ToolEvent], threshold: float, detail: str) -> dic
 
 
 _NO_REDIRECT = (
-    "service base URL is a constant (no base_url_env in the map): the tool cannot be pointed at "
-    "the simulator, so fidelity was not measured — survey never calls the real service"
+    "service base URL is a constant the net shim cannot rewrite (no base_url_env and no http host "
+    "to redirect), so fidelity was not measured — survey never calls the real service"
 )
+
+
+def _redirectable(ctx: dict) -> bool:
+    """True when replay can reach the simulator instead of the real service: either an env var
+    overrides the base URL, or the net shim can rewrite a constant http host."""
+    return bool(ctx.get("base_url_env")) or bool(ctx.get("host") and ctx.get("kind") == "http")
 
 
 # ---- state capture (for task criteria) -------------------------------------
@@ -292,10 +273,10 @@ def measure_service(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict
                     settings: Settings, scrub: Scrubber) -> dict:
     """Fidelity of the simulator in `sim_dir` against `calls`. Always kills the process."""
     threshold = settings.survey_fidelity_threshold
-    if calls and not ctx.get("base_url_env"):
-        # No env var to override means the real tool would hit its hardcoded/constant base URL —
-        # i.e. the real (possibly production) service. Survey must never do that, so flag the
-        # simulator (below-threshold) with an honest reason instead of measuring against it.
+    if calls and not _redirectable(ctx):
+        # Nothing can repoint the tool at the simulator (no env var, and no http host the net shim
+        # can rewrite): the real tool would hit its constant, possibly production base URL. Survey
+        # must never do that, so flag the simulator (below-threshold) with an honest reason.
         return _failed_result(calls, threshold, _NO_REDIRECT)
     port = _free_port()
     log_path = sim_dir / ".sim.log"

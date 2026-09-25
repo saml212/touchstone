@@ -32,6 +32,17 @@ def _apply_base_urls(spec: dict) -> None:
         os.environ[env] = spec["base_url"]
 
 
+def _apply_simulators(spec: dict) -> None:
+    """Install the net shim for a service with a constant (non-env) base URL, so a tool that
+    hard-codes its host is rewritten to the simulator instead of hitting the real service."""
+    sims = spec.get("simulators")
+    if sims:
+        os.environ["TOUCHSTONE_SIMULATORS"] = json.dumps(sims)
+    from .netshim import install_from_env
+
+    install_from_env()
+
+
 def _load(import_path: str):
     module_name, _, function = import_path.partition(":")
     return getattr(importlib.import_module(module_name), function)
@@ -45,6 +56,7 @@ def _invoke(fn, arguments):
 
 def replay(spec: dict) -> list[dict]:
     _apply_base_urls(spec)
+    _apply_simulators(spec)
     tools = spec["tools"]
     results = []
     for call in spec["calls"]:
@@ -69,6 +81,9 @@ def replay_one(import_path: str, arguments_json: str):
 def main() -> None:
     argv = sys.argv[1:]
     if argv and argv[0] == "--one":
+        from .netshim import install_from_env
+
+        install_from_env()  # honour TOUCHSTONE_SIMULATORS the caller set for a constant-host tool
         json.dump(replay_one(argv[1], argv[2] if len(argv) > 2 else ""), sys.stdout, default=str)
         return
     with open(argv[0], encoding="utf-8") as fh:

@@ -74,8 +74,18 @@ def service_tools(map_data: dict, service: dict) -> list[dict]:
     return [t for t in map_data.get("tools", []) if name in (t.get("calls") or [])]
 
 
+def _service_host(service: dict) -> str | None:
+    """The host in the service's constant base URL, so the net shim can rewrite it when there is no
+    base_url_env to override (e.g. `http://api.weatherapi.com/v1` -> `api.weatherapi.com`)."""
+    from urllib.parse import urlsplit
+
+    default = service.get("base_url_default")
+    return urlsplit(default).hostname if default else None
+
+
 def _replay_ctx(service: dict, tools: list[dict]) -> dict:
-    return {"base_url_env": service.get("base_url_env"),
+    return {"base_url_env": service.get("base_url_env"), "host": _service_host(service),
+            "kind": service.get("kind"),
             "tools": {t["name"]: t["import_path"] for t in tools}}
 
 

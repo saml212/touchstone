@@ -145,6 +145,32 @@ def test_regenerate_keeps_better_of_two(tmp_path):
     assert len(provider.calls) == 2
 
 
+CONST_HOST_TOOL = '''\
+import requests
+
+
+def get_widget(widget_id: str) -> dict:
+    return requests.get(f"http://api.fake.test/widgets/{widget_id}", timeout=5).json()
+'''
+
+SERVICE_CONST = {
+    "name": "widget", "kind": "http", "base_url_env": None,
+    "base_url_default": "http://api.fake.test/",
+    "calls": [{"method": "GET", "path_template": "/widgets/{id}", "from_tool": "get_widget"}],
+}
+
+
+def test_constant_host_service_is_simulated_via_net_shim(tmp_path):
+    # A tool that hard-codes its host (no base_url_env to override) must still be measurable: the
+    # net shim rewrites api.fake.test to the loopback simulator. Before the shim this was flagged.
+    (tmp_path / "customer_tools.py").write_text(CONST_HOST_TOOL, encoding="utf-8")
+    events = [ToolEvent("get_widget", {"widget_id": "w1"}, {"id": "w1", "color": "red"}, "e1")]
+    result = generate_simulator(tmp_path, ScriptedSurveyProvider([_good_answer()]), SERVICE_CONST,
+                                TOOLS, events, tmp_path / "touchstone" / "simulators", Scrubber(),
+                                _settings())
+    assert result["score"] == 1.0 and result["reproduced"] == 1 and result["failures"] == []
+
+
 def test_two_services_same_env_collapse_to_one():
     from touchstone.survey.simulate import crossing_services, service_tools
     map_data = {
