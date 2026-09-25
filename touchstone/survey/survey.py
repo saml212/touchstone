@@ -22,6 +22,7 @@ from .environment import build_environment
 from .gate import run_gate
 from .group import group_episodes
 from .map import build_map
+from .package import build_package
 from .provider import survey_provider
 from .recordings import tool_events
 from .report import render_report, summary
@@ -80,6 +81,14 @@ def _build_tasks(repo, conn, map_data, out, events, scrub, prov, settings, force
     return groups, env_result, tasks
 
 
+def _package_agent(repo, conn, map_data, env_result, prov, out, settings, force):
+    """Write touchstone/agent/ (packaged or replica). None with no trace db or environment."""
+    if conn is None or env_result is None:
+        return None
+    _log("package: building the agent under test")
+    return build_package(repo, conn, map_data, env_result, prov, out, settings, force)
+
+
 def _gate_and_baseline(repo, env_result, settings, force, skip_gate):
     if env_result is None or skip_gate:
         return None
@@ -117,10 +126,12 @@ def run_survey(repo: str | Path, force: bool = False, provider: str | None = Non
         map_data, fidelity_data = _map_and_fidelity(repo, prov, out, events, scrub, settings, force)
         groups, env_result, tasks = _build_tasks(
             repo, conn, map_data, out, events, scrub, prov, settings, force)
+        package = _package_agent(repo, conn, map_data, env_result, prov, out, settings, force)
         gate = _gate_and_baseline(repo, env_result, settings, force, skip_gate)
         Dataset(name=_dataset_name(repo, settings)).write(out)
         _log("report: writing report.md")
-        atomic_write(out / "report.md", render_report(map_data, fidelity_data, tasks, gate, groups))
+        atomic_write(out / "report.md",
+                     render_report(map_data, fidelity_data, tasks, gate, groups, package))
         return summary(map_data, fidelity_data, _stats(conn, tasks, gate, skip_gate))
     finally:
         if conn is not None:

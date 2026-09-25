@@ -113,6 +113,16 @@ def _review_detail(review: dict) -> str:
     return f"oracle={review.get('oracle')} nop={review.get('nop')}"
 
 
+def agent_section(package: dict | None) -> str:
+    if not package:
+        return "## Agent under test\n\n_not packaged_"
+    lines = [f"- Mode: {package.get('mode', 'replica')}",
+             f"- Model: {package.get('provider', '?')}/{package.get('model_default', '?')}"]
+    if package.get("flag"):
+        lines.append(f"- Fell back to replica: {package['flag']}")
+    return "## Agent under test\n\n" + "\n".join(lines)
+
+
 def no_job_section(groups: dict | None) -> str:
     no_job = (groups or {}).get("no_job", [])
     if not no_job:
@@ -121,12 +131,14 @@ def no_job_section(groups: dict | None) -> str:
 
 
 def render_report(map_data: dict, fidelity: dict, tasks: dict | None = None,
-                  gate: dict | None = None, groups: dict | None = None) -> str:
+                  gate: dict | None = None, groups: dict | None = None,
+                  package: dict | None = None) -> str:
     sections = [
         "# Survey report",
         map_section(map_data),
         services_section(map_data),
         simulators_section(fidelity),
+        agent_section(package),
         tasks_section(tasks, gate),
         needs_review_section(gate),
         no_job_section(groups),
