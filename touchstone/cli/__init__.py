@@ -49,7 +49,7 @@ def main(ctx: typer.Context) -> None:
 TOML_TEMPLATE = f"""# Touchstone config. Keys above a [table] header are top-level.
 db_path = "{DEFAULT_DB}"
 provider = "scripted"
-agent_provider = "claude-cli"   # mines, interviews, teaches: claude-cli | codex-cli | openai:<m>
+agent_provider = "claude-cli"   # surveys and reviews: claude-cli | codex-cli | openai:<m>
 # keychain_prefix = "touchstone-"   # Keychain items <prefix>openai-api-key / anthropic-api-key
 {{keychain_prefix}}
 [speech]

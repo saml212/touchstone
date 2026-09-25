@@ -1,10 +1,8 @@
-"""The nop baseline: an empty reply, no tool calls.
+"""The nop baseline provider: always an empty reply, no tool calls.
 
-`nop` is the second half of the task-generation gate from the Harbor RFC — the oracle
-(`reference`) must score 1 and the nop must score 0. A task an empty reply already passes measures
-nothing, so it never enters a benchmark. `tasks.validate` computes the nop verdict inline; this
-provider makes `bench run -m nop` available and lets Sample run the same empty attempt through the
-shared runner path.
+It is one half of the survey's task gate — a task counts only when the oracle scores 1 and the nop
+scores 0, because a task an empty answer already passes measures nothing. Selected with `-m nop`;
+argument-free, so Harbor's `nop/x` maps cleanly. Entry point: `NopProvider().chat(...)`.
 """
 
 from __future__ import annotations
