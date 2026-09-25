@@ -12,6 +12,7 @@ The dataset's `agent/` directory is found via TOUCHSTONE_AGENT_DIR (default: ./a
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import inspect
 import json
@@ -96,27 +97,35 @@ class TouchstoneAgent(BaseAgent):
         return None
 
     async def run(self, instruction: str, environment, context) -> None:
-        config = load_config()
-        provider = provider_from_spec(_provider_spec(self.model_name))
-        messages = [{"role": "system", "content": config.system},
-                    {"role": "user", "content": instruction}]
         with tempfile.TemporaryDirectory() as tmp:
             conn = store.connect(Path(tmp) / "run.db")
             ep = store.insert_episode(conn, store.Episode(name=instruction[:120],
                                                           meta={"agent": self.name()}))
-            usage = await self._loop(provider, config, messages, environment, conn, ep.id)
+            usage = await self._act(instruction, environment, conn, ep.id)
             traj = atif.to_atif(conn, ep.id)
             conn.close()
         (self.logs_dir / "trajectory.json").write_text(
             json.dumps(traj, ensure_ascii=False, indent=2), encoding="utf-8")
         _apply_usage(context, usage)
 
+    async def _act(self, instruction: str, environment, conn, episode_id: str) -> dict:
+        """Produce the trajectory by running the model loop, returning accumulated token usage.
+
+        The survey's packaged agent (stage 3) overrides this to run the customer's real entrypoint
+        inside the sandbox and import the trajectory that capture wrote to its `.touchstone` db.
+        """
+        config = load_config()
+        provider = provider_from_spec(_provider_spec(self.model_name))
+        messages = [{"role": "system", "content": config.system},
+                    {"role": "user", "content": instruction}]
+        return await self._loop(provider, config, messages, environment, conn, episode_id)
+
     async def _loop(self, provider, config, messages, environment, conn, episode_id) -> dict:
         totals = {"tokens_in": 0, "tokens_out": 0}
         for _ in range(config.max_steps):
-            reply = provider.chat(messages, tools=config.tools or None)
+            reply = await asyncio.to_thread(provider.chat, messages, config.tools or None)
             _add_usage(totals, reply.usage)
-            _record_model_span(conn, episode_id, list(messages), reply)
+            _record_model_span(conn, episode_id, list(messages), config.tools, reply)
             messages.append({"role": "assistant", "content": reply.content,
                              "tool_calls": reply.tool_calls})
             if not reply.tool_calls:
@@ -131,25 +140,33 @@ class TouchstoneAgent(BaseAgent):
             arguments = json.loads(tool_call.get("arguments") or "{}")
         except json.JSONDecodeError:
             arguments = {}
-        result = config.call(name, arguments, environment) if config.call else ""
-        if inspect.isawaitable(result):
-            result = await result
+        result = await _dispatch(config.call, name, arguments, environment)
         result = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
         call_id = tool_call.get("id")
         store.insert_span(conn, store.Span(
-            episode_id=episode_id, kind="tool", name=name, input={"name": name},
+            episode_id=episode_id, kind="tool", name=name,
+            input={"name": name, "arguments": arguments},
             output={"result": result}, tool_call_id=call_id))
         messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
 
 
-def _record_model_span(conn, episode_id: str, history: list[dict], reply) -> None:
+async def _dispatch(call, name: str, arguments: dict, environment):
+    """Call the task's tool dispatch off the event loop unless it is a coroutine function."""
+    if call is None:
+        return ""
+    if inspect.iscoroutinefunction(call):
+        return await call(name, arguments, environment)
+    return await asyncio.to_thread(call, name, arguments, environment)
+
+
+def _record_model_span(conn, episode_id: str, history: list[dict], tools, reply) -> None:
     output: dict = {"message": {"role": "assistant", "content": reply.content,
                                 "tool_calls": reply.tool_calls}}
     if reply.usage:
         output["usage"] = reply.usage
     store.insert_span(conn, store.Span(
         episode_id=episode_id, kind="model", name="model",
-        input={"messages": history, "tools": [], "params": {}}, output=output,
+        input={"messages": history, "tools": tools or [], "params": {}}, output=output,
         tokens_in=(reply.usage or {}).get("tokens_in"),
         tokens_out=(reply.usage or {}).get("tokens_out")))
 
