@@ -138,6 +138,7 @@ class TouchstoneAgent(BaseAgent):
             messages = [{"role": "system", "content": config.system},
                         {"role": "user", "content": instruction}]
             usage = await self._loop(provider, config, messages, environment, conn, ep.id)
+            await _write_output(environment, _final_text(messages))
             traj = atif.to_atif(conn, ep.id)
             conn.close()
         return usage, traj
@@ -207,6 +208,26 @@ class TouchstoneAgent(BaseAgent):
             input={"name": name, "arguments": arguments},
             output={"result": result}, tool_call_id=call_id))
         messages.append({"role": "tool", "tool_call_id": call_id, "content": result})
+
+
+def _final_text(messages: list[dict]) -> str:
+    """The last assistant reply — the run's answer, written to output.json for the verifier."""
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant" and msg.get("content"):
+            return str(msg["content"])
+    return ""
+
+
+async def _write_output(environment, answer: str) -> None:
+    """Write {"answer": <final reply>} to output.json inside the sandbox, so the verifier can
+    collect the /app/output.json artifact and grade the answer. The replica loop otherwise writes
+    only the host-side trajectory; without this file `harbor job regrade` refuses the trial.
+    Packaged mode writes the same file from the customer's own entrypoint (TOUCHSTONE_OUTPUT)."""
+    payload = json.dumps({"answer": answer}, ensure_ascii=False)
+    path = os.environ.get("TOUCHSTONE_OUTPUT", PACKAGED_OUTPUT)
+    await environment.exec(
+        f"mkdir -p $(dirname {shlex.quote(path)}) && printf %s {shlex.quote(payload)} "
+        f"> {shlex.quote(path)}")
 
 
 async def _dispatch(call, name: str, arguments: dict, environment):

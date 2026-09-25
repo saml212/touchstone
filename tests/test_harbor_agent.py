@@ -103,6 +103,17 @@ def test_run_passes_tool_schemas_to_the_model(tmp_path, monkeypatch):
     assert provider.seen[0][0]["function"]["name"] == "lookup"  # tools forwarded to chat
 
 
+def test_replica_writes_output_json_in_the_sandbox(tmp_path, monkeypatch):
+    """The verifier collects /app/output.json (the no-PII check reads it), so the replica loop must
+    write it in the sandbox — otherwise `harbor job regrade` refuses the trial."""
+    _agent_dir(tmp_path, with_tools=False)
+    provider = QueuedProvider([Reply(content="It shipped, arriving in 2 days.", tool_calls=[])])
+    env, _, _ = _run(tmp_path, monkeypatch, provider)
+    writes = [c for c in env.calls if "/app/output.json" in c]
+    assert writes, "replica loop never wrote /app/output.json"
+    assert "It shipped, arriving in 2 days." in writes[-1]
+
+
 def _plant_customer_db(db_path, *, with_spans=True):
     """Write a trace db as the customer's own capture would: one episode, one model span whose
     assistant message carries a tool call (ATIF surfaces it without a @touchstone.tool span)."""
