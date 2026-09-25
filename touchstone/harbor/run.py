@@ -116,6 +116,24 @@ def _run_remote(path: Path, agent: str, model: str | None, jobs_dir: Path, n_con
     return _newest_job(jobs_dir, before)
 
 
+def _build_remote(context_dir: Path, tag: str, settings: Settings) -> None:
+    host, remote_root = settings.harbor_host, settings.harbor_remote_root
+    remote_ctx = f"{remote_root}/env-build/{tag.replace(':', '-')}"
+    _call(["rsync", "-az", "--delete", f"{context_dir}/", f"{host}:{remote_ctx}/"])
+    _call(["ssh", host, f"{_REMOTE_PATH}; cd {remote_ctx} && docker build -t {tag} ."])
+
+
+def build_image(context_dir: str | Path, tag: str, settings: Settings | None = None) -> None:
+    """Build the environment image `tag` from `context_dir`. Builds on the SSH host when there is no
+    local Docker daemon — the same host `harbor run` uses, so its daemon has the image."""
+    context_dir = Path(context_dir)
+    settings = settings or load_settings()
+    if settings.harbor_host and not _has_docker():
+        _build_remote(context_dir, tag, settings)
+    else:
+        _call(["docker", "build", "-t", tag, str(context_dir)])
+
+
 def run(path: str | Path, agent: str, *, model: str | None = None, jobs_dir: str | Path = "jobs",
         n_concurrent: int = 4, extra_args: list[str] | None = None,
         settings: Settings | None = None) -> Path:
