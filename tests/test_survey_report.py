@@ -74,10 +74,13 @@ def test_summary_baseline_sentence_is_the_design_line():
                     "2 failures — walk through them? (touchstone review)")
 
 
-def test_report_baseline_section_and_error():
-    baseline = {"pass_rates": {"a-1": 1.0, "a-2": 0.0}, "passed": ["a-1"], "failed": ["a-2"],
-                "model": "openai/gpt-4o-mini", "mode": "packaged"}
+def test_report_baseline_shows_mean_reward_and_check():
+    baseline = {"pass_rates": {"a-1": 1.0, "a-2": 0.0}, "rewards": {"a-1": 1.0, "a-2": 0.75},
+                "passed": ["a-1"], "failed": ["a-2"], "model": "openai/gpt-4o-mini",
+                "mode": "packaged"}
     md = render_report(MAP, FIDELITY, baseline=baseline)
-    assert "## Baseline" in md and "gpt-4o-mini" in md and "a-1" in md and "100%" in md
+    assert "## Baseline" in md and "gpt-4o-mini" in md
+    assert "100% ✓" in md  # a-1 fully passed
+    assert "75%" in md and "75% ✓" not in md  # a-2 partial reward, no check
     from touchstone.survey.report import baseline_section
     assert "Failed:" in baseline_section({"error": "boom\nmore"})

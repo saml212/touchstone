@@ -123,13 +123,19 @@ def agent_section(package: dict | None) -> str:
     return "## Agent under test\n\n" + "\n".join(lines)
 
 
+def _reward_cell(reward: float) -> str:
+    """Mean reward as a percentage, with a check mark when the task fully passed."""
+    return f"{reward * 100:.0f}%" + (" ✓" if reward >= 1.0 else "")
+
+
 def baseline_section(baseline: dict | None) -> str:
     if not baseline:
         return "## Baseline\n\n_not run_"
     if baseline.get("error"):
         return "## Baseline\n\nFailed: " + baseline["error"].splitlines()[0]
     head = f"Model {baseline.get('model')} ({baseline.get('mode')} agent):"
-    rows = [[name, f"{rate * 100:.0f}%"] for name, rate in sorted(baseline["pass_rates"].items())]
+    rewards = baseline.get("rewards") or baseline.get("pass_rates", {})
+    rows = [[name, _reward_cell(reward)] for name, reward in sorted(rewards.items())]
     return f"## Baseline\n\n{head}\n\n" + _table(["task", "reward"], rows)
 
 

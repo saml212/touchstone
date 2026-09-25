@@ -102,6 +102,15 @@ def pass_rates(job: Job) -> dict[str, float]:
     return {name: sum(t.passed for t in ts) / len(ts) for name, ts in sorted(tasks.items())}
 
 
+def mean_rewards(job: Job) -> dict[str, float]:
+    """Mean scalar reward per task (a partial-credit view), by task name, sorted."""
+    tasks: dict[str, list[float]] = {}
+    for trial in job.trials:
+        tasks.setdefault(trial.task_name, []).append(
+            trial.reward if trial.reward is not None else 0.0)
+    return {name: sum(rs) / len(rs) for name, rs in sorted(tasks.items())}
+
+
 def _passed_tasks(job: Job) -> set[str]:
     """Tasks a job passed outright — every trial of the task scored 1.0."""
     return {name for name, rate in pass_rates(job).items() if rate >= 1.0}

@@ -37,11 +37,12 @@ def _model_ref(cfg: dict) -> str:
 
 
 def _summarize(job_dir: Path, model: str, mode: str) -> dict:
-    rates = jobs.pass_rates(jobs.Job.read(job_dir))
+    job = jobs.Job.read(job_dir)
+    rates = jobs.pass_rates(job)
     passed = sorted(n for n, r in rates.items() if r >= 1.0)
     failed = sorted(n for n, r in rates.items() if r < 1.0)
     return {"job_dir": str(job_dir), "model": model, "mode": mode, "pass_rates": rates,
-            "passed": passed, "failed": failed}
+            "rewards": jobs.mean_rewards(job), "passed": passed, "failed": failed}
 
 
 def run_baseline(repo, env_result: dict, settings, force: bool = False,

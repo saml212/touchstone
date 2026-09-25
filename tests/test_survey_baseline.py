@@ -16,7 +16,7 @@ def _agent_toml(out, mode="packaged", model="gpt-4o-mini", provider="openai"):
         f'[agent]\nmode = "{mode}"\nmodel_default = "{model}"\nprovider = "{provider}"\n')
 
 
-def _mock_harbor(monkeypatch, rates, capture=None):
+def _mock_harbor(monkeypatch, rates, capture=None, rewards=None):
     def fake_run(path, agent, **kw):
         if capture is not None:
             capture.update(agent=agent, model=kw.get("model"), extra=kw.get("extra_args"),
@@ -25,13 +25,15 @@ def _mock_harbor(monkeypatch, rates, capture=None):
     monkeypatch.setattr(baseline.run_mod, "run", fake_run)
     monkeypatch.setattr(baseline.jobs.Job, "read", staticmethod(lambda d: d))
     monkeypatch.setattr(baseline.jobs, "pass_rates", lambda job: rates)
+    monkeypatch.setattr(baseline.jobs, "mean_rewards", lambda job: rewards or rates)
 
 
 def test_run_baseline_writes_summary_and_passes_model_and_mode(tmp_path, monkeypatch):
     out = tmp_path / "touchstone"
     _agent_toml(out)
     seen = {}
-    _mock_harbor(monkeypatch, {"t1": 1.0, "t2": 0.0, "t3": 1.0}, seen)
+    _mock_harbor(monkeypatch, {"t1": 1.0, "t2": 0.0, "t3": 1.0}, seen,
+                 rewards={"t1": 1.0, "t2": 0.75, "t3": 1.0})
     data = baseline.run_baseline(tmp_path, {}, Settings())
 
     assert seen["agent"] == baseline.AGENT_PATH
@@ -39,6 +41,7 @@ def test_run_baseline_writes_summary_and_passes_model_and_mode(tmp_path, monkeyp
     assert seen["extra"] == ["--ak", "mode=packaged"]
     assert seen["jobs_dir"] == out / "jobs"  # under the dataset root, not cwd
     assert data["passed"] == ["t1", "t3"] and data["failed"] == ["t2"]
+    assert data["rewards"] == {"t1": 1.0, "t2": 0.75, "t3": 1.0}  # partial credit kept
     assert data["model"] == "openai/gpt-4o-mini" and data["mode"] == "packaged"
     on_disk = json.loads((out / "baseline.json").read_text())
     assert on_disk["passed"] == ["t1", "t3"]
