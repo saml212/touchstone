@@ -82,15 +82,12 @@ def _scripted(arg: str | None, spec: str, settings: Settings) -> Provider:
 
 
 def _reference(arg: str | None, spec: str, settings: Settings) -> Provider:
-    if arg is not None:  # "reference" takes no argument
-        raise _unknown(spec)
     from .reference import ReferenceProvider
     return ReferenceProvider()
 
 
 def _nop(arg: str | None, spec: str, settings: Settings) -> Provider:
-    if arg is not None:  # "nop" takes no argument
-        raise _unknown(spec)
+    # Argument-free providers ignore any model part, so Harbor's `-m nop/x` maps cleanly.
     from .nop import NopProvider
     return NopProvider()
 
