@@ -246,7 +246,9 @@ def test_task_toml_provenance(tmp_path, conn):
     assert ts["episodes"] == ["paint1"]
     assert ts["job"] == "Recolour a widget"
     assert sorted(ts["tools"]) == ["add_note", "get_widget", "paint"]
-    assert doc["environment"]["docker_image"] == "touchstone-env-x:abc123"
+    # the environment is the shared image, layered via a FROM Dockerfile (so Harbor discovers it)
+    dockerfile = (repo / "touchstone" / "tasks" / "recolour-1" / "environment" / "Dockerfile")
+    assert dockerfile.read_text() == "FROM touchstone-env-x:abc123\n"
 
 
 def test_task_no_pii_safety_when_clean(tmp_path, conn):

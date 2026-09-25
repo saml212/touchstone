@@ -219,8 +219,7 @@ def _write_tests(task_dir: Path, state: list[str], tool: list[str], answer: str)
     rewardkit.write_test_sh(tests)
 
 
-def _task_toml(name: str, dataset: str, group: dict, ep_id: str, calls: list[ToolEvent],
-               image_tag: str) -> dict:
+def _task_toml(name: str, dataset: str, group: dict, ep_id: str, calls: list[ToolEvent]) -> dict:
     tools = sorted({c.tool for c in calls if c.tool})
     return {
         "schema_version": "1.3",
@@ -228,7 +227,7 @@ def _task_toml(name: str, dataset: str, group: dict, ep_id: str, calls: list[Too
         "metadata": {"touchstone": {
             "episodes": [ep_id], "job": group["label"], "tools": tools,
             "created_at": datetime.now(UTC).isoformat(), "version": _touchstone_version()}},
-        "environment": {"docker_image": image_tag},
+        "environment": {"build_timeout_sec": 600.0},
         "agent": {"timeout_sec": 300.0},
         "verifier": {"timeout_sec": 300.0},
     }
@@ -253,8 +252,10 @@ def _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub,
     atomic_write(task_dir / "instruction.md",
                  _canary(task_dir.name) + text["instruction"].strip() + "\n")
     atomic_write(task_dir / "persona.md", text["persona"].strip() + "\n")
-    _write_task_toml(task_dir, _task_toml(task_dir.name, dataset, group, ep_id, calls,
-                                          ctx["image_tag"]))
+    _write_task_toml(task_dir, _task_toml(task_dir.name, dataset, group, ep_id, calls))
+    # Every task's environment is the one shared image, layered as a trivial FROM: Harbor requires
+    # an environment/ dir to discover the task, and the build is a cache hit on the base.
+    atomic_write(task_dir / "environment" / "Dockerfile", f"FROM {ctx['image_tag']}\n")
     spec = _replay_spec(calls, ctx["tools"], ctx["services"], ctx["ports"], ctx["base_url_envs"])
     trajectory = scrub.scrub(to_atif(conn, ep_id))
     _write_solution(task_dir, spec, trajectory, answer, ctx["services"], ctx["ports"],
