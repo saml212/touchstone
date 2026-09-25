@@ -61,6 +61,7 @@ _ENV_KEYS = {
     "TOUCHSTONE_TTS": "tts",
     "TOUCHSTONE_SPEECH_MODE": "speech_mode",
     "TOUCHSTONE_HARBOR_HOST": "harbor_host",
+    "TOUCHSTONE_HARBOR_REMOTE_ROOT": "harbor_remote_root",
 }
 
 
