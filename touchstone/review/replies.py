@@ -81,5 +81,6 @@ def applied_reply(result: dict) -> str:
         lines.append("Regraded: no reward changed.")
     failed = result.get("failed") or []
     if failed:
-        lines.append("Could not regrade: " + "; ".join(f"{f['task']} ({f['error']})" for f in failed))
+        broken = "; ".join(f"{f['task']} ({f['error']})" for f in failed)
+        lines.append(f"Could not regrade: {broken}")
     return " ".join(lines) + " Want to look at the next trial?"

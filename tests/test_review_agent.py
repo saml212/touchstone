@@ -232,7 +232,7 @@ def test_apply_change_uses_the_proposed_change_not_a_model_supplied_one(tmp_path
     # The proposed removal was applied (state.py now has no criteria), not the wrong change.
     state_py = dataset / "tasks" / "issue-a-refund-1" / "tests" / "correctness" / "state.py"
     assert "sqlite_query_equals" not in state_py.read_text()
-    assert "Done" in turn.say
+    assert "Applied to issue-a-refund-1" in turn.say and "75% → 100%" in turn.say
     assert agent2.committed()
 
 
@@ -363,9 +363,10 @@ def test_change_tools_fall_back_to_the_open_trial_task(tmp_path, monkeypatch):
 def test_applied_reply_reads_out_deltas_and_failures():
     from touchstone.review import replies
 
-    text = replies.applied_reply({"applied_to": ["refund-order-2"], "job": "j2",
-                                  "deltas": [{"task": "refund-order-2", "before": 1.0, "after": 0.875}],
-                                  "failed": [{"task": "x", "error": "RegradeError: no artifact"}]})
+    text = replies.applied_reply({
+        "applied_to": ["refund-order-2"], "job": "j2",
+        "deltas": [{"task": "refund-order-2", "before": 1.0, "after": 0.875}],
+        "failed": [{"task": "x", "error": "RegradeError: no artifact"}]})
     assert "Applied to refund-order-2." in text
     assert "refund-order-2 100% → 88%" in text or "refund-order-2 100% → 87%" in text
     assert "Could not regrade: x (RegradeError: no artifact)" in text
