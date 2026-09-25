@@ -89,10 +89,11 @@ def _editable(task_dir: Path) -> list[dict]:
         except changes.ChangeError:
             continue
         rel = py.relative_to(task_dir).as_posix()
-        out += [{"file": rel, "index": i, "criterion": src} for i, src in enumerate(calls, 1)]
+        out += [{"handle": f"{rel}:{i}", "file": rel, "index": i, "criterion": src}
+                for i, src in enumerate(calls, 1)]
     reward = tests / "reward.toml"
     if reward.is_file():
         weights = _read_toml(reward).get("reward", [{}])[0].get("weights", {})
-        out += [{"file": "tests/reward.toml", "dimension": dim, "weight": w}
-                for dim, w in weights.items()]
+        out += [{"handle": f"tests/reward.toml:{dim}", "file": "tests/reward.toml",
+                 "dimension": dim, "weight": w} for dim, w in weights.items()]
     return out

@@ -1,18 +1,10 @@
 """The review agent: a small state machine over a chat provider with a tool surface.
 
-The room posts a participant message; `respond` runs the provider in a tool-calling loop
-(opening -> pick a trial -> present it -> ask agree? -> on disagree draft + apply a criterion change
--> regrade -> next) and returns what to say. The five tools are the only way it touches anything:
-
-- ``list_trials(filter)``    which trials to walk, in priority order
-- ``read_trial(task, trial)``  the instruction, trajectory, and criteria+scores (sets current)
-- ``record_review(task, trial, verdict, note)``  an agree/disagree row; trust is the agreed share
-- ``propose_change(task, change)``  read back a criterion change without writing it
-- ``apply_change(task, change, always)``  write the file(s), regrade, and report what moved
-
-Trust and the current trial live in the room state (a role="draft" scratch message + the reviews
-table) so the UI reads them. The prompts are short and the agent speaks plain product language; it
-never names files unless asked.
+The room posts a participant message; `respond` runs the provider in a tool-calling loop (opening ->
+pick a trial -> present it -> agree? -> on disagree draft + apply a criterion change -> regrade ->
+next). Its five tools (list_trials, read_trial, record_review, propose_change, apply_change) are the
+only way it touches the dataset, the reviews table, or Harbor. Trust and the current trial live in
+the room state (a role="draft" scratch message + the reviews table) so the UI reads them.
 """
 
 from __future__ import annotations
@@ -23,7 +15,7 @@ from dataclasses import dataclass, field
 from .. import store
 from ..harbor import run as run_mod
 from ..interview import rooms
-from . import changes, regrade, trials
+from . import changes, regrade, replies, trials
 from .facts import (
     _baseline_counts,
     _editable,
@@ -101,7 +93,7 @@ class ReviewAgent:
     # ---- a turn ------------------------------------------------------------
 
     def respond(self, history: list[dict]) -> AgentTurn:
-        if _wants_done(history):
+        if replies.wants_done(history):
             rooms.close(self.conn, self.room.id)
             return AgentTurn(say="Closing the room — thanks all.")
         if self.provider is None:
@@ -116,26 +108,28 @@ class ReviewAgent:
         reward figure we trust its wording; otherwise we prepend the facts."""
         if not self._presented:
             return say
-        token = _reward_pct(self._presented.get("reward"))
+        token = replies.reward_pct(self._presented.get("reward"))
         if token in say:
             return say
-        return f"{_grounding_line(self._presented)}\n\n{say}"
+        return f"{replies.grounding_line(self._presented)}\n\n{say}"
 
     def _run_loop(self, history: list[dict]) -> str:
-        messages = [{"role": "system", "content": SYSTEM}, *_as_messages(history)]
-        say = "Let me look at that."
+        messages = [{"role": "system", "content": SYSTEM}, *replies.as_messages(history)]
+        last_error: str | None = None
         for _ in range(MAX_STEPS):
             reply = self.provider.chat(messages, TOOLS)
             if not reply.tool_calls:
-                return reply.content or say
+                # No content after a tool error is the failure mode we must never paper over: say
+                # what went wrong so the room isn't left with an empty "let me look at that".
+                return (reply.content or "").strip() or replies.tool_error_reply(last_error)
             messages.append({"role": "assistant", "content": reply.content,
                              "tool_calls": reply.tool_calls})
-            say = reply.content or say
             for call in reply.tool_calls:
                 result = self._dispatch(call)
+                last_error = replies.error_of(result)  # the latest tool call's error, or None
                 messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                  "name": call.get("name"), "content": result})
-        return say
+        return replies.tool_error_reply(last_error)  # hit MAX_STEPS -> surface the last error
 
     # ---- tool dispatch -----------------------------------------------------
 
@@ -164,7 +158,7 @@ class ReviewAgent:
             return {"needs_review": trials.needs_review(self.dataset_dir)}
         refs = trials.filter_refs(self._scan(), which)
         return {"trials": [{"task": r.task, "trial": r.trial, "reward": r.reward,
-                            "reward_pct": _reward_pct(r.reward), "category": r.category,
+                            "reward_pct": replies.reward_pct(r.reward), "category": r.category,
                             "reviewed": r.reviewed, "run": r.label} for r in refs[:20]]}
 
     def _read_trial(self, args: dict) -> dict:
@@ -174,7 +168,7 @@ class ReviewAgent:
             return {"error": f"no trial {trial} for {task}"}
         self.scratch.current = {"task": task, "trial": trial}
         detail["editable"] = _editable(self.dataset_dir / "tasks" / task)
-        detail["reward_pct"] = _reward_pct(detail.get("reward"))
+        detail["reward_pct"] = replies.reward_pct(detail.get("reward"))
         self._presented = detail  # ground this turn's reply in these scores
         return detail
 
@@ -186,15 +180,17 @@ class ReviewAgent:
         return {"recorded": review.verdict, "trust": self._trust()}
 
     def _propose_change(self, args: dict) -> dict:
-        change = args.get("change")
-        readback = changes.describe(change)
+        task, change = args.get("task", ""), args.get("change")
+        changes.validate(self.dataset_dir / "tasks" / task, change)  # bad shape -> re-draft
         self.scratch.proposed = change
-        self.scratch.readback = readback
-        return {"readback": readback}
+        self.scratch.readback = changes.describe(change)
+        return {"readback": self.scratch.readback}
 
     def _apply_change(self, args: dict) -> dict:
         task, change = args.get("task", ""), args.get("change")
         targets = _shared_tasks(self.dataset_dir, task) if args.get("always") else [task]
+        for name in targets:  # refuse an unvalidated/malformed change before writing any file
+            changes.validate(self.dataset_dir / "tasks" / name, change)
         for name in targets:
             changes.apply(self.dataset_dir / "tasks" / name, change)
         result = self._regrade_current()
@@ -269,45 +265,3 @@ class ReviewAgent:
         if not current:
             return None
         return trials.read(self.dataset_dir, self.jobs_dir, current["task"], current["trial"])
-
-
-# ---- module helpers --------------------------------------------------------
-
-
-def _reward_pct(reward) -> str:
-    return "unknown" if reward is None else f"{round(reward * 100)}%"
-
-
-def _passed(score) -> bool:
-    return score is True or score == 1
-
-
-def _grounding_line(detail: dict) -> str:
-    """The verifier's actual result in one line: reward %, each criterion pass/fail, empty note."""
-    parts = [f"The verifier scored this {_reward_pct(detail.get('reward'))}."]
-    crits = detail.get("criteria") or []
-    if crits:
-        marks = "; ".join(f"{c.get('description', '?')} — "
-                          f"{'passed' if _passed(c.get('score')) else 'failed'}" for c in crits)
-        parts.append(f"Checks: {marks}.")
-    if not detail.get("trajectory"):
-        parts.append("The agent did nothing that was recorded.")
-    return " ".join(parts)
-
-
-def _wants_done(history: list[dict]) -> bool:
-    """The participants asked to close the room since the agent last spoke (`/done`)."""
-    idx = max((i for i, m in enumerate(history) if m.get("role") == "assistant"), default=-1)
-    return any(m.get("role") == "user" and m.get("text", "").strip().lower().startswith("/done")
-               for m in history[idx + 1:])
-
-
-def _as_messages(history: list[dict]) -> list[dict]:
-    """Room messages -> chat messages: participants are users, the agent is the assistant."""
-    out = []
-    for m in history:
-        role = "assistant" if m.get("role") == "assistant" else "user"
-        who = m.get("speaker", "")
-        text = m.get("text", "")
-        out.append({"role": role, "content": f"{who}: {text}" if role == "user" else text})
-    return out

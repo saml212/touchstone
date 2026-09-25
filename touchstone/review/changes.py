@@ -19,6 +19,8 @@ relative to the task directory.
 from __future__ import annotations
 
 import ast
+import shutil
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -244,6 +246,20 @@ def apply(task_dir: str | Path, change) -> list[str]:
     """Apply a change (or list of changes) to a task's files; return the files touched, or raise."""
     task_dir = Path(task_dir)
     return [_apply_one(task_dir, c) for c in as_list(change)]
+
+
+def validate(task_dir: str | Path, change) -> None:
+    """Dry-run a change against a throwaway copy of the task; raise ChangeError with a precise
+    message if it cannot be applied (wrong shape, unknown op, missing file, out-of-range criterion).
+    Nothing in the real task is written — the review agent validates before it reads a change back
+    and again before it commits, so a malformed draft never reaches disk."""
+    task_dir = Path(task_dir)
+    if not task_dir.is_dir():
+        raise ChangeError(f"there is no task {task_dir.name!r} to change.")
+    with tempfile.TemporaryDirectory() as tmp:
+        clone = Path(tmp) / "task"
+        shutil.copytree(task_dir, clone)
+        apply(clone, change)
 
 
 # ---- read-back -------------------------------------------------------------

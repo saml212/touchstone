@@ -224,3 +224,62 @@ def test_unparseable_change_is_reported_not_crashed(tmp_path, conn):
     turn = agent.respond([{"role": "user", "speaker": "sam", "text": "change it"}])
     assert "couldn't" in turn.say
     assert agent.committed() == []
+
+
+# ---- criterion-change robustness: validated shape, stored draft, surfaced errors ----------------
+
+_GOOD_CHANGE = {"op": "edit", "file": "tests/correctness/state.py", "criterion": 1,
+                "params": {"fn": "sqlite_query_equals",
+                           "args": ["s/state.db", "SELECT refunded", 200.0]}}
+_WRONG_SHAPE = {"action": "remove_criterion", "criterion": "total of 8 emails sent"}
+
+
+def test_read_trial_exposes_a_stable_criterion_handle(tmp_path, conn):
+    _dataset(tmp_path)
+    room = _room(conn)
+    provider = Seq([
+        _call("read_trial", {"task": "issue-a-refund-1", "trial": "src/issue-a-refund-1__x"}),
+        Reply(content="Here it is."),
+    ])
+    agent = ReviewAgent(provider, conn, room, _settings(tmp_path))
+    agent.respond([{"role": "user", "speaker": "sam", "text": "show me one"}])
+    editable = agent._presented["editable"]
+    assert editable and editable[0]["handle"] == "tests/correctness/state.py:1"
+
+
+def test_propose_rejects_wrong_shape_then_stores_the_right_one(tmp_path, conn):
+    _dataset(tmp_path)
+    room = _room(conn)
+    provider = Seq([
+        _call("propose_change", {"task": "issue-a-refund-1", "change": _WRONG_SHAPE}),  # error
+        _call("propose_change", {"task": "issue-a-refund-1", "change": _GOOD_CHANGE}),  # stored
+        Reply(content="I'll set the expected refund to 200 — say yes to apply."),
+    ])
+    agent = ReviewAgent(provider, conn, room, _settings(tmp_path))
+    agent.respond([{"role": "user", "speaker": "sam", "text": "that's wrong"}])
+    proposed = agent.review_state()["proposed"]["change"]
+    assert proposed == [_GOOD_CHANGE]  # only the validated draft was stored, not the wrong shape
+
+
+def test_apply_error_is_surfaced_not_filler(tmp_path, conn):
+    _dataset(tmp_path)
+    room = _room(conn)
+    provider = Seq([
+        _call("apply_change", {"task": "issue-a-refund-1", "change": _WRONG_SHAPE}),
+        Reply(content=""),  # the model falls silent after the failed apply
+    ])
+    agent = ReviewAgent(provider, conn, room, _settings(tmp_path))
+    turn = agent.respond([{"role": "user", "speaker": "sam", "text": "yes apply it"}])
+    assert "couldn't apply that change" in turn.say and "check by number" in turn.say
+    assert turn.say != "Let me look at that."  # never the empty filler
+
+
+def test_apply_max_steps_with_error_surfaces_the_reason(tmp_path, conn):
+    _dataset(tmp_path)
+    room = _room(conn)
+    # every step keeps failing to apply the wrong shape -> MAX_STEPS -> still an explained reply
+    provider = Seq([_call("apply_change", {"task": "issue-a-refund-1", "change": _WRONG_SHAPE})
+                    for _ in range(10)])
+    agent = ReviewAgent(provider, conn, room, _settings(tmp_path))
+    turn = agent.respond([{"role": "user", "speaker": "sam", "text": "apply"}])
+    assert "couldn't apply that change" in turn.say
