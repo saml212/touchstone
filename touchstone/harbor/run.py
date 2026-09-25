@@ -25,6 +25,18 @@ _KEYCHAIN_ATTR = {"OPENAI_API_KEY": "keychain_openai", "ANTHROPIC_API_KEY": "key
 # A generic login PATH so a non-interactive SSH shell finds harbor and docker on common hosts.
 _REMOTE_PATH = 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"'
 
+# ssh/rsync options so an unreachable harbor host fails fast instead of hanging: bound the TCP
+# connect, and BatchMode=yes so a missing key never blocks on a password/passphrase prompt.
+_SSH_OPTS = ["-o", "ConnectTimeout=10", "-o", "BatchMode=yes"]
+
+
+def _ssh_cmd(host: str, remote: str) -> list[str]:
+    return ["ssh", *_SSH_OPTS, host, remote]
+
+
+def _rsync_cmd(args: list[str]) -> list[str]:
+    return ["rsync", "-e", "ssh " + " ".join(_SSH_OPTS), *args]
+
 
 def _run_path(path: Path) -> Path:
     """The path passed to `harbor run -p`: a task dir as-is, a dataset root -> its tasks/."""
@@ -136,32 +148,32 @@ def _run_remote(path: Path, agent: str, model: str | None, jobs_dir: Path, n_con
     remote_path = _remote_dataset_path(remote_root, sync_root)
 
     # --exclude jobs so a --delete push never wipes job dirs the host still holds.
-    _call(["rsync", "-az", "--delete", "--exclude", "jobs",
-           f"{sync_root}/", f"{host}:{remote_path}/"])
+    _call(_rsync_cmd(["-az", "--delete", "--exclude", "jobs",
+                      f"{sync_root}/", f"{host}:{remote_path}/"]))
     with_path = None
     if _is_custom_agent(agent):  # ship the touchstone repo so harbor can import the custom agent
         with_path = f"{remote_root}/touchstone-src"
-        _call(["rsync", "-az", "--delete", f"{_repo_root()}/", f"{host}:{with_path}/"])
+        _call(_rsync_cmd(["-az", "--delete", f"{_repo_root()}/", f"{host}:{with_path}/"]))
     # -o must be an ABSOLUTE remote path: a separate verifier's `docker compose cp` resolves a
     # relative artifact/host path against the task's tests dir, not the dataset root, and fails.
     remote_cmd = " ".join(
         _harbor_cmd(rel_run, agent, model, f"{remote_path}/jobs", n_concurrent,
                     extra_args, with_path))
     prefix, stdin_data = _remote_key_prefix(key)
-    _call(["ssh", host, f"{prefix}{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"],
+    _call(_ssh_cmd(host, f"{prefix}{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"),
           stdin_data=stdin_data)
 
     jobs_dir.mkdir(parents=True, exist_ok=True)
     before = _job_dirs(jobs_dir)
-    _call(["rsync", "-az", f"{host}:{remote_path}/jobs/", f"{jobs_dir}/"])
+    _call(_rsync_cmd(["-az", f"{host}:{remote_path}/jobs/", f"{jobs_dir}/"]))
     return _newest_job(jobs_dir, before)
 
 
 def _build_remote(context_dir: Path, tag: str, settings: Settings) -> None:
     host, remote_root = settings.harbor_host, settings.harbor_remote_root
     remote_ctx = f"{remote_root}/env-build/{tag.replace(':', '-')}"
-    _call(["rsync", "-az", "--delete", f"{context_dir}/", f"{host}:{remote_ctx}/"])
-    _call(["ssh", host, f"{_REMOTE_PATH}; cd {remote_ctx} && docker build -t {tag} ."])
+    _call(_rsync_cmd(["-az", "--delete", f"{context_dir}/", f"{host}:{remote_ctx}/"]))
+    _call(_ssh_cmd(host, f"{_REMOTE_PATH}; cd {remote_ctx} && docker build -t {tag} ."))
 
 
 def build_image(context_dir: str | Path, tag: str, settings: Settings | None = None) -> None:
@@ -194,16 +206,16 @@ def _regrade_remote(job_dir: Path, tasks_path: Path, settings: Settings) -> Path
     rel_tasks = _run_path(tasks_path).relative_to(sync_root).as_posix()
     remote_path = _remote_dataset_path(settings.harbor_remote_root, sync_root)
     # Push the updated tasks (never the whole jobs tree), then just the one source job dir.
-    _call(["rsync", "-az", "--delete", "--exclude", "jobs",
-           f"{sync_root}/", f"{host}:{remote_path}/"])
-    _call(["rsync", "-az", f"{job_dir}/", f"{host}:{remote_path}/jobs/{job_dir.name}/"])
+    _call(_rsync_cmd(["-az", "--delete", "--exclude", "jobs",
+                      f"{sync_root}/", f"{host}:{remote_path}/"]))
+    _call(_rsync_cmd(["-az", f"{job_dir}/", f"{host}:{remote_path}/jobs/{job_dir.name}/"]))
     # Absolute -o for the same compose-cp reason as _run_remote.
     remote_cmd = " ".join(
         _regrade_cmd(f"{remote_path}/jobs/{job_dir.name}", rel_tasks, f"{remote_path}/jobs"))
-    _call(["ssh", host, f"{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"])
+    _call(_ssh_cmd(host, f"{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"))
     out = job_dir.parent
     before = _job_dirs(out)
-    _call(["rsync", "-az", f"{host}:{remote_path}/jobs/", f"{out}/"])
+    _call(_rsync_cmd(["-az", f"{host}:{remote_path}/jobs/", f"{out}/"]))
     return _newest_job(out, before)
 
 

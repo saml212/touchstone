@@ -83,13 +83,13 @@ def test_remote_when_no_docker_rsyncs_runs_over_ssh_and_syncs_back(tmp_path, mon
     kinds = [c[0] for c in calls]
     assert kinds == ["rsync", "ssh", "rsync"]  # push dataset, run, pull jobs
     push = calls[0]
-    assert push[:4] == ["rsync", "-az", "--delete", "--exclude"] and push[4] == "jobs"
+    assert push[0] == "rsync" and "--delete" in push and "jobs" in push
     dest = push[-1]  # mini:/remote/datasets/touchstone-<hex>/
     assert dest.startswith("mini:/remote/datasets/touchstone-") and dest.endswith("/")
     ssh = calls[1]
-    assert ssh[0] == "ssh" and ssh[1] == "mini"
-    assert "/remote/datasets/touchstone-" in ssh[2]
-    assert "harbor run -p tasks -a oracle" in ssh[2]
+    assert ssh[0] == "ssh" and ssh[-2] == "mini"  # host is the penultimate arg, remote is last
+    assert "/remote/datasets/touchstone-" in ssh[-1]
+    assert "harbor run -p tasks -a oracle" in ssh[-1]
     assert job.name == "2026-01-01__00-00-00"
 
 
@@ -103,7 +103,7 @@ def test_remote_custom_agent_also_ships_touchstone_and_uses_uvx(tmp_path, monkey
     # dataset push, touchstone repo push, ssh run, jobs pull
     assert [c[0] for c in calls] == ["rsync", "rsync", "ssh", "rsync"]
     assert calls[1][-1] == "mini:/remote/touchstone-src/"
-    assert "uvx --from harbor --with /remote/touchstone-src harbor run" in calls[2][2]
+    assert "uvx --from harbor --with /remote/touchstone-src harbor run" in calls[2][-1]
 
 
 AGENT = "touchstone.harbor.agent:TouchstoneAgent"
@@ -129,8 +129,8 @@ def test_remote_custom_agent_forwards_key_on_stdin_not_argv(tmp_path, monkeypatc
                 jobs_dir=tmp_path / "jobs", settings=settings)
     ssh = next(c for c in calls if c[0] == "ssh")
     assert ssh.stdin == "sk-secret\n"  # fed on stdin
-    assert 'read -r TS_KEY; export OPENAI_API_KEY="$TS_KEY";' in ssh[2]
-    assert "sk-secret" not in ssh[2]  # never on argv
+    assert 'read -r TS_KEY; export OPENAI_API_KEY="$TS_KEY";' in ssh[-1]
+    assert "sk-secret" not in " ".join(ssh)  # never on argv
 
 
 def test_builtin_agent_forwards_no_key(tmp_path, monkeypatch):
@@ -146,6 +146,23 @@ def test_provider_key_none_when_no_key_needed(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
     assert run_mod._provider_key("claude-cli/sonnet", Settings()) is None  # subscription, no key
     assert run_mod._provider_key(None, Settings()) is None
+
+
+def test_remote_ssh_and_rsync_bound_connect_timeout_so_unreachable_host_never_hangs(
+        tmp_path, monkeypatch):
+    # Attack (stage-7 harbor): the mini is unreachable. Every ssh/rsync to the host must carry a
+    # bounded ConnectTimeout and BatchMode=yes so the command fails fast instead of hanging on the
+    # TCP connect or a password/passphrase prompt.
+    calls = _record_calls(monkeypatch)
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    settings = Settings(harbor_host="mini", harbor_remote_root="/remote")
+    run_mod.run(_dataset(tmp_path), "oracle", jobs_dir=tmp_path / "jobs", settings=settings)
+    for cmd in calls:
+        joined = " ".join(cmd)
+        assert "ConnectTimeout=10" in joined
+        assert "BatchMode=yes" in joined
+        if cmd[0] == "rsync":  # rsync tunnels ssh via -e, carrying the same options
+            assert cmd[1] == "-e" and "ssh -o ConnectTimeout=10" in cmd[2]
 
 
 def test_run_local_raises_if_no_job_created(tmp_path, monkeypatch):

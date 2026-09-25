@@ -163,4 +163,4 @@ def test_build_image_remote(monkeypatch, tmp_path):
     monkeypatch.setattr(run_mod, "_call", lambda cmd: seen.append(cmd))
     run_mod.build_image(tmp_path, "img:1", Settings(harbor_host="h", harbor_remote_root="/r"))
     assert any(c[0] == "rsync" for c in seen)
-    assert any(c[0] == "ssh" and "docker build -t img:1" in c[2] for c in seen)
+    assert any(c[0] == "ssh" and "docker build -t img:1" in c[-1] for c in seen)
