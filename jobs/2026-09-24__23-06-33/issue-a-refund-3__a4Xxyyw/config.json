@@ -1,0 +1,12 @@
+{
+    "task": {
+        "path": "tasks/issue-a-refund-3",
+        "source": "tasks"
+    },
+    "trial_name": "issue-a-refund-3__a4Xxyyw",
+    "trials_dir": "jobs/2026-09-24__23-06-33",
+    "agent": {
+        "name": "nop"
+    },
+    "job_id": "ae1374a6-b6b5-4d89-8538-c669d0b3a93d"
+}

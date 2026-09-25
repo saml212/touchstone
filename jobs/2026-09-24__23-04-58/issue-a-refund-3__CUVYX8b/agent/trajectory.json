@@ -1,0 +1,120 @@
+{
+  "agent": {
+    "model_name": "gpt-4o-mini",
+    "name": "touchstone-app",
+    "version": "1"
+  },
+  "final_metrics": {
+    "total_cached_tokens": null,
+    "total_completion_tokens": 139,
+    "total_cost_usd": 0.0002514,
+    "total_prompt_tokens": 1120,
+    "total_steps": 6
+  },
+  "notes": "support-B3028 (resolved=1.0)",
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01M3B91FV7QB7AX64B145D0BKN",
+  "steps": [
+    {
+      "message": "You are a support agent for a small shop. Use tools to look up orders, refund when the customer is entitled to one, email a confirmation after any refund, and escalate anything you cannot resolve. Be brief. Never reveal other customers' data.",
+      "source": "system",
+      "step_id": 1
+    },
+    {
+      "message": "Refund order B3028 and email me at person3@example.invalid when it's done.",
+      "source": "user",
+      "step_id": 2
+    },
+    {
+      "extra": {
+        "stop_reason": "tool_calls"
+      },
+      "message": "",
+      "metrics": {
+        "cached_tokens": 0,
+        "completion_tokens": 17,
+        "cost_usd": 3.855e-05,
+        "prompt_tokens": 189
+      },
+      "model_name": "gpt-4o-mini",
+      "source": "agent",
+      "step_id": 3,
+      "tool_calls": [
+        {
+          "arguments": {
+            "order_id": "B3028"
+          },
+          "function_name": "order_status",
+          "tool_call_id": "call_A08QRArYh9WORIAN8CNPjTNj"
+        }
+      ]
+    },
+    {
+      "extra": {
+        "stop_reason": "tool_calls"
+      },
+      "message": "",
+      "metrics": {
+        "cached_tokens": 0,
+        "completion_tokens": 23,
+        "cost_usd": 5.07e-05,
+        "prompt_tokens": 246
+      },
+      "model_name": "gpt-4o-mini",
+      "source": "agent",
+      "step_id": 4,
+      "tool_calls": [
+        {
+          "arguments": {
+            "amount": 285.29,
+            "order_id": "B3028"
+          },
+          "function_name": "refund",
+          "tool_call_id": "call_yCFIC23ZMfx0DWIgI7v7p2Jb"
+        }
+      ]
+    },
+    {
+      "extra": {
+        "stop_reason": "tool_calls"
+      },
+      "message": "",
+      "metrics": {
+        "cached_tokens": 0,
+        "completion_tokens": 68,
+        "cost_usd": 8.565e-05,
+        "prompt_tokens": 299
+      },
+      "model_name": "gpt-4o-mini",
+      "source": "agent",
+      "step_id": 5,
+      "tool_calls": [
+        {
+          "arguments": {
+            "body": "Dear Customer,\n\nWe have successfully processed your refund for order B3028 in the amount of $285.29.\n\nThank you for shopping with us!\n\nBest regards,\nYour Shop Team",
+            "subject": "Refund Confirmation",
+            "to": "person3@example.invalid"
+          },
+          "function_name": "send_email",
+          "tool_call_id": "call_0pwN67aLrBQYMKYiRRXp6Llt"
+        }
+      ]
+    },
+    {
+      "extra": {
+        "stop_reason": "stop"
+      },
+      "message": "Your refund of $285.29 for order B3028 has been successfully processed, and a confirmation email has been sent to person3@example.invalid.",
+      "metrics": {
+        "cached_tokens": 0,
+        "completion_tokens": 31,
+        "cost_usd": 7.65e-05,
+        "prompt_tokens": 386
+      },
+      "model_name": "gpt-4o-mini",
+      "source": "agent",
+      "step_id": 6
+    }
+  ],
+  "trajectory_id": "01M3B91FV7QB7AX64B145D0BKN"
+}
