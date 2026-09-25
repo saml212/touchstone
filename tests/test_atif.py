@@ -1,7 +1,8 @@
 import json
 
 import touchstone
-from touchstone.capture import atif, context
+from touchstone.capture import context
+from touchstone.harbor import atif
 
 
 def _build_episode():
@@ -45,6 +46,32 @@ def test_atif_round_trip_and_structure(traced):
     assert obs["source_call_id"] == "call_1"
     assert "shipped" in obs["content"]
     assert reloaded["final_metrics"]["total_prompt_tokens"] == 5
+
+
+def _projection(conn, episode_id):
+    """The parts round-tripping must preserve: assistant outputs, tool results, and token usage."""
+    spans = touchstone.store.list_spans(conn, episode_id)
+    models = [s for s in spans if s.kind == "model"]
+    assistants = [(m.output["message"].get("content", ""),
+                   [(tc.get("id"), tc.get("name"))
+                    for tc in m.output["message"].get("tool_calls") or []])
+                  for m in models]
+    tools = [s.tool_call_id for s in spans if s.kind == "tool"]  # ATIF stringifies results
+    usage = (sum(m.tokens_in or 0 for m in models), sum(m.tokens_out or 0 for m in models))
+    return assistants, tools, usage
+
+
+def test_import_trajectory_round_trips_messages_tool_ids_and_usage(traced):
+    ep = _build_episode()
+    conn = context.get_conn()
+    traj = atif.to_atif(conn, ep.id)
+
+    ep2 = atif.import_trajectory(conn, traj)
+    assert _projection(conn, ep2.id) == _projection(conn, ep.id)
+    # re-exporting the imported episode yields the same steps and metrics
+    traj2 = atif.to_atif(conn, ep2.id)
+    assert traj2["steps"] == traj["steps"]
+    assert traj2["final_metrics"] == traj["final_metrics"]
 
 
 def test_atif_empty_episode_has_fallback_step(traced):
