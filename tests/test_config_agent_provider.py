@@ -67,3 +67,30 @@ def test_harbor_from_toml_and_env(tmp_path, monkeypatch):
     assert s.harbor_host == "10.0.0.5" and s.harbor_remote_root == "/data/ts"
     monkeypatch.setenv("TOUCHSTONE_HARBOR_HOST", "192.168.1.1")
     assert load_settings(cfg).harbor_host == "192.168.1.1"
+
+
+def test_survey_defaults(tmp_path, monkeypatch):
+    for env in ("TOUCHSTONE_SURVEY_PROVIDER", "TOUCHSTONE_SURVEY_MODEL",
+                "TOUCHSTONE_SURVEY_PYTHON"):
+        monkeypatch.delenv(env, raising=False)
+    s = load_settings(tmp_path / "missing.toml")
+    assert s.survey_provider == "claude-cli"
+    assert s.survey_model == "" and s.survey_python == ""
+    assert s.survey_fidelity_threshold == 0.8
+    assert s.survey_names == []
+
+
+def test_survey_from_toml_and_env(tmp_path, monkeypatch):
+    cfg = tmp_path / "touchstone.toml"
+    cfg.write_text(
+        '[survey]\nprovider = "codex-cli"\nmodel = "gpt-5.6-sol"\n'
+        'fidelity_threshold = 0.6\nnames = ["Jane Roe"]\n',
+        encoding="utf-8",
+    )
+    for env in ("TOUCHSTONE_SURVEY_PROVIDER", "TOUCHSTONE_SURVEY_MODEL"):
+        monkeypatch.delenv(env, raising=False)
+    s = load_settings(cfg)
+    assert s.survey_provider == "codex-cli" and s.survey_model == "gpt-5.6-sol"
+    assert s.survey_fidelity_threshold == 0.6 and s.survey_names == ["Jane Roe"]
+    monkeypatch.setenv("TOUCHSTONE_SURVEY_PROVIDER", "claude-cli")
+    assert load_settings(cfg).survey_provider == "claude-cli"

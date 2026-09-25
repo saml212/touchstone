@@ -27,6 +27,14 @@ class Settings:
     # means always run locally. `harbor_remote_root` is the directory on that host to sync into.
     harbor_host: str = ""
     harbor_remote_root: str = "~/touchstone-harbor"
+    # Survey (read-only code-mapping agent): which CLI provider runs it, its model, the simulator
+    # fidelity threshold, full names to scrub from recordings, and an optional interpreter that
+    # replaces `uv run --project <repo>` when replaying tool calls (tests set it to skip uv).
+    survey_provider: str = "claude-cli"
+    survey_model: str = ""
+    survey_fidelity_threshold: float = 0.8
+    survey_names: list = field(default_factory=list)
+    survey_python: str = ""
     extra: dict = field(default_factory=dict)
 
     @property
@@ -62,6 +70,9 @@ _ENV_KEYS = {
     "TOUCHSTONE_SPEECH_MODE": "speech_mode",
     "TOUCHSTONE_HARBOR_HOST": "harbor_host",
     "TOUCHSTONE_HARBOR_REMOTE_ROOT": "harbor_remote_root",
+    "TOUCHSTONE_SURVEY_PROVIDER": "survey_provider",
+    "TOUCHSTONE_SURVEY_MODEL": "survey_model",
+    "TOUCHSTONE_SURVEY_PYTHON": "survey_python",
 }
 
 
@@ -81,6 +92,12 @@ def _apply_toml(s: Settings, data: dict) -> None:
     harbor = data.get("harbor", {})
     s.harbor_host = harbor.get("host", s.harbor_host)
     s.harbor_remote_root = harbor.get("remote_root", s.harbor_remote_root)
+    survey = data.get("survey", {})
+    s.survey_provider = survey.get("provider", s.survey_provider)
+    s.survey_model = survey.get("model", s.survey_model)
+    s.survey_fidelity_threshold = survey.get("fidelity_threshold", s.survey_fidelity_threshold)
+    s.survey_names = survey.get("names", s.survey_names)
+    s.survey_python = survey.get("python", s.survey_python)
     s.extra = data
 
 

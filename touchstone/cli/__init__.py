@@ -56,6 +56,12 @@ agent_provider = "claude-cli"   # mines, interviews, teaches: claude-cli | codex
 mode = "local"                 # local | realtime (OpenAI Realtime, needs OPENAI_API_KEY)
 stt = "none"
 tts = "browser"
+
+[survey]
+provider = "claude-cli"        # read-only code-mapping agent: claude-cli | codex-cli
+# model = ""                     # provider default when empty
+fidelity_threshold = 0.8       # a simulator below this is flagged, never silently used
+names = []                     # full names to scrub from recordings before they enter files
 """
 
 
