@@ -12,20 +12,11 @@ import json
 
 import websockets
 
-from touchstone import store, tasks
+from touchstone import store
 from touchstone.config import Settings
 from touchstone.interview import rooms
 from touchstone.interview.realtime import Bridges, RealtimeBridge
 from touchstone.interview.rooms import Hub
-
-CHECK = {"kind": "contains", "params": {"values": ["order id"], "mode": "any"},
-         "name": "mentions order id", "severity": "hard", "applies_to": "final",
-         "rule": "the reply must mention the order id"}
-
-
-def _fc(name, call_id, args):
-    return {"type": "response.function_call_arguments.done", "name": name,
-            "call_id": call_id, "arguments": json.dumps(args)}
 
 
 class FakeRealtime:
@@ -72,12 +63,7 @@ def _project(tmp_path):
     db = str(tmp_path / ".touchstone" / "touchstone.db")
     settings = Settings(db_path=db, speech_mode="realtime")
     conn = store.connect(db)
-    ep = store.insert_episode(conn, store.Episode(name="ep1", outcome_label="ok"))
-    tasks.write_task(settings.root, tasks.Task(
-        name="t1", episode_id=ep.id,
-        context={"messages": [{"role": "user", "content": "where is my order"}], "tools": []},
-        reference={"content": "your order id is 42", "tool_calls": []}))
-    room = rooms.open(conn, task_id="t1", topic="orders")
+    room = rooms.open(conn, task_id=None, topic="orders")
     conn.close()
     return settings, room.id
 
@@ -93,27 +79,7 @@ def _kinds(fake):
     return [r.get("type") for r in fake.received]
 
 
-def _tool_outputs(fake):
-    return [r["item"] for r in fake.received
-            if r.get("type") == "conversation.item.create"
-            and r.get("item", {}).get("type") == "function_call_output"]
-
-
-async def test_function_calls_draft_and_commit_land_in_the_task(tmp_path):
-    settings, room_id = _project(tmp_path)
-    script = [_fc("draft_check", "c1", CHECK), _fc("commit_check", "c2", CHECK)]
-    async with FakeRealtime(script) as fake:
-        await _run_bridge(settings, room_id, Hub(), fake)
-    task = tasks.get_task(settings.root, "t1")
-    committed = [c for c in task.checks if c.source == "interview"]
-    assert [c.kind for c in committed] == ["contains"]
-    # the bridge sent a function_call_output + response.create for each call
-    outputs = _tool_outputs(fake)
-    assert len(outputs) == 2 and all(o["call_id"] in ("c1", "c2") for o in outputs)
-    assert _kinds(fake).count("response.create") == 2
-
-
-async def test_session_update_carries_tools_and_pcm16(tmp_path):
+async def test_session_update_carries_pcm16_and_the_topic(tmp_path):
     settings, room_id = _project(tmp_path)
     async with FakeRealtime([]) as fake:
         await _run_bridge(settings, room_id, Hub(), fake)
@@ -121,9 +87,8 @@ async def test_session_update_carries_tools_and_pcm16(tmp_path):
     assert session["type"] == "realtime"
     assert session["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24000}
     assert session["audio"]["output"]["format"] == {"type": "audio/pcm", "rate": 24000}
-    assert {t["name"] for t in session["tools"]} == {
-        "draft_check", "commit_check", "show_task", "next_task"}
-    assert "t1" in session["instructions"]  # the task summary is in the prompt
+    assert session["tools"] == []  # no realtime tool surface in v3 stage 1
+    assert "orders" in session["instructions"]  # the room topic is in the prompt
 
 
 async def test_transcripts_become_room_messages(tmp_path):
@@ -184,11 +149,9 @@ async def test_fallback_publishes_an_event_so_the_room_switches_to_local(tmp_pat
 
 async def test_reconnects_once_after_a_dropped_socket(tmp_path):
     settings, room_id = _project(tmp_path)
-    async with FakeRealtime([_fc("commit_check", "c1", CHECK)], drop_first=True) as fake:
+    async with FakeRealtime([], drop_first=True) as fake:
         await _run_bridge(settings, room_id, Hub(), fake)
     assert fake.connections == 2  # reconnected once
-    task = tasks.get_task(settings.root, "t1")
-    assert [c.kind for c in task.checks if c.source == "interview"] == ["contains"]
 
 
 async def test_ptt_release_commits_the_buffer_when_vad_is_off(tmp_path):

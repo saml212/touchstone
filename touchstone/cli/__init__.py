@@ -1,4 +1,4 @@
-"""Touchstone CLI: init, doctor, demo, checks. Errors exit non-zero with one clear sentence."""
+"""Touchstone CLI: init, doctor, demo, serve, interview, bench, jobs. Errors exit non-zero."""
 
 from __future__ import annotations
 
@@ -15,15 +15,11 @@ from ._common import _fail, _installed
 app = typer.Typer(add_completion=True)
 
 _LOOP = (
-    ("capture", "import touchstone; touchstone.trace()"),
-    ("review", "touchstone serve"),
-    ("mine", "touchstone mine"),
-    ("interview", "touchstone interview <task>"),
-    ("prove", "touchstone bench run <bench> -m <model>"),
-    ("improve", "touchstone sample / distill <bench>"),
+    ("capture", "import touchstone; touchstone.trace()  (or touchstone demo)"),
+    ("bench", "touchstone bench -m <provider/model>"),
+    ("review", "touchstone serve  /  touchstone interview"),
 )
-_EMPTY_SIGNALS = {"episodes": 0, "tasks": 0, "active": 0, "needs_checks": 0,
-                  "needs_solution": 0, "runs": 0, "sampled": False, "frontier": 0}
+_EMPTY_SIGNALS = {"episodes": 0, "rooms": 0}
 
 
 def _next_step() -> str:
@@ -35,7 +31,7 @@ def _next_step() -> str:
         return next_step(_EMPTY_SIGNALS)
     conn = store.connect(settings.db_path)
     try:
-        return next_step(project_signals(conn, settings.root))
+        return next_step(project_signals(conn))
     finally:
         conn.close()
 
@@ -111,10 +107,6 @@ def _doctor_rows(settings) -> list[tuple[str, str, str]]:
         path = shutil.which(tool)
         rows.append((f"tool: {tool}", "ok" if path else "missing",
                      path or "not on PATH"))
-    for backend in ("art", "trl"):
-        ok = _installed(backend)
-        rows.append((f"train: {backend}", "ok" if ok else "missing",
-                     "importable" if ok else "not installed"))
     return rows
 
 
@@ -168,12 +160,6 @@ def serve(
     uvicorn.run(create_app(load_settings()), host=host, port=port)
 
 
-# Register the sub-apps and remaining top-level commands. Imported last so `app` and
-# the shared helpers above already exist when each module binds onto them.
-from . import bench, checks, interview, loop, mine, tasks, train  # noqa: E402,F401
-
-app.add_typer(checks.checks_app, name="checks")
-app.add_typer(tasks.tasks_app, name="tasks")
-app.add_typer(bench.bench_app, name="bench")
-app.add_typer(bench.export_app, name="export")
-app.add_typer(train.train_app, name="train")
+# Register the remaining top-level commands. Imported last so `app` and the shared helpers above
+# already exist when each module binds onto them.
+from . import interview  # noqa: E402,F401

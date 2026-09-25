@@ -86,7 +86,7 @@ def _clean_usage(usage: dict | None) -> dict | None:
 
 
 def record(default_name, model, messages, tools, params, result, error, started):
-    from ..bench.pricing import cost_usd
+    from .pricing import cost_usd
 
     usage = result.get("usage")
     output: dict = {"message": _reply_message(result)}

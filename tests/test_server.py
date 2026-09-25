@@ -1,35 +1,13 @@
-import json
-
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from touchstone import store, tasks
 from touchstone.config import Settings
-from touchstone.llm import Rule, ScriptedProvider
 from touchstone.server import create_app
-
-DRAFT_JSON = json.dumps(
-    {
-        "say": "Should it always mention the refund policy?",
-        "draft": [{"kind": "contains", "params": {"values": ["refund"], "mode": "any"},
-                   "name": "mentions refund", "severity": "hard"}],
-        "commit": [],
-    }
-)
 
 
 def _seed_task(db):
-    root = Settings(db_path=db).root
-    conn = store.connect(db)
-    try:
-        ep = store.insert_episode(conn, store.Episode(name="ep1", outcome_label="ok"))
-    finally:
-        conn.close()
-    tasks.write_task(root, tasks.Task(
-        name="t1", episode_id=ep.id,
-        context={"messages": [{"role": "user", "content": "help"}], "tools": []},
-        reference={"content": "sure", "tool_calls": []}))
+    """Room creation takes an opaque task_id string (v3 stores it, no task file lookup)."""
     return "t1"
 
 
@@ -41,14 +19,10 @@ def _client(app):
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
 
 
-async def test_health_and_task_lookup(db):
-    task_id = _seed_task(db)
+async def test_health(db):
     app = _app(db)
     async with _client(app) as c:
         assert (await c.get("/api/health")).json() == {"status": "ok"}
-        assert (await c.get("/api/tasks/nope")).status_code == 404
-        got = await c.get(f"/api/tasks/{task_id}")
-        assert got.status_code == 200 and got.json()["name"] == "t1"
 
 
 async def test_create_room_posts_an_opening_statement(db):
@@ -83,24 +57,6 @@ async def test_empty_message_rejected(db):
         room_id = (await c.post("/api/rooms", json={"task_id": task_id})).json()["room"]["id"]
         r = await c.post(f"/api/rooms/{room_id}/messages", json={"speaker": "x", "text": "  "})
         assert r.status_code == 400
-
-
-async def test_draft_then_confirm_commits_over_http(db):
-    task_id = _seed_task(db)
-    app = _app(db)
-    app.state.provider_factory = lambda: ScriptedProvider(
-        rules=[Rule(substring="refund policy", content=DRAFT_JSON)]
-    )
-    async with _client(app) as c:
-        room_id = (await c.post("/api/rooms", json={"task_id": task_id})).json()["room"]["id"]
-        r1 = await c.post(f"/api/rooms/{room_id}/messages",
-                          json={"speaker": "sam", "text": "must state the refund policy"})
-        assert len(r1.json()["draft"]) == 1
-        r2 = await c.post(f"/api/rooms/{room_id}/messages",
-                          json={"speaker": "sam", "text": "yes"})
-        assert len(r2.json()["turn"]["commit"]) == 1
-        committed = (await c.get(f"/api/rooms/{room_id}")).json()["committed"]
-        assert committed and committed[0]["kind"] == "contains"
 
 
 async def test_audio_rejects_bad_magic_bytes(db):

@@ -1,31 +1,26 @@
-"""`touchstone interview` — open an interview room for a task and print its URL."""
+"""`touchstone interview` — open a review room and print its URL."""
 
 from __future__ import annotations
 
 import typer
 
-from .. import tasks as tasks_mod
 from . import app
-from ._common import _db, _fail, _root
+from ._common import _db, _root
 
 
 @app.command()
 def interview(
-    name: str,
-    topic: str = typer.Option(None, "--topic", help="Room topic (defaults to the task name)."),
+    topic: str = typer.Argument("quality review", help="What the room is reviewing."),
     no_open: bool = typer.Option(False, "--no-open", help="Do not open a browser."),
 ) -> None:
-    """Open an interview room for a task and print (and open) its URL."""
+    """Open a review room and print (and open) its URL."""
     from ..interview import rooms
     from ..interview.agent import Interviewer
 
     host, port = "127.0.0.1", 8765
     root = _root()
-    task = tasks_mod.get_task(root, name)
-    if task is None:
-        _fail(f"no task {name!r}")
     with _db() as conn:
-        room = rooms.open(conn, name, topic or f"review of {task.name}")
+        room = rooms.open(conn, task_id=None, topic=topic)
         rooms.post(conn, room.id, "agent", "assistant",
                    Interviewer(None, conn, room, root).open_statement())
 

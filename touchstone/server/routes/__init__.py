@@ -1,17 +1,11 @@
 """JSON API routers, one module per area, mounted by the app."""
 
-from . import bench, checks, episodes, loop, mine, overview, rooms, tasks, train
+from . import episodes, overview, rooms
 
 ROUTERS = (
     overview.router,
     episodes.router,
-    checks.router,
-    tasks.router,
-    mine.router,
-    bench.router,
     rooms.router,
-    train.router,
-    loop.router,
 )
 
 __all__ = ["ROUTERS"]

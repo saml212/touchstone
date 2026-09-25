@@ -27,7 +27,6 @@ from fastapi import (
 from fastapi.responses import FileResponse, Response
 
 from ... import store
-from ... import tasks as tasks_mod
 from ...config import Settings
 from ...interview import rooms
 from ...interview.agent import Interviewer
@@ -40,17 +39,14 @@ router = APIRouter()
 
 
 @router.get("/api/rooms")
-def list_rooms(conn=Depends(get_conn), root=Depends(get_root)) -> dict:
+def list_rooms(conn=Depends(get_conn)) -> dict:
     """Every interview room, open ones first, each with its task name."""
     all_rooms = store.list_rooms(conn)
     all_rooms.sort(key=lambda r: (r.closed_at is not None, r.id))
-    out = []
-    for r in all_rooms:
-        task = tasks_mod.get_task(root, r.task_id) if r.task_id else None
-        out.append({
-            "id": r.id, "task_id": r.task_id, "task_name": task.name if task else None,
-            "topic": r.topic, "created_at": r.created_at, "closed_at": r.closed_at,
-        })
+    out = [{
+        "id": r.id, "task_id": r.task_id, "task_name": r.task_id,
+        "topic": r.topic, "created_at": r.created_at, "closed_at": r.closed_at,
+    } for r in all_rooms]
     return {"rooms": out}
 
 

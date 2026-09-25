@@ -13,7 +13,7 @@ def db(tmp_path):
 
 @pytest.fixture
 def root(tmp_path):
-    """Project root that holds tasks/, checks.toml, benchmarks/ (db lives under .touchstone/)."""
+    """Project root that holds the `touchstone/` dataset (db lives under .touchstone/)."""
     return str(tmp_path)
 
 
@@ -46,33 +46,6 @@ def demo_db(traced):
         conn = store.connect(traced)
         conns.append(conn)
         return conn
-
-    yield make
-    for conn in conns:
-        conn.close()
-
-
-@pytest.fixture
-def project(traced, tmp_path):
-    """A ready project: demo episodes traced, mined (policies enabled), tasks synced.
-
-    `conn, root = project(12)` — returns a connection and the project root with task/checks files.
-    """
-    from touchstone import policies
-    from touchstone.mine import mine, sync
-
-    conns = []
-    root = str(tmp_path)
-
-    def make(n: int = 12, enable: bool = True):
-        run_demo(n=n)
-        conn = store.connect(traced)
-        conns.append(conn)
-        mine(conn, root, no_llm=True)
-        if enable:
-            policies.enable_all_mined(root)
-            sync(conn, root)
-        return conn, root
 
     yield make
     for conn in conns:

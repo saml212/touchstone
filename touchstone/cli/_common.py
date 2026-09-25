@@ -27,7 +27,7 @@ def _fail_on(exc_types, message: str = "{exc}"):
 
 
 def _root():
-    """The project root that holds tasks/, checks.toml and benchmarks/."""
+    """The project root that holds the `touchstone/` dataset, beside `.touchstone/`."""
     return load_settings().root
 
 
@@ -50,22 +50,3 @@ def _db():
 
 def _installed(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
-
-
-def _agent_provider(spec: str):
-    from ..llm import provider_from_spec
-
-    try:
-        return provider_from_spec(spec)
-    except Exception as exc:  # no key / binary: mine on statistics alone
-        typer.echo(f"note: provider {spec!r} unavailable ({exc}); mining stats only", err=True)
-        return None
-
-
-def _judge_provider():
-    from ..llm import provider_from_spec
-
-    try:
-        return provider_from_spec(load_settings().provider)
-    except Exception:  # a judge without a working provider degrades to 'skipped'
-        return None

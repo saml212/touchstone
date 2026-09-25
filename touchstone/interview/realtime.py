@@ -28,45 +28,13 @@ from .rooms import Event, Hub
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
 
 _REALTIME_GUIDANCE = (
-    "You are Touchstone's voice interviewer. Turn stakeholders' opinions about an agent's "
-    "behaviour into concrete checks. Ask one concrete question at a time, address people by name. "
-    "When "
-    "someone states a rule, call draft_check (prefer a programmatic kind; use judge only when "
-    "nothing else fits), then read the check back in plain words using the read_back the tool "
-    "returns, and only call commit_check after someone says yes. Use show_task to summarize the "
-    "task and next_task to move on. Here is the task under review:\n"
+    "You are Touchstone's voice review agent. Help product people say, in plain words, what good "
+    "behaviour looks like for their AI agent. Ask one concrete question at a time, address people "
+    "by name. Here is what the room is reviewing:\n"
 )
 
-TOOLS = [
-    {"type": "function", "name": "draft_check",
-     "description": "Draft a check (not committed) from a stakeholder rule and show it in the "
-                    "room. Prefer a programmatic kind; use judge only if nothing else fits. "
-                    "Always draft, then read back, before committing.",
-     "parameters": {"type": "object", "required": ["kind", "params"], "properties": {
-         "kind": {"type": "string"},
-         "params": {"type": "object"},
-         "name": {"type": "string"},
-         "rule": {"type": "string"},
-         "severity": {"type": "string", "enum": ["hard", "soft"]},
-         "applies_to": {"type": "string", "enum": ["final", "any_turn", "tool_calls"]},
-         "rationale": {"type": "string"}}}},
-    {"type": "function", "name": "commit_check",
-     "description": "Commit a check the room has agreed to, AFTER reading it back and hearing yes. "
-                    "Pass the same fields you drafted.",
-     "parameters": {"type": "object", "required": ["kind", "params"], "properties": {
-         "kind": {"type": "string"},
-         "params": {"type": "object"},
-         "name": {"type": "string"},
-         "rule": {"type": "string"},
-         "severity": {"type": "string", "enum": ["hard", "soft"]},
-         "applies_to": {"type": "string", "enum": ["final", "any_turn", "tool_calls"]}}}},
-    {"type": "function", "name": "show_task",
-     "description": "Fetch the current task summary and its checks to narrate aloud.",
-     "parameters": {"type": "object", "properties": {}}},
-    {"type": "function", "name": "next_task",
-     "description": "Open a room on the next task in the same work queue and return its URL.",
-     "parameters": {"type": "object", "properties": {}}},
-]
+# v3 stage 1 ships no realtime tools; the verifier-correction tool surface is rewritten in stage 4.
+TOOLS: list[dict] = []
 
 
 def realtime_available(settings: Settings) -> bool:
@@ -186,43 +154,8 @@ class RealtimeBridge:
             self._post("Interviewer", "assistant", event.get("transcript", ""))
         elif kind == "conversation.item.input_audio_transcription.completed":
             self._post(self._ptt_speaker, "user", event.get("transcript", ""))
-        elif kind == "response.function_call_arguments.done":
-            await self._dispatch_tool(event)
         elif kind == "error":
             await self._fail("The voice service returned an error.")
-
-    async def _dispatch_tool(self, event: dict) -> None:
-        try:
-            args = json.loads(event.get("arguments") or "{}")
-        except json.JSONDecodeError:
-            args = {}
-        result = self._run_action(event.get("name", ""), args if isinstance(args, dict) else {})
-        await self._send({"type": "conversation.item.create", "item": {
-            "type": "function_call_output", "call_id": event.get("call_id", ""),
-            "output": json.dumps(result, ensure_ascii=False)}})
-        await self._send({"type": "response.create"})
-        self._broadcast_action(event.get("name", ""), result)
-
-    def _run_action(self, name: str, args: dict) -> dict:
-        conn = store.connect(self.settings.db_path)
-        try:
-            room = store.get_room(conn, self.room_id)
-            if room is None:
-                return {"error": "room is gone"}
-            agent = Interviewer(None, conn, room, self.settings.root)
-            action = {"draft_check": lambda: agent.draft_check(args),
-                      "commit_check": lambda: agent.commit_check(args),
-                      "show_task": agent.show_task,
-                      "next_task": agent.next_task}.get(name)
-            return action() if action else {"error": f"unknown tool {name}"}
-        finally:
-            conn.close()
-
-    def _broadcast_action(self, name: str, result: dict) -> None:
-        if name == "draft_check" and result.get("check"):
-            self.hub.publish(self.room_id, Event("draft", {"checks": [result["check"]]}))
-        elif name == "commit_check" and result:
-            self.hub.publish(self.room_id, Event("committed", {"checks": [result]}))
 
     # -- helpers -------------------------------------------------------------
 
