@@ -18,6 +18,7 @@ from ..config import Settings, load_settings
 from ..interview.realtime import Bridges
 from ..interview.rooms import Hub
 from ..interview.speech import Speech
+from ..llm.keychain import secret
 from .routes import ROUTERS
 from .routes.rooms import ingest_turn
 
@@ -30,7 +31,7 @@ def _default_provider_factory(settings: Settings):
         from ..llm import provider_from_spec
 
         try:
-            return provider_from_spec(settings.agent_provider, settings)
+            return provider_from_spec(review_provider(settings), settings)
         except Exception:  # no key/binary: the interviewer degrades to plain questions
             return None
 
@@ -89,3 +90,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 __all__ = ["create_app"]
+
+
+_CLI = ("claude-cli", "codex-cli")
+
+
+def review_provider(settings: Settings) -> str:
+    """The chat provider the review room drives. A CLI provider emulates tool calls through a
+    JSON convention and its harness sometimes balks; when the customer already has an OpenAI key
+    the room uses real function calling instead. `review_provider` in touchstone.toml pins it."""
+    if settings.review_provider:
+        return settings.review_provider
+    head = settings.agent_provider.split(":", 1)[0]
+    service = settings.keychain_service(settings.keychain_openai)
+    if head in _CLI and secret("OPENAI_API_KEY", service):
+        return "openai:gpt-4o-mini"
+    return settings.agent_provider

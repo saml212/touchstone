@@ -279,10 +279,25 @@ def _describe_one(change: dict) -> str:
     return f"change check {change.get('criterion')} to {_summarise_target(change)}"
 
 
+_WORDS = {
+    "sqlite_query_equals": lambda a: f"the query {a[1]!r} returns {a[2]!r}",
+    "trajectory_tool_used": lambda a: f"the agent used {a[0]}",
+    "trajectory_tool_not_used": lambda a: f"the agent did not use {a[0]}",
+}
+
+
 def _summarise_target(change: dict) -> str:
-    if change.get("params", {}).get("fn"):
-        return _render_call(change["params"])
-    return change.get("description", "")
+    """Plain words for the read-back: the change's own description first, else the check in
+    words (never raw code — a product person has to say yes to this sentence)."""
+    if change.get("description"):
+        return change["description"]
+    params = change.get("params", {})
+    fn, args = params.get("fn"), params.get("args", [])
+    words = _WORDS.get(fn)
+    try:
+        return words(args) if words else _render_call(params)
+    except (IndexError, ChangeError):
+        return _render_call(params) if fn else ""
 
 
 def describe(change) -> str:

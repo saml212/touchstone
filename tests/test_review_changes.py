@@ -147,3 +147,15 @@ def test_apply_list_applies_both(tmp_path):
         {"op": "edit", "file": "tests/reward.toml", "criterion": "safety", "weight": 3},
         {"op": "remove", "file": "tests/correctness/state.py", "criterion": 2}])
     assert set(touched) == {"tests/reward.toml", "tests/correctness/state.py"}
+
+
+def test_describe_uses_plain_words_never_raw_code():
+    from touchstone.review import changes
+
+    edit = {"op": "edit", "file": "tests/correctness/state.py", "criterion": 1,
+            "params": {"fn": "sqlite_query_equals",
+                       "args": ["db", "SELECT refunded FROM orders WHERE id='B1'", 183.18]}}
+    assert "rk." not in changes.describe(edit)
+    assert "returns 183.18" in changes.describe(edit)
+    assert changes.describe({**edit, "description": "order B1 shows $183.18 refunded"}) == \
+        "change check 1 to order B1 shows $183.18 refunded"

@@ -138,15 +138,24 @@ class ReviewAgent:
                 return (reply.content or "").strip() or replies.tool_error_reply(last_error)
             messages.append({"role": "assistant", "content": reply.content,
                              "tool_calls": reply.tool_calls})
-            for call in reply.tool_calls:
-                result = self._dispatch(call)
-                last_error = replies.error_of(result)  # the latest tool call's error, or None
-                applied = _applied(call, result)
-                if applied is not None:  # a successful apply ends the turn with a fixed read-out
-                    return replies.applied_reply(applied)
-                messages.append({"role": "tool", "tool_call_id": call.get("id"),
-                                 "name": call.get("name"), "content": result})
+            applied, last_error = self._steps(messages, reply.tool_calls)
+            if applied is not None:  # a successful apply ends the turn with a fixed read-out
+                return replies.applied_reply(applied)
         return replies.tool_error_reply(last_error)  # hit MAX_STEPS -> surface the last error
+
+    def _steps(self, messages: list[dict], calls: list[dict]) -> tuple[dict | None, str | None]:
+        """Run the turn's tool calls, appending each result; stop at a successful apply.
+        Returns (the apply result or None, the last tool error or None)."""
+        last_error = None
+        for call in calls:
+            result = self._dispatch(call)
+            messages.append({"role": "tool", "tool_call_id": call.get("id"),
+                             "name": call.get("name"), "content": result})
+            last_error = replies.error_of(result)
+            applied = _applied(call, result)
+            if applied is not None:
+                return applied, last_error
+        return None, last_error
 
     # ---- tool dispatch -----------------------------------------------------
 

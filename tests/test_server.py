@@ -287,3 +287,16 @@ def test_local_ws_ignores_audio_frames(db):
         assert ws.receive_json()["type"] == "state"
         ws.send_json({"type": "audio", "b64": "AAAA", "speaker": "sam"})
     assert fake.bridge.audio == []  # local mode never touches the realtime bridge
+
+
+def test_review_provider_prefers_function_calling_when_a_key_exists(monkeypatch):
+    from touchstone.config import Settings
+    from touchstone.server import app as server_app
+
+    s = Settings()
+    monkeypatch.setattr(server_app, "secret", lambda env, service: "sk-test")
+    assert server_app.review_provider(s) == "openai:gpt-4o-mini"
+    monkeypatch.setattr(server_app, "secret", lambda env, service: None)
+    assert server_app.review_provider(s) == "claude-cli"
+    s.review_provider = "codex-cli"
+    assert server_app.review_provider(s) == "codex-cli"

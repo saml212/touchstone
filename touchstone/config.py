@@ -15,6 +15,7 @@ class Settings:
     db_path: str = DEFAULT_DB
     provider: str = "scripted"
     agent_provider: str = "claude-cli"
+    review_provider: str = ""  # the review room's chat provider; empty = choose (see server.app)
     keychain_prefix: str = "touchstone-"
     keychain_openai: str = "openai-api-key"
     keychain_anthropic: str = "anthropic-api-key"
@@ -79,7 +80,7 @@ def _load_toml(path: Path) -> dict:
         return tomllib.load(fh)
 
 
-_TOML_KEYS = ("db_path", "provider", "agent_provider", "keychain_prefix")
+_TOML_KEYS = ("db_path", "provider", "agent_provider", "review_provider", "keychain_prefix")
 _ENV_KEYS = {
     "TOUCHSTONE_DB": "db_path",
     "TOUCHSTONE_PROVIDER": "provider",
