@@ -35,6 +35,7 @@ class Settings:
     survey_fidelity_threshold: float = 0.8
     survey_names: list = field(default_factory=list)
     survey_python: str = ""
+    survey_dataset_name: str = ""  # dataset.toml name; defaults to "<repo>/<repo>" when empty
     extra: dict = field(default_factory=dict)
 
     @property
@@ -98,6 +99,7 @@ def _apply_toml(s: Settings, data: dict) -> None:
     s.survey_fidelity_threshold = survey.get("fidelity_threshold", s.survey_fidelity_threshold)
     s.survey_names = survey.get("names", s.survey_names)
     s.survey_python = survey.get("python", s.survey_python)
+    s.survey_dataset_name = survey.get("dataset_name", s.survey_dataset_name)
     s.extra = data
 
 
