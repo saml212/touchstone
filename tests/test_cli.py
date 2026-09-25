@@ -46,8 +46,45 @@ def test_doctor_reports_one_table(tmp_path, monkeypatch):
     assert result.exit_code == 0
     for row in ("component", "python", "database", "provider: scripted", "provider: reference",
                 "provider: claude-cli", "speech: mode", "speech: stt", "tool: harbor",
-                "tool: docker", "tool: ffmpeg"):
+                "tool: docker", "tool: ffmpeg", "harbor host"):
         assert row in result.output, row
+    assert "using local docker" in result.output  # no harbor host configured by default
+
+
+def test_doctor_reports_harbor_host_reachability(monkeypatch):
+    # Attack (stage-7 CLI): doctor must report whether the configured remote harbor host is
+    # reachable, not just whether a local `harbor` binary is on PATH. The probe is a bounded ssh.
+    import subprocess
+
+    import touchstone.cli as cli_mod
+    from touchstone.config import Settings
+
+    seen = {}
+
+    class _Proc:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return _Proc()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    row = cli_mod._harbor_host_row(Settings(harbor_host="mini"))
+    assert row == ("harbor host", "ok", "mini reachable")
+    assert seen["cmd"][0] == "ssh" and seen["cmd"][-1] == "true"
+    assert "ConnectTimeout=10" in seen["cmd"]  # the probe is connect-timeout bounded
+
+    def fail_run(cmd, **kw):
+        p = _Proc()
+        p.returncode = 255
+        p.stderr = "ssh: connect to host mini port 22: Connection refused\n"
+        return p
+
+    monkeypatch.setattr(subprocess, "run", fail_run)
+    comp, status, detail = cli_mod._harbor_host_row(Settings(harbor_host="mini"))
+    assert status == "unreachable" and "mini" in detail
 
 
 def test_doctor_exits_zero_with_all_tools_missing(tmp_path, monkeypatch):

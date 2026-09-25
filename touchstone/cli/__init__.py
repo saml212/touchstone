@@ -89,8 +89,30 @@ def init(
     typer.echo(f"initialized db at {settings.db}")
 
 
+def _harbor_host_row(settings) -> tuple[str, str, str]:
+    """Reachability of the configured remote harbor host (an ssh probe, ConnectTimeout-bounded).
+    When no host is configured, Touchstone runs Harbor against local Docker — reported as such."""
+    import subprocess
+
+    from ..harbor.run import _SSH_OPTS
+
+    host = settings.harbor_host
+    if not host:
+        return ("harbor host", "ok", "not configured — using local docker")
+    try:
+        proc = subprocess.run(["ssh", *_SSH_OPTS, host, "true"], capture_output=True,
+                              text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return ("harbor host", "unreachable", f"{host}: {exc}")
+    if proc.returncode == 0:
+        return ("harbor host", "ok", f"{host} reachable")
+    detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+    return ("harbor host", "unreachable", f"{host}: {detail[0] if detail else 'ssh failed'}")
+
+
 def _doctor_rows(settings) -> list[tuple[str, str, str]]:
-    """One (component, status, detail) row per environment check. No installs, no network calls."""
+    """One (component, status, detail) row per environment check. No installs; the only network call
+    is the harbor-host reachability probe, and only when a remote host is configured."""
     import shutil
 
     from ..interview.speech import speech_status
@@ -113,6 +135,7 @@ def _doctor_rows(settings) -> list[tuple[str, str, str]]:
         path = shutil.which(tool)
         rows.append((f"tool: {tool}", "ok" if path else "missing",
                      path or "not on PATH"))
+    rows.append(_harbor_host_row(settings))
     return rows
 
 
