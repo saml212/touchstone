@@ -157,3 +157,21 @@ def test_two_services_same_env_collapse_to_one():
     services = crossing_services(map_data)
     assert [s["name"] for s in services] == ["orders"]  # one per base_url_env
     assert [t["name"] for t in service_tools(map_data, services[0])] == ["t1"]
+
+
+def test_generated_simulator_is_forced_to_bind_loopback(tmp_path):
+    # Attack (stage-7 security): the simulator's bind host depends on the LLM following the prompt.
+    # A generated `host="0.0.0.0"` would expose the seeded service on every interface when it runs
+    # on the host during fidelity. The writer forces loopback regardless of what the model emitted.
+    repo = _project(tmp_path)
+    exposed = SIM_SRC.replace('host="127.0.0.1"', 'host="0.0.0.0"')
+    assert 'host="0.0.0.0"' in exposed  # the model tried to bind all interfaces
+    answer = json.dumps({"app.py": exposed,
+                         "seed.json": {"widgets": [{"id": "w1", "color": "red"}]},
+                         "README.md": "widget simulator"})
+    events = [ToolEvent("get_widget", {"widget_id": "w1"}, {"id": "w1", "color": "red"}, "e1")]
+    generate_simulator(repo, ScriptedSurveyProvider([answer]), SERVICE, TOOLS, events,
+                       repo / "touchstone" / "simulators", Scrubber(), _settings())
+    written = (repo / "touchstone" / "simulators" / "widget" / "app.py").read_text()
+    assert 'host="127.0.0.1"' in written
+    assert "0.0.0.0" not in written

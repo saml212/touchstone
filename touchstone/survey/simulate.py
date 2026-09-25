@@ -10,6 +10,7 @@ Services sharing a base-url env var collapse to one simulator.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from ..config import Settings
@@ -163,8 +164,20 @@ def _as_text(value) -> str:
     return value if isinstance(value, str) else json.dumps(value, indent=2, ensure_ascii=False)
 
 
+_LOOPBACK = "127.0.0.1"
+
+
+def _force_loopback(app_source: str) -> str:
+    """A generated simulator must bind loopback only: during fidelity/capture it runs on the host as
+    a plain subprocess, so a model-emitted `host="0.0.0.0"` would expose the seeded service on every
+    interface. Rewrite any bind-all address to 127.0.0.1 — the literal 0.0.0.0 and a quoted "::"
+    have no other use in this generated FastAPI app (a `[::2]` slice is unquoted, so it survives)."""
+    src = app_source.replace("0.0.0.0", _LOOPBACK)
+    return re.sub(r"""(host\s*=\s*)(['"])::\2""", rf"\1\g<2>{_LOOPBACK}\2", src)
+
+
 def _write_sim(sim_dir: Path, files: dict) -> None:
-    atomic_write(sim_dir / "app.py", _as_text(files.get("app.py", "")))
+    atomic_write(sim_dir / "app.py", _force_loopback(_as_text(files.get("app.py", ""))))
     atomic_write(sim_dir / "seed.json", _as_text(files.get("seed.json", {})))
     atomic_write(sim_dir / "README.md", _as_text(files.get("README.md", "")))
 
