@@ -9,6 +9,7 @@ The exact command run is printed.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -85,17 +86,25 @@ def _run_local(path: Path, agent: str, model: str | None, jobs_dir: Path,
     return _newest_job(jobs_dir, before)
 
 
+def _remote_dataset_path(remote_root: str, sync_root: Path) -> str:
+    """A per-checkout remote path so two customers' `touchstone/` roots never collide."""
+    digest = hashlib.sha1(str(sync_root.resolve()).encode()).hexdigest()[:8]
+    return f"{remote_root}/datasets/{sync_root.name}-{digest}"
+
+
 def _run_remote(path: Path, agent: str, model: str | None, jobs_dir: Path, n_concurrent: int,
                 extra_args: list[str], settings: Settings) -> Path:
     host, remote_root = settings.harbor_host, settings.harbor_remote_root
     sync_root = path.parent if path.name == "tasks" else path
     rel_run = _run_path(path).relative_to(sync_root).as_posix() or "."
-    remote_path = f"{remote_root}/{sync_root.name}"
+    remote_path = _remote_dataset_path(remote_root, sync_root)
 
-    _call(["rsync", "-az", "--delete", f"{sync_root}/", f"{host}:{remote_path}/"])
+    # --exclude jobs so a --delete push never wipes job dirs the host still holds.
+    _call(["rsync", "-az", "--delete", "--exclude", "jobs",
+           f"{sync_root}/", f"{host}:{remote_path}/"])
     with_path = None
-    if _is_custom_agent(agent):  # ship touchstone so harbor can import the custom agent
-        with_path = f"{remote_root}/touchstone"
+    if _is_custom_agent(agent):  # ship the touchstone repo so harbor can import the custom agent
+        with_path = f"{remote_root}/touchstone-src"
         _call(["rsync", "-az", "--delete", f"{_repo_root()}/", f"{host}:{with_path}/"])
     remote_cmd = " ".join(
         _harbor_cmd(rel_run, agent, model, "jobs", n_concurrent, extra_args, with_path))

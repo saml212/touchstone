@@ -73,9 +73,14 @@ def test_remote_when_no_docker_rsyncs_runs_over_ssh_and_syncs_back(tmp_path, mon
 
     kinds = [c[0] for c in calls]
     assert kinds == ["rsync", "ssh", "rsync"]  # push dataset, run, pull jobs
+    push = calls[0]
+    assert push[:4] == ["rsync", "-az", "--delete", "--exclude"] and push[4] == "jobs"
+    dest = push[-1]  # mini:/remote/datasets/touchstone-<hex>/
+    assert dest.startswith("mini:/remote/datasets/touchstone-") and dest.endswith("/")
     ssh = calls[1]
     assert ssh[0] == "ssh" and ssh[1] == "mini"
-    assert "cd /remote/touchstone && harbor run -p tasks -a oracle" in ssh[2]
+    assert "/remote/datasets/touchstone-" in ssh[2]
+    assert "harbor run -p tasks -a oracle" in ssh[2]
     assert job.name == "2026-01-01__00-00-00"
 
 
@@ -88,8 +93,8 @@ def test_remote_custom_agent_also_ships_touchstone_and_uses_uvx(tmp_path, monkey
                 jobs_dir=tmp_path / "jobs", settings=settings)
     # dataset push, touchstone repo push, ssh run, jobs pull
     assert [c[0] for c in calls] == ["rsync", "rsync", "ssh", "rsync"]
-    assert calls[1][-1] == "mini:/remote/touchstone/"
-    assert "uvx --from harbor --with /remote/touchstone harbor run" in calls[2][2]
+    assert calls[1][-1] == "mini:/remote/touchstone-src/"
+    assert "uvx --from harbor --with /remote/touchstone-src harbor run" in calls[2][2]
 
 
 def test_run_local_raises_if_no_job_created(tmp_path, monkeypatch):
