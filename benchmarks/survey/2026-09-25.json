@@ -1,0 +1,44 @@
+{
+  "generated_at": "2026-09-25T13:09:31.425908+00:00",
+  "targets": [
+    {
+      "name": "touchstone-example",
+      "repo": "/Users/samuellarson/Pebble/Github/touchstone-example",
+      "run": "python demo-style capture already shipped with the example (httpx, ORDERS_URL env base)",
+      "services": {
+        "orders_service": 1.0
+      },
+      "fidelity_min": 1.0,
+      "written": 7,
+      "gated": 7,
+      "baseline_pass": 1.0,
+      "agreement": 1.0
+    },
+    {
+      "name": "weather-gpt-assistant",
+      "repo": "/Users/samuellarson/Pebble/Github/survey-targets/weather-gpt-assistant",
+      "run": "python scripts/record.py against a local WeatherAPI fake (requests, hardcoded host via net shim)",
+      "services": {
+        "WeatherAPI": 1.0
+      },
+      "fidelity_min": 1.0,
+      "written": 6,
+      "gated": 6,
+      "baseline_pass": 1.0,
+      "agreement": 1.0
+    },
+    {
+      "name": "book-flight-llm",
+      "repo": "/Users/samuellarson/Pebble/Github/survey-targets/book-flight-llm",
+      "run": "python scripts/record.py against a local flight-backend fake (requests, FLIGHT_API_BASE_URL env)",
+      "services": {
+        "flight-booking-api": 0.0
+      },
+      "fidelity_min": 0.0,
+      "written": 1,
+      "gated": 1,
+      "baseline_pass": 1.0,
+      "agreement": 1.0
+    }
+  ]
+}
