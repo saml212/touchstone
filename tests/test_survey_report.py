@@ -37,3 +37,28 @@ def test_summary_line():
 def test_summary_singular_and_no_sims():
     one = {"tools": [{"name": "a", "calls": []}], "services": []}
     assert summary(one, {}) == "Mapped 1 tool, 0 services."
+
+
+def test_report_tasks_and_needs_review_sections():
+    tasks = {"written": ["a-1"], "reused": ["a-2"],
+             "skipped": [{"episode": "e9", "reason": "sim could not reproduce"}]}
+    gate = {"gated": ["a-1"], "needs_review": [{"name": "a-2", "failed_side": "nop",
+                                               "oracle": 1.0, "nop": 1.0}]}
+    groups = {"no_job": ["chatter-1"]}
+    md = render_report(MAP, FIDELITY, tasks, gate, groups)
+    assert "## Tasks" in md and "a-1" in md and "gated" in md
+    assert "Skipped episodes" in md and "e9" in md
+    assert "## Needs review" in md and "nop" in md
+    assert "## Unclustered conversations" in md and "chatter-1" in md
+
+
+def test_summary_with_task_clause():
+    stats = {"tasks": 5, "conversations": 12, "gated": 4, "needs_review": 1}
+    line = summary(MAP, FIDELITY, stats)
+    assert line.endswith("Built 5 tasks from 12 conversations (4 gated, 1 needs review).")
+
+
+def test_summary_gate_skipped_clause():
+    stats = {"tasks": 1, "conversations": 3, "gate_skipped": True}
+    line = summary(MAP, FIDELITY, stats)
+    assert line.endswith("Built 1 task from 3 conversations (gate skipped).")

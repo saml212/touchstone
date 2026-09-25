@@ -64,3 +64,14 @@ def test_episode_services_only_touched():
     calls = [ToolEvent("get", {}, {}, "e")]
     assert [s["name"] for s in episode_services(MAP, calls)] == ["svc"]
     assert episode_services(MAP, []) == []
+
+
+def test_plain_string_tool_result_is_handled():
+    # a tool whose recorded result is a plain string (not JSON) must not crash the criteria path
+    calls = [ToolEvent("get", {"widget_id": "w1"}, "all good", "e")]
+    assert reproduced(calls, [{"tool": "get", "got": "all good"}]) is True
+    assert reproduced(calls, [{"tool": "get", "got": "different"}]) is False
+    # no state change -> no sqlite criteria, only a trajectory criterion (never an exception)
+    state, tool = derive_criteria({"initial": {}, "final": {}}, [], MAP, calls)
+    assert state == []
+    assert "rk.trajectory_tool_used('get')" in tool

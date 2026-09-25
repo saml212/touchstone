@@ -75,23 +75,79 @@ def flags_section(map_data: dict, fidelity: dict) -> str:
     return "\n".join(lines)
 
 
-def render_report(map_data: dict, fidelity: dict) -> str:
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def tasks_section(tasks: dict | None, gate: dict | None) -> str:
+    if not tasks:
+        return "## Tasks\n\n_none_"
+    built = sorted(set(tasks.get("written", []) + tasks.get("reused", [])))
+    rows = [[name, "gated" if _is_gated(name, gate) else "written"] for name in built]
+    body = _table(["task", "status"], rows)
+    skipped = tasks.get("skipped", [])
+    if skipped:
+        lines = "\n".join(f"- {s['episode']}: {s['reason']}" for s in skipped)
+        body += f"\n\n### Skipped episodes (simulator could not reproduce)\n\n{lines}"
+    return "## Tasks\n\n" + body
+
+
+def _is_gated(name: str, gate: dict | None) -> bool:
+    return bool(gate) and name in gate.get("gated", [])
+
+
+def needs_review_section(gate: dict | None) -> str:
+    if not gate:
+        return "## Needs review\n\n_gate not run_"
+    reviews = gate.get("needs_review", [])
+    if not reviews:
+        return "## Needs review\n\nNone."
+    rows = [[r["name"], r.get("failed_side", "?"),
+             r.get("reason") or f"oracle={r.get('oracle')} nop={r.get('nop')}"] for r in reviews]
+    return "## Needs review\n\n" + _table(["task", "failed", "detail"], rows)
+
+
+def no_job_section(groups: dict | None) -> str:
+    no_job = (groups or {}).get("no_job", [])
+    if not no_job:
+        return "## Unclustered conversations\n\nNone."
+    return "## Unclustered conversations\n\n" + ", ".join(no_job)
+
+
+def render_report(map_data: dict, fidelity: dict, tasks: dict | None = None,
+                  gate: dict | None = None, groups: dict | None = None) -> str:
     sections = [
         "# Survey report",
         map_section(map_data),
         services_section(map_data),
         simulators_section(fidelity),
+        tasks_section(tasks, gate),
+        needs_review_section(gate),
+        no_job_section(groups),
         flags_section(map_data, fidelity),
     ]
     return "\n\n".join(sections) + "\n"
 
 
-def summary(map_data: dict, fidelity: dict) -> str:
-    tools = len(map_data.get("tools", []))
-    services = len(crossing_services(map_data))
-    head = f"Mapped {tools} tool{'' if tools == 1 else 's'}, "
-    head += f"{services} service{'' if services == 1 else 's'}."
+def _sim_summary(fidelity: dict) -> str:
     sims = [f"Simulator {name}: fidelity {r.get('score', 0):.2f} "
             f"({r.get('reproduced', 0)}/{r.get('calls', 0)} calls)"
             for name, r in sorted(fidelity.items())]
-    return head + (" " + "; ".join(sims) if sims else "")
+    return (" " + "; ".join(sims)) if sims else ""
+
+
+def _task_clause(stats: dict) -> str:
+    tasks, convos = stats.get("tasks", 0), stats.get("conversations", 0)
+    if not convos:
+        return ""
+    head = f" Built {_plural(tasks, 'task')} from {_plural(convos, 'conversation')}"
+    if stats.get("gate_skipped"):
+        return head + " (gate skipped)."
+    return head + f" ({stats.get('gated', 0)} gated, {stats.get('needs_review', 0)} needs review)."
+
+
+def summary(map_data: dict, fidelity: dict, stats: dict | None = None) -> str:
+    tools = len(map_data.get("tools", []))
+    services = len(crossing_services(map_data))
+    head = f"Mapped {_plural(tools, 'tool')}, {_plural(services, 'service')}."
+    return head + _sim_summary(fidelity) + (_task_clause(stats) if stats else "")

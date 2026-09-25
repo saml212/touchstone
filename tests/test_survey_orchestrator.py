@@ -1,4 +1,7 @@
-"""End-to-end survey with a scripted provider, a real trace DB, and a real customer tool module."""
+"""End-to-end survey with a scripted provider, a real trace DB, and a real customer tool module.
+
+Exercises the full stage-3 pipeline (map -> fidelity -> group -> environment -> tasks) with the gate
+skipped (the gate needs Docker/Harbor; it is covered in test_survey_gate)."""
 
 import json
 import sys
@@ -24,12 +27,17 @@ MAP = {
 }
 SIM = {"app.py": SIM_SRC, "seed.json": {"widgets": [{"id": "w1", "color": "red"}]},
        "README.md": "widget simulator"}
+GROUPS = {"groups": [{"label": "Widget lookups", "slug": "widget-lookup", "episodes": ["ep1"]}]}
+TEXT = {"instruction": "Tell me the colour of my widget.",
+        "persona": "A shop owner checking a widget."}
+PIPELINE = [json.dumps(x) for x in (MAP, SIM, GROUPS, TEXT)]
 
 
 def _seed_db(repo, tool_name="get_widget"):
     db = repo / ".touchstone" / "touchstone.db"
     conn = store.connect(db)
-    ep = store.insert_episode(conn, store.Episode(name="ep1"))
+    ep = store.insert_episode(conn, store.Episode(id="ep1", name="ep1", outcome_label="resolved",
+                                                  outcome_score=1.0))
     store.insert_span(conn, store.Span(
         episode_id=ep.id, kind="model", name="gpt",
         input={"messages": [{"role": "user", "content": "widget w1?"}]},
@@ -47,6 +55,8 @@ def _repo(tmp_path, tool_name="get_widget"):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "customer_tools.py").write_text(CUSTOMER_TOOL, encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname="c"\nversion="0.1"\ndependencies=["httpx>=0.27"]\n', encoding="utf-8")
     _seed_db(repo, tool_name)
     return repo
 
@@ -61,33 +71,33 @@ def _use(monkeypatch, provider):
 
 def test_survey_end_to_end(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
-    provider = ScriptedSurveyProvider([json.dumps(MAP), json.dumps(SIM)])
+    provider = ScriptedSurveyProvider(PIPELINE)
     _use(monkeypatch, provider)
-    line = run_survey(repo, settings=_settings())
-    assert line == ("Mapped 1 tool, 1 service. "
-                    "Simulator widget: fidelity 1.00 (1/1 calls)")
+    line = run_survey(repo, settings=_settings(), skip_gate=True)
+    assert line == ("Mapped 1 tool, 1 service. Simulator widget: fidelity 1.00 (1/1 calls) "
+                    "Built 1 task from 1 conversation (gate skipped).")
     out = repo / "touchstone"
     assert (out / "map.json").exists()
-    assert (out / "fidelity.json").exists()
-    assert (out / "report.md").exists()
-    assert (out / "simulators" / "widget" / "app.py").exists()
-    fidelity = json.loads((out / "fidelity.json").read_text())
-    assert fidelity["widget"]["score"] == 1.0
-    stored_map = json.loads((out / "map.json").read_text())
-    assert stored_map["sort"]["crosses_the_network"] == ["get_widget"]
+    assert (out / "groups.json").exists()
+    assert (out / "dataset.toml").exists()
+    assert (out / "environment" / "Dockerfile").exists()
+    task = out / "tasks" / "widget-lookup-1"
+    assert (task / "task.toml").exists()
+    assert (task / "instruction.md").exists()
+    assert (task / "tests" / "correctness" / "trajectory.py").exists()
+    assert "widget-lookup-1" in (out / "report.md").read_text()
 
 
 def test_survey_idempotent_then_force(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
-    provider = ScriptedSurveyProvider([json.dumps(MAP), json.dumps(SIM),
-                                       json.dumps(MAP), json.dumps(SIM)])
+    provider = ScriptedSurveyProvider(PIPELINE * 2)
     _use(monkeypatch, provider)
-    run_survey(repo, settings=_settings())
-    assert len(provider.calls) == 2
-    run_survey(repo, settings=_settings())  # reuse map.json + fidelity.json
-    assert len(provider.calls) == 2
-    run_survey(repo, force=True, settings=_settings())  # force reruns both steps
-    assert len(provider.calls) == 4
+    run_survey(repo, settings=_settings(), skip_gate=True)
+    assert len(provider.calls) == 4  # map, sim, group, task text
+    run_survey(repo, settings=_settings(), skip_gate=True)
+    assert len(provider.calls) == 4  # everything reused
+    run_survey(repo, force=True, settings=_settings(), skip_gate=True)
+    assert len(provider.calls) == 8  # force reruns every step
 
 
 def test_survey_no_network_tools(tmp_path, monkeypatch):
@@ -99,7 +109,7 @@ def test_survey_no_network_tools(tmp_path, monkeypatch):
     no_net["services"] = []
     provider = ScriptedSurveyProvider([json.dumps(no_net)])
     _use(monkeypatch, provider)
-    line = run_survey(repo, settings=_settings())  # no trace DB, no services
+    line = run_survey(repo, settings=_settings(), skip_gate=True)  # no trace DB, no services
     assert line == "Mapped 1 tool, 0 services."
     report = (repo / "touchstone" / "report.md").read_text()
     assert "No network-crossing services" in report
@@ -107,10 +117,11 @@ def test_survey_no_network_tools(tmp_path, monkeypatch):
 
 
 def test_survey_flags_unmapped_tool(tmp_path, monkeypatch):
-    # recordings reference 'ghost', which the map does not include
+    # recordings reference 'ghost', which the map does not include -> episode skipped, tool flagged
     repo = _repo(tmp_path, tool_name="ghost")
-    provider = ScriptedSurveyProvider([json.dumps(MAP), json.dumps(SIM)])
+    provider = ScriptedSurveyProvider([json.dumps(MAP), json.dumps(SIM), json.dumps(GROUPS)])
     _use(monkeypatch, provider)
-    run_survey(repo, settings=_settings())
+    line = run_survey(repo, settings=_settings(), skip_gate=True)
     report = (repo / "touchstone" / "report.md").read_text()
     assert "ghost" in report
+    assert "Built 0 tasks" in line
