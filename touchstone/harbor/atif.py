@@ -98,27 +98,28 @@ def _metrics(span: store.Span) -> dict | None:
     return kept or None
 
 
-def _agent_step(step_id: int, span: store.Span, model: str | None) -> dict:
-    msg = span.output.get("message", {})
-    step: dict = {"step_id": step_id, "source": "agent", "message": _atif_message(msg)}
-    if span.model or model:
-        step["model_name"] = span.model or model
-    calls = _tool_calls(span)
-    if calls:
-        step["tool_calls"] = calls
-    reasoning = _reasoning_text(msg)
-    if reasoning:
-        step["reasoning_content"] = reasoning
-    metrics = _metrics(span)
-    if metrics:
-        step["metrics"] = metrics
+def _step_extra(span: store.Span) -> dict:
     extra = {}
     if span.output.get("stop_reason"):
         extra["stop_reason"] = span.output["stop_reason"]
     if span.error:
         extra["error"] = span.error
-    if extra:
-        step["extra"] = extra
+    return extra
+
+
+def _agent_step(step_id: int, span: store.Span, model: str | None) -> dict:
+    msg = span.output.get("message", {})
+    step: dict = {"step_id": step_id, "source": "agent", "message": _atif_message(msg)}
+    optional = {
+        "model_name": span.model or model,
+        "tool_calls": _tool_calls(span),
+        "reasoning_content": _reasoning_text(msg),
+        "metrics": _metrics(span),
+        "extra": _step_extra(span),
+    }
+    for key, value in optional.items():
+        if value:
+            step[key] = value
     return step
 
 
@@ -147,23 +148,37 @@ def _history_calls(msg: dict) -> list[dict]:
             for tc in msg.get("tool_calls") or []]
 
 
+def _leading_step(msg: dict) -> dict | None:
+    """A system/user/agent history message -> a leading step, or None for a non-role message."""
+    source = _ROLE_SOURCE.get(msg.get("role"))
+    if not source:
+        return None
+    step = {"step_id": 0, "source": source, "message": _atif_message(msg)}
+    if source == "agent" and msg.get("tool_calls"):
+        step["tool_calls"] = _history_calls(msg)
+    return step
+
+
+def _attach_history_result(steps: list[dict], msg: dict) -> None:
+    """Fold a history tool/function message into the preceding agent step's observation."""
+    if msg.get("role") not in ("tool", "function") or not steps or steps[-1]["source"] != "agent":
+        return
+    ids = {c["tool_call_id"] for c in steps[-1].get("tool_calls", [])}
+    cid = msg.get("tool_call_id") if msg.get("tool_call_id") in ids else None
+    steps[-1].setdefault("observation", {"results": []})["results"].append(
+        {"source_call_id": cid, "content": text_of(msg)}
+    )
+
+
 def _leading_steps(first_span: store.Span) -> list[dict]:
     """The system/user/agent steps reconstructed from the first model call's message history."""
     steps: list[dict] = []
     for msg in first_span.input.get("messages", []):
-        role = msg.get("role")
-        source = _ROLE_SOURCE.get(role)
-        if source:
-            step = {"step_id": 0, "source": source, "message": _atif_message(msg)}
-            if source == "agent" and msg.get("tool_calls"):
-                step["tool_calls"] = _history_calls(msg)
+        step = _leading_step(msg)
+        if step:
             steps.append(step)
-        elif role in ("tool", "function") and steps and steps[-1]["source"] == "agent":
-            ids = {c["tool_call_id"] for c in steps[-1].get("tool_calls", [])}
-            cid = msg.get("tool_call_id") if msg.get("tool_call_id") in ids else None
-            steps[-1].setdefault("observation", {"results": []})["results"].append(
-                {"source_call_id": cid, "content": text_of(msg)}
-            )
+        else:
+            _attach_history_result(steps, msg)
     return steps
 
 
@@ -182,6 +197,28 @@ def _body_steps(spans: list[store.Span], llm_spans: list[store.Span], model: str
     return steps
 
 
+def _final_metrics(llm_spans: list[store.Span], total_steps: int) -> dict:
+    cached = sum((s.output.get("usage") or {}).get("cached_tokens") or 0 for s in llm_spans)
+    cost = sum(s.cost_usd or 0 for s in llm_spans)
+    return {
+        "total_prompt_tokens": sum(s.tokens_in or 0 for s in llm_spans),
+        "total_completion_tokens": sum(s.tokens_out or 0 for s in llm_spans),
+        "total_steps": total_steps,
+        "total_cached_tokens": cached or None,
+        "total_cost_usd": cost or None,
+    }
+
+
+def _episode_notes(ep: store.Episode) -> str:
+    if ep.outcome_label:
+        return f"{ep.name} ({ep.outcome_label}={ep.outcome_score})"
+    return ep.name
+
+
+def _agent_name(ep: store.Episode) -> str:
+    return ep.meta.get("agent", "touchstone-app") if ep.meta else "touchstone-app"
+
+
 def to_atif(conn, episode_id: str) -> dict:
     ep = store.get_episode(conn, episode_id)
     if ep is None:
@@ -190,43 +227,20 @@ def to_atif(conn, episode_id: str) -> dict:
     llm_spans = [s for s in spans if s.kind == "model"]
     model = llm_spans[0].model if llm_spans else None
 
-    steps: list[dict] = []
-    if llm_spans:
-        steps += _leading_steps(llm_spans[0])
+    steps: list[dict] = _leading_steps(llm_spans[0]) if llm_spans else []
     steps += _body_steps(spans, llm_spans, model)
-
-    # Renumber sequentially from 1 (ATIF requires step_ids 1..N).
-    for n, step in enumerate(steps, start=1):
+    for n, step in enumerate(steps, start=1):  # ATIF requires step_ids 1..N
         step["step_id"] = n
 
-    total_in = sum(s.tokens_in or 0 for s in llm_spans)
-    total_out = sum(s.tokens_out or 0 for s in llm_spans)
-    total_cached = sum((s.output.get("usage") or {}).get("cached_tokens") or 0 for s in llm_spans)
-    total_cost = sum(s.cost_usd or 0 for s in llm_spans)
-
-    traj: dict = {
+    return {
         "schema_version": SCHEMA_VERSION,
         "session_id": ep.id,
         "trajectory_id": ep.id,
-        "agent": {
-            "name": ep.meta.get("agent", "touchstone-app") if ep.meta else "touchstone-app",
-            "version": "1",
-            "model_name": model,
-        },
+        "agent": {"name": _agent_name(ep), "version": "1", "model_name": model},
         "steps": steps or [{"step_id": 1, "source": "user", "message": ep.name}],
-        "final_metrics": {
-            "total_prompt_tokens": total_in,
-            "total_completion_tokens": total_out,
-            "total_steps": len(steps),
-            "total_cached_tokens": total_cached or None,
-            "total_cost_usd": total_cost or None,
-        },
+        "final_metrics": _final_metrics(llm_spans, len(steps)),
+        "notes": _episode_notes(ep),
     }
-    notes = ep.name
-    if ep.outcome_label:
-        notes += f" ({ep.outcome_label}={ep.outcome_score})"
-    traj["notes"] = notes
-    return traj
 
 
 def _span_index(spans: list[store.Span], span: store.Span) -> int:
@@ -234,6 +248,29 @@ def _span_index(spans: list[store.Span], span: store.Span) -> int:
         if s.id == span.id:
             return i
     return -1
+
+
+def _validate_message(message) -> None:
+    assert isinstance(message, str | list)
+    if isinstance(message, list):
+        for part in message:
+            assert part["type"] in ("text", "image", "audio")
+
+
+def _validate_observation(step: dict) -> None:
+    ids = {c["tool_call_id"] for c in step.get("tool_calls", [])}
+    for r in step.get("observation", {}).get("results", []):
+        scid = r.get("source_call_id")
+        assert scid is None or scid in ids, "observation source_call_id must match a tool_call"
+
+
+def _validate_step(step: dict, i: int) -> None:
+    assert step["step_id"] == i, f"step_id must be {i}, got {step['step_id']}"
+    assert step["source"] in ("system", "user", "agent")
+    _validate_message(step["message"])
+    if step["source"] != "agent":
+        assert not any(k in step for k in ("tool_calls", "metrics", "reasoning_content"))
+    _validate_observation(step)
 
 
 def validate(traj: dict) -> None:
@@ -244,95 +281,9 @@ def validate(traj: dict) -> None:
     steps = traj["steps"]
     assert steps, "at least one step required"
     for i, step in enumerate(steps, start=1):
-        assert step["step_id"] == i, f"step_id must be {i}, got {step['step_id']}"
-        assert step["source"] in ("system", "user", "agent")
-        assert isinstance(step["message"], str | list)
-        if isinstance(step["message"], list):
-            for part in step["message"]:
-                assert part["type"] in ("text", "image", "audio")
-        if step["source"] != "agent":
-            assert not any(k in step for k in ("tool_calls", "metrics", "reasoning_content"))
-        ids = {c["tool_call_id"] for c in step.get("tool_calls", [])}
-        for r in step.get("observation", {}).get("results", []):
-            scid = r.get("source_call_id")
-            assert scid is None or scid in ids, "observation source_call_id must match a tool_call"
+        _validate_step(step, i)
 
 
-def export_atif(conn, episode_id: str, path) -> dict:
-    from pathlib import Path
-
-    traj = to_atif(conn, episode_id)
-    Path(path).write_text(json.dumps(traj, ensure_ascii=False, indent=2), encoding="utf-8")
-    return traj
-
-
-# ---- import (ATIF -> episode) ----------------------------------------------
-
-
-def _message_text(message) -> str:
-    if isinstance(message, str):
-        return message
-    if isinstance(message, list):
-        return "".join(p.get("text", "") for p in message if p.get("type") == "text")
-    return ""
-
-
-def _import_tool_calls(step: dict) -> list[dict]:
-    return [{"id": c.get("tool_call_id"), "name": c.get("function_name") or "tool",
-             "arguments": json.dumps(c.get("arguments") or {}, ensure_ascii=False)}
-            for c in step.get("tool_calls") or []]
-
-
-def _import_usage(metrics: dict) -> dict | None:
-    fields = {"tokens_in": metrics.get("prompt_tokens"),
-              "tokens_out": metrics.get("completion_tokens"),
-              "cached_tokens": metrics.get("cached_tokens")}
-    kept = {k: v for k, v in fields.items() if v is not None}
-    return kept or None
-
-
-def _import_agent_step(conn, episode_id: str, history: list[dict], step: dict) -> None:
-    tool_calls = _import_tool_calls(step)
-    metrics = step.get("metrics") or {}
-    assistant = {"role": "assistant", "content": _message_text(step.get("message")),
-                 "tool_calls": tool_calls}
-    output: dict = {"message": assistant}
-    usage = _import_usage(metrics)
-    if usage:
-        output["usage"] = usage
-    store.insert_span(conn, store.Span(
-        episode_id=episode_id, kind="model", name=step.get("model_name") or "model",
-        model=step.get("model_name"), input={"messages": list(history), "tools": [], "params": {}},
-        output=output, tokens_in=metrics.get("prompt_tokens"),
-        tokens_out=metrics.get("completion_tokens"), cost_usd=metrics.get("cost_usd")))
-    history.append(assistant)
-    names = {c["id"]: c["name"] for c in tool_calls}
-    for result in (step.get("observation") or {}).get("results", []):
-        cid = result.get("source_call_id")
-        content = result.get("content")
-        store.insert_span(conn, store.Span(
-            episode_id=episode_id, kind="tool", name=names.get(cid, "tool"),
-            input={"name": names.get(cid)}, output={"result": content}, tool_call_id=cid))
-        history.append({"role": "tool", "tool_call_id": cid, "content": content})
-
-
-def import_trajectory(conn, traj: dict) -> store.Episode:
-    """Reconstruct an episode (and its spans) from an ATIF trajectory — the inverse of `to_atif`.
-
-    System/user steps rebuild the message history; each agent step becomes one model span (with its
-    usage), and its observation results become tool spans linked by `source_call_id`.
-    """
-    agent = traj.get("agent") or {}
-    meta = {"agent": agent["name"]} if agent.get("name") else {}
-    ep = store.insert_episode(conn, store.Episode(
-        name=traj.get("notes") or traj.get("session_id") or "imported", source="atif", meta=meta))
-    history: list[dict] = []
-    for step in traj.get("steps", []):
-        source = step.get("source")
-        if source == "system":
-            history.append({"role": "system", "content": _message_text(step.get("message"))})
-        elif source == "user":
-            history.append({"role": "user", "content": _message_text(step.get("message"))})
-        elif source == "agent":
-            _import_agent_step(conn, ep.id, history, step)
-    return ep
+# `import_trajectory` (ATIF -> episode, the inverse of `to_atif`) lives in `atif_import`;
+# re-exported so callers keep importing it from `harbor.atif`.
+from .atif_import import import_trajectory  # noqa: E402, F401
