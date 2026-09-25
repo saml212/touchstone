@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from touchstone.config import Settings
+from touchstone.harbor import remote
 from touchstone.harbor import run as run_mod
 
 
@@ -213,7 +214,7 @@ def test_missing_rsync_or_ssh_binary_gives_a_clear_error(monkeypatch):
 
 def test_generated_pyproject_is_valid_toml_and_lists_the_package():
     import tomllib
-    doc = tomllib.loads(run_mod.generated_pyproject())
+    doc = tomllib.loads(remote.generated_pyproject())
     assert doc["project"]["name"] == "touchstone-bench"
     assert doc["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"] == ["touchstone"]
     assert isinstance(doc["project"]["dependencies"], list)
@@ -227,11 +228,11 @@ def test_stage_src_generates_pyproject_for_a_wheel_layout(tmp_path, monkeypatch)
     fake_site = tmp_path / "site-packages"
     (fake_site / "touchstone").mkdir(parents=True)
     (fake_site / "touchstone" / "__init__.py").write_text("", encoding="utf-8")
-    monkeypatch.setattr(run_mod, "_src_paths",
+    monkeypatch.setattr(remote, "_src_paths",
                         lambda: (fake_site, fake_site / "touchstone"))
     stage = tmp_path / "stage"
     stage.mkdir()
-    out = run_mod._stage_src(stage)
+    out = remote._stage_src(stage)
     assert out == stage
     assert (stage / "touchstone" / "__init__.py").is_file()  # package copied
     doc = tomllib.loads((stage / "pyproject.toml").read_text())
@@ -242,5 +243,5 @@ def test_stage_src_uses_the_checkout_root_when_it_has_a_pyproject(tmp_path, monk
     root = tmp_path / "repo"
     (root / "touchstone").mkdir(parents=True)
     (root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
-    monkeypatch.setattr(run_mod, "_src_paths", lambda: (root, root / "touchstone"))
-    assert run_mod._stage_src(tmp_path / "unused") == root  # synced as-is, no staging
+    monkeypatch.setattr(remote, "_src_paths", lambda: (root, root / "touchstone"))
+    assert remote._stage_src(tmp_path / "unused") == root  # synced as-is, no staging
