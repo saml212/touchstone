@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "touchstone-bench"
 version = "0.1.0"
-description = "Prove whether a cheaper or open LLM is good enough before you switch — capture, benchmark, prove."
+description = "Turn a company's running AI agent into a Harbor benchmark of its own work — capture, survey, review, train."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
