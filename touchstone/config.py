@@ -36,6 +36,10 @@ class Settings:
     survey_names: list = field(default_factory=list)
     survey_python: str = ""
     survey_dataset_name: str = ""  # dataset.toml name; defaults to "<repo>/<repo>" when empty
+    # Simulated user (multi-turn tasks): the Harbor user agent that plays the customer over the ACP
+    # bridge, and the model it runs on (empty -> the agent-under-test's model).
+    survey_user_agent: str = "claude-code"
+    survey_user_model: str = ""
     # Review room: the dataset directory (under the project root) the room reviews, and the Harbor
     # jobs directory it reads trials from (empty -> "<dataset>/jobs").
     review_dataset: str = "touchstone"
@@ -89,6 +93,8 @@ _ENV_KEYS = {
     "TOUCHSTONE_SURVEY_PROVIDER": "survey_provider",
     "TOUCHSTONE_SURVEY_MODEL": "survey_model",
     "TOUCHSTONE_SURVEY_PYTHON": "survey_python",
+    "TOUCHSTONE_USER_AGENT": "survey_user_agent",
+    "TOUCHSTONE_USER_MODEL": "survey_user_model",
     "TOUCHSTONE_REVIEW_DATASET": "review_dataset",
     "TOUCHSTONE_REVIEW_JOBS_DIR": "review_jobs_dir",
 }
@@ -117,6 +123,8 @@ def _apply_toml(s: Settings, data: dict) -> None:
     s.survey_names = survey.get("names", s.survey_names)
     s.survey_python = survey.get("python", s.survey_python)
     s.survey_dataset_name = survey.get("dataset_name", s.survey_dataset_name)
+    s.survey_user_agent = survey.get("user_agent", s.survey_user_agent)
+    s.survey_user_model = survey.get("user_model", s.survey_user_model)
     review = data.get("review", {})
     s.review_dataset = review.get("dataset", s.review_dataset)
     s.review_jobs_dir = review.get("jobs_dir", s.review_jobs_dir)

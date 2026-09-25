@@ -43,13 +43,19 @@ def bench(
     n_concurrent: int = typer.Option(4, "-n", "--n-concurrent", help="Concurrent trials."),
 ) -> None:
     """Run a model over the dataset with Harbor and print the pass rate per task."""
+    from ..config import load_settings
     from ..harbor import jobs as jobs_mod
     from ..harbor import run as run_mod
 
     if agent not in _MODES:
         raise typer.BadParameter("agent must be 'packaged' or 'replica'")
+    settings = load_settings()
+    extra = ["--ak", f"mode={agent}"]
+    if run_mod.dataset_is_multi_turn(dataset):  # conversational tasks need Harbor's simulated user
+        extra += run_mod.simulated_user_args(settings.survey_user_agent,
+                                             settings.survey_user_model or model)
     job_dir = run_mod.run(dataset, AGENT_PATH, model=model, jobs_dir=jobs_dir or f"{dataset}/jobs",
-                          n_concurrent=n_concurrent, extra_args=["--ak", f"mode={agent}"])
+                          n_concurrent=n_concurrent, extra_args=extra, settings=settings)
     job = jobs_mod.Job.read(job_dir)
     typer.echo(f"\n{job_dir}")
     _print_rates(jobs_mod.pass_rates(job))

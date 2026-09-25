@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import tomllib
 from pathlib import Path
 
 import touchstone
@@ -298,6 +299,37 @@ def regrade(job_dir: str | Path, tasks_path: str | Path, *,
     if settings.harbor_host and not _has_docker():
         return _regrade_remote(job_dir, tasks_path, settings)
     return _regrade_local(job_dir, tasks_path)
+
+
+def _tasks_dir(path: Path) -> Path:
+    return path if path.name == "tasks" else path / "tasks"
+
+
+def _task_multi_turn(task_dir: Path) -> bool:
+    try:
+        doc = tomllib.loads((task_dir / "task.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    return bool(doc.get("metadata", {}).get("touchstone", {}).get("multi_turn"))
+
+
+def dataset_is_multi_turn(path: str | Path) -> bool:
+    """True when any task in the dataset is multi-turn — the run then needs Harbor's simulated user,
+    because a conversational agent asks for the details across turns instead of acting on one
+    message. A single-turn dataset returns False and runs unchanged."""
+    tasks = _tasks_dir(Path(path))
+    return any(_task_multi_turn(d) for d in tasks.glob("*") if (d / "task.toml").is_file())
+
+
+def simulated_user_args(user_agent: str, user_model: str,
+                        persona_path: str | None = None) -> list[str]:
+    """Harbor flags that put a simulated user in front of the agent under test over the ACP bridge.
+    With no persona path the default persona is used and each task's instruction.md carries the
+    facts the user reveals; a single-task run may pass its own tasks/<t>/persona.md."""
+    args = ["--user-agent", user_agent, "--user-model", user_model, "--bridge", "acp"]
+    if persona_path:
+        args += ["--user-persona-path", persona_path]
+    return args
 
 
 def run(path: str | Path, agent: str, *, model: str | None = None, jobs_dir: str | Path = "jobs",

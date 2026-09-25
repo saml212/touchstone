@@ -20,6 +20,26 @@ def _dataset(tmp_path):
     return root
 
 
+def test_dataset_is_multi_turn_reads_task_metadata(tmp_path):
+    ds = tmp_path / "touchstone"
+    (ds / "tasks" / "single").mkdir(parents=True)
+    (ds / "tasks" / "single" / "task.toml").write_text(
+        "[metadata.touchstone]\nmulti_turn = false\n")
+    assert run_mod.dataset_is_multi_turn(ds) is False
+    (ds / "tasks" / "chat").mkdir(parents=True)
+    (ds / "tasks" / "chat" / "task.toml").write_text(
+        "[metadata.touchstone]\nturns = 3\nmulti_turn = true\n")
+    assert run_mod.dataset_is_multi_turn(ds) is True  # any multi-turn task flips the dataset
+
+
+def test_simulated_user_args_builds_the_bridge_flags():
+    args = run_mod.simulated_user_args("claude-code", "openai/gpt-4o-mini")
+    assert args == ["--user-agent", "claude-code", "--user-model", "openai/gpt-4o-mini",
+                    "--bridge", "acp"]
+    with_persona = run_mod.simulated_user_args("claude-code", "m", "tasks/t/persona.md")
+    assert with_persona[-2:] == ["--user-persona-path", "tasks/t/persona.md"]
+
+
 def test_run_path_resolves_task_dataset_and_taskdir(tmp_path):
     task = _task(tmp_path)
     assert run_mod._run_path(task) == task  # a single task

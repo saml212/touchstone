@@ -95,3 +95,20 @@ def test_bench_passes_mode_to_the_agent_kwargs(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert seen["agent"] == "touchstone.harbor.agent:TouchstoneAgent"
     assert seen["extra_args"] == ["--ak", "mode=packaged"]
+
+
+def test_bench_adds_simulated_user_flags_for_a_multi_turn_dataset(tmp_path, monkeypatch):
+    import touchstone.harbor.run as run_mod
+
+    ds = tmp_path / "touchstone"
+    (ds / "tasks" / "chat").mkdir(parents=True)
+    (ds / "tasks" / "chat" / "task.toml").write_text(
+        "[metadata.touchstone]\nturns = 3\nmulti_turn = true\n")
+    seen = {}
+    monkeypatch.setattr(run_mod, "run",
+                        lambda *a, **k: seen.update(k) or _job(tmp_path / "jobs", "j"))
+    result = runner.invoke(app, ["bench", "-m", "openai/gpt-4o-mini", "--dataset", str(ds)])
+    assert result.exit_code == 0, result.output
+    extra = seen["extra_args"]
+    assert "--bridge" in extra and "acp" in extra and "--user-agent" in extra
+    assert "openai/gpt-4o-mini" in extra  # user model defaults to the agent-under-test's model
