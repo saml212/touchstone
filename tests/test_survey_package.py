@@ -44,6 +44,9 @@ print("done")
 FAIL_ENTRY = PASS_ENTRY.replace(
     '"tool_calls": [{"id": "c1", "name": "order_status", "arguments": "{}"}]', '"tool_calls": []')
 
+# An entry.py whose real client construction needs an API key: os.environ[...] raises without one.
+AUTH_ENTRY = 'import os\nos.environ["DEMO_API_KEY"]  # build the client\n' + PASS_ENTRY
+
 
 def _conn(tmp_path):
     conn = store.connect(tmp_path / ".touchstone" / "touchstone.db")
@@ -114,6 +117,23 @@ def test_build_package_replica_when_adapter_fails_twice(tmp_path):
     assert not (out / "agent" / "entry.py").exists()  # dropped
     assert len(provider.calls) == 2  # generated, checked, retried, checked
     assert (out / "agent" / "tools.py").exists()
+
+
+def test_adapter_check_passes_with_auth_placeholder(tmp_path, monkeypatch):
+    # A customer whose entrypoint builds its client from an API key must still survey in packaged
+    # mode: the adapter check (and the persisted agent.toml, for the sandbox run) placeholder-fills
+    # every auth-shaped env var the repo names. Without the placeholder entry.py exits non-zero.
+    monkeypatch.delenv("DEMO_API_KEY", raising=False)
+    (tmp_path / "client.py").write_text('DEMO_API_KEY = "read from os.environ"\n', encoding="utf-8")
+    conn = _conn(tmp_path)
+    out = tmp_path / "touchstone"
+    result = package.build_package(tmp_path, conn, _no_service_map(), {"services": [], "ports": {},
+                                   "base_url_envs": {}}, ScriptedSurveyProvider([AUTH_ENTRY]), out,
+                                   _settings())
+    conn.close()
+    assert result["mode"] == "packaged" and result["adapter_ok"] is True
+    doc = tomllib.loads((out / "agent" / "agent.toml").read_text())
+    assert "DEMO_API_KEY" in doc["agent"]["auth_env"]  # persisted for the packaged sandbox run
 
 
 def test_build_package_replica_when_no_entrypoint(tmp_path):

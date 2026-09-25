@@ -26,6 +26,7 @@ from .. import store
 from ..config import Settings
 from . import fidelity
 from .criteria import tools_map
+from .envs import auth_env_names, placeholder_auth
 from .package_spans import first_user_turn, recorded_model_and_system
 from .provider import SurveyProvider
 from .simulate import crossing_services
@@ -114,8 +115,7 @@ def _base_urls(env_result: dict) -> dict:
 
 
 def _simulators_map(env_result: dict) -> dict:
-    """host -> simulator base URL for each constant-base-URL service (no env var to override), so
-    the net shim can rewrite a hardcoded host inside the sandbox."""
+    """host -> sim base URL per constant-base-URL service (net shim rewrites a hardcoded host)."""
     ports, envs, hosts = (env_result.get("ports", {}), env_result.get("base_url_envs", {}),
                           env_result.get("hosts", {}))
     return {hosts[n]: f"http://127.0.0.1:{ports[n]}"
@@ -148,12 +148,14 @@ def _write_tools_py(agent_dir: Path, map_data: dict, env_result: dict) -> None:
 
 
 def _write_agent_toml(agent_dir: Path, system: str, model_id: str, mode: str,
-                      map_data: dict, env_result: dict) -> None:
+                      map_data: dict, env_result: dict, auth_env=()) -> None:
     agent = {"system": system, "max_steps": MAX_STEPS, "mode": mode, "model_default": model_id,
              "provider": map_data.get("model_call", {}).get("sdk", "")}
     sims = _sim_manifest(env_result)
     if sims:
         agent["simulator"] = sims
+    if auth_env:  # the packaged sandbox run placeholder-fills these for the tool's client
+        agent["auth_env"] = list(auth_env)
     atomic_write(agent_dir / "agent.toml", tomli_w.dumps({"agent": agent}))
 
 
@@ -242,9 +244,11 @@ def _sim_mounts(map_data: dict, env_result: dict, out: Path) -> list[dict]:
 def _run_and_check(agent_dir: Path, repo: Path, base_urls: dict, sim_hosts: dict, message: str,
                    settings: Settings) -> tuple[bool, str]:
     import tempfile
+    # Placeholder-fill unset auth env the repo names, so entry.py can build a token-needing client.
+    auth = {n: v for n, v in placeholder_auth(auth_env_names(repo)).items() if n not in os.environ}
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "touchstone.db"
-        env = {**base_urls, "TOUCHSTONE_DB": str(db),
+        env = {**auth, **base_urls, "TOUCHSTONE_DB": str(db),
                "TOUCHSTONE_OUTPUT": str(Path(tmp) / "out.json")}
         if sim_hosts:  # constant-host services: entry.py's trace() installs the net shim
             env["TOUCHSTONE_SIMULATORS"] = json.dumps(sim_hosts)
@@ -309,7 +313,8 @@ def build_package(repo: Path, conn, map_data: dict, env_result: dict, provider: 
     model_id, system = recorded_model_and_system(conn)
     _write_tools_py(agent_dir, map_data, env_result)
     result = _try_packaged(agent_dir, repo, conn, map_data, env_result, provider, out, settings)
-    _write_agent_toml(agent_dir, system, model_id, result["mode"], map_data, env_result)
+    _write_agent_toml(agent_dir, system, model_id, result["mode"], map_data, env_result,
+                      auth_env=sorted(auth_env_names(repo)))
     return {"mode": result["mode"], "model_default": model_id,
             "provider": map_data.get("model_call", {}).get("sdk", ""),
             "adapter_ok": result["ok"], "flag": result.get("flag")}

@@ -53,6 +53,7 @@ class AgentConfig:
     mode: str = "replica"
     model_default: str = ""
     simulators: list = field(default_factory=list)  # [{name, port, base_url_env}]
+    auth_env: list = field(default_factory=list)  # auth env vars to placeholder-fill for the client
 
 
 def _agent_dir() -> Path:
@@ -80,7 +81,8 @@ def load_config(agent_dir: Path | None = None) -> AgentConfig:
                        tools=tools, call=call,
                        mode=section.get("mode", "replica"),
                        model_default=section.get("model_default", ""),
-                       simulators=list(section.get("simulator", [])))
+                       simulators=list(section.get("simulator", [])),
+                       auth_env=list(section.get("auth_env", [])))
 
 
 def _provider_spec(model_name: str) -> str:
@@ -153,15 +155,21 @@ class TouchstoneAgent(BaseAgent):
             return _import_trajectory(local_db, result)
 
     def _packaged_env(self, config: AgentConfig) -> dict:
+        from ..survey.envs import placeholder_auth
+
         env = dict(self._sim_env)
         if self._sim_hosts:  # constant-base-URL services: sitecustomize installs the net shim
             env["TOUCHSTONE_SIMULATORS"] = json.dumps(self._sim_hosts)
+        # A tool that builds its client from a token needs a value: fill a placeholder for each auth
+        # env the survey recorded, the same treatment replay and the adapter check give it.
+        for name, placeholder in placeholder_auth(config.auth_env).items():
+            env.setdefault(name, placeholder)
         env["TOUCHSTONE_MODEL"] = self._model_id(config)
         env["TOUCHSTONE_DB"] = PACKAGED_DB
         env["TOUCHSTONE_OUTPUT"] = PACKAGED_OUTPUT
         var = keys.provider_key_var(self.model_name)
         value = os.environ.get(var) if var else None
-        if var and value:
+        if var and value:  # the real model-provider key overrides any placeholder set above
             env[var] = value
         return env
 
