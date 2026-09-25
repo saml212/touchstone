@@ -27,11 +27,20 @@ def test_run_path_resolves_task_dataset_and_taskdir(tmp_path):
     assert run_mod._run_path(ds) == ds / "tasks"  # dataset root -> implicit tasks/
 
 
+class _Cmd(list):
+    """The command list, with the env and stdin it was called with kept as attributes."""
+
+    def __init__(self, cmd, env=None, stdin=None):
+        super().__init__(cmd)
+        self.env = env
+        self.stdin = stdin
+
+
 def _record_calls(monkeypatch, jobs_created="2026-01-01__00-00-00"):
     calls = []
 
-    def fake_call(cmd):
-        calls.append(cmd)
+    def fake_call(cmd, env=None, stdin_data=None):
+        calls.append(_Cmd(cmd, env, stdin_data))
         # simulate harbor creating a job directory under the -o path
         if "run" in cmd and "-o" in cmd:
             jobs = Path(cmd[cmd.index("-o") + 1])
@@ -97,8 +106,50 @@ def test_remote_custom_agent_also_ships_touchstone_and_uses_uvx(tmp_path, monkey
     assert "uvx --from harbor --with /remote/touchstone-src harbor run" in calls[2][2]
 
 
+AGENT = "touchstone.harbor.agent:TouchstoneAgent"
+
+
+def test_local_custom_agent_forwards_key_via_env_not_argv(tmp_path, monkeypatch):
+    calls = _record_calls(monkeypatch)
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    run_mod.run(_task(tmp_path), AGENT, model="openai/gpt-4o-mini",
+                jobs_dir=tmp_path / "jobs", settings=Settings())
+    cmd = calls[0]
+    assert cmd.env["OPENAI_API_KEY"] == "sk-secret"  # in the child env
+    assert "sk-secret" not in " ".join(cmd)  # never on argv
+
+
+def test_remote_custom_agent_forwards_key_on_stdin_not_argv(tmp_path, monkeypatch):
+    calls = _record_calls(monkeypatch)
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    settings = Settings(harbor_host="mini", harbor_remote_root="/remote")
+    run_mod.run(_dataset(tmp_path), AGENT, model="openai/gpt-4o-mini",
+                jobs_dir=tmp_path / "jobs", settings=settings)
+    ssh = next(c for c in calls if c[0] == "ssh")
+    assert ssh.stdin == "sk-secret\n"  # fed on stdin
+    assert 'read -r TS_KEY; export OPENAI_API_KEY="$TS_KEY";' in ssh[2]
+    assert "sk-secret" not in ssh[2]  # never on argv
+
+
+def test_builtin_agent_forwards_no_key(tmp_path, monkeypatch):
+    calls = _record_calls(monkeypatch)
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: True)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    run_mod.run(_task(tmp_path), "oracle", model="openai/gpt-4o-mini",
+                jobs_dir=tmp_path / "jobs", settings=Settings())
+    assert calls[0].env is None  # oracle/nop need no key
+
+
+def test_provider_key_none_when_no_key_needed(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    assert run_mod._provider_key("claude-cli/sonnet", Settings()) is None  # subscription, no key
+    assert run_mod._provider_key(None, Settings()) is None
+
+
 def test_run_local_raises_if_no_job_created(tmp_path, monkeypatch):
-    monkeypatch.setattr(run_mod, "_call", lambda cmd: None)  # creates nothing
+    monkeypatch.setattr(run_mod, "_call", lambda cmd, **kw: None)  # creates nothing
     monkeypatch.setattr(run_mod, "_has_docker", lambda: True)
     with pytest.raises(FileNotFoundError):
         run_mod.run(_task(tmp_path), "oracle", jobs_dir=tmp_path / "jobs", settings=Settings())

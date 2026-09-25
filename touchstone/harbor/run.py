@@ -10,11 +10,17 @@ The exact command run is printed.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 from pathlib import Path
 
 from ..config import Settings, load_settings
+from ..llm.keychain import secret
+from . import keys
+
+# API-key env var -> the Settings attribute holding its Keychain service name.
+_KEYCHAIN_ATTR = {"OPENAI_API_KEY": "keychain_openai", "ANTHROPIC_API_KEY": "keychain_anthropic"}
 
 # A generic login PATH so a non-interactive SSH shell finds harbor and docker on common hosts.
 _REMOTE_PATH = 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"'
@@ -38,11 +44,14 @@ def _has_docker() -> bool:
         return False
 
 
-def _call(cmd: list[str]) -> None:
+def _call(cmd: list[str], env: dict | None = None, stdin_data: str | None = None) -> None:
     """Run `cmd`, echo its combined output, and on failure raise a RuntimeError whose message is the
-    last lines of that output, so a gate failure records what Harbor said, not just an exit code."""
+    last lines of that output, so a gate failure records what Harbor said, not just an exit code.
+
+    `stdin_data` is fed on stdin (never argv, never printed) — the channel that forwards an API key
+    to the remote shell. `env` replaces the child environment when given."""
     print("$ " + " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env, input=stdin_data)
     output = (proc.stdout or "") + (proc.stderr or "")
     if output:
         print(output, end="" if output.endswith("\n") else "\n")
@@ -68,6 +77,16 @@ def _is_custom_agent(agent: str) -> bool:
     return ":" in agent
 
 
+def _provider_key(model: str | None, settings: Settings) -> tuple[str, str] | None:
+    """Resolve `(env var, value)` for the model provider's API key, or None when none is needed or
+    found. Read on the laptop (env or Keychain); forwarded to harbor over stdin, never argv."""
+    var = keys.provider_key_var(model)
+    if not var:
+        return None
+    value = secret(var, settings.keychain_service(getattr(settings, _KEYCHAIN_ATTR[var])))
+    return (var, value) if value else None
+
+
 def _repo_root() -> Path:
     """The touchstone repo root, so a custom agent can be loaded via `uvx --with <root>`."""
     return Path(__file__).resolve().parents[2]
@@ -83,14 +102,14 @@ def _harbor_cmd(run_path: str, agent: str, model: str | None, jobs_dir: str, n_c
     return cmd + extra_args
 
 
-def _run_local(path: Path, agent: str, model: str | None, jobs_dir: Path,
-               n_concurrent: int, extra_args: list[str]) -> Path:
+def _run_local(path: Path, agent: str, model: str | None, jobs_dir: Path, n_concurrent: int,
+               extra_args: list[str], key: tuple[str, str] | None = None) -> Path:
     # A custom agent must already be importable in the local `harbor` env; built-ins always work.
     jobs_dir.mkdir(parents=True, exist_ok=True)
     before = _job_dirs(jobs_dir)
     cmd = _harbor_cmd(str(_run_path(path).resolve()), agent, model, str(jobs_dir.resolve()),
                       n_concurrent, extra_args)
-    _call(cmd)
+    _call(cmd, env={**os.environ, key[0]: key[1]} if key else None)
     return _newest_job(jobs_dir, before)
 
 
@@ -100,8 +119,17 @@ def _remote_dataset_path(remote_root: str, sync_root: Path) -> str:
     return f"{remote_root}/datasets/{sync_root.name}-{digest}"
 
 
+def _remote_key_prefix(key: tuple[str, str] | None) -> tuple[str, str | None]:
+    """Shell prefix that reads the key from stdin into the provider's env var, plus the stdin data.
+    The value never appears in the command string (only `$TS_KEY`, expanded on the remote host)."""
+    if not key:
+        return "", None
+    return f'read -r TS_KEY; export {key[0]}="$TS_KEY"; ', key[1] + "\n"
+
+
 def _run_remote(path: Path, agent: str, model: str | None, jobs_dir: Path, n_concurrent: int,
-                extra_args: list[str], settings: Settings) -> Path:
+                extra_args: list[str], settings: Settings,
+                key: tuple[str, str] | None = None) -> Path:
     host, remote_root = settings.harbor_host, settings.harbor_remote_root
     sync_root = path.parent if path.name == "tasks" else path
     rel_run = _run_path(path).relative_to(sync_root).as_posix() or "."
@@ -116,7 +144,9 @@ def _run_remote(path: Path, agent: str, model: str | None, jobs_dir: Path, n_con
         _call(["rsync", "-az", "--delete", f"{_repo_root()}/", f"{host}:{with_path}/"])
     remote_cmd = " ".join(
         _harbor_cmd(rel_run, agent, model, "jobs", n_concurrent, extra_args, with_path))
-    _call(["ssh", host, f"{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"])
+    prefix, stdin_data = _remote_key_prefix(key)
+    _call(["ssh", host, f"{prefix}{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"],
+          stdin_data=stdin_data)
 
     jobs_dir.mkdir(parents=True, exist_ok=True)
     before = _job_dirs(jobs_dir)
@@ -149,6 +179,7 @@ def run(path: str | Path, agent: str, *, model: str | None = None, jobs_dir: str
     path, jobs_dir = Path(path), Path(jobs_dir)
     extra_args = extra_args or []
     settings = settings or load_settings()
+    key = _provider_key(model, settings) if _is_custom_agent(agent) else None
     if settings.harbor_host and not _has_docker():
-        return _run_remote(path, agent, model, jobs_dir, n_concurrent, extra_args, settings)
-    return _run_local(path, agent, model, jobs_dir, n_concurrent, extra_args)
+        return _run_remote(path, agent, model, jobs_dir, n_concurrent, extra_args, settings, key)
+    return _run_local(path, agent, model, jobs_dir, n_concurrent, extra_args, key)
