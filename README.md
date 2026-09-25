@@ -26,10 +26,17 @@ domain.
 ```
 touchstone init                          # write touchstone.toml + the .touchstone/ db
 touchstone demo                          # run the built-in agent and capture episodes (zero-key)
+touchstone survey <repo>                 # read-only: map the code, simulate its services, score fidelity
 touchstone bench -m <provider/model>     # run a model over the dataset; print pass rate per task
 touchstone jobs                          # list Harbor job dirs with their pass rate per task
 touchstone serve  /  touchstone interview  # open the review room UI
 ```
+
+`touchstone survey` reads the recordings and the code with a read-only coding agent
+(`[survey] provider`, default `claude-cli`; the customer's login pays), maps the tools and their
+network boundaries, generates a SQLite-backed simulator per service, and replays every recorded call
+through the real tools to score each simulator's fidelity. It is idempotent — outputs are reused
+unless `--force` — and touches nothing outside `touchstone/` in the target repo.
 
 `touchstone bench` also takes `--agent packaged|replica`, `--dataset <dir>`, and
 `--against <job_dir>` (a per-task comparison against a previous run). `touchstone doctor` reports the
