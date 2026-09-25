@@ -37,7 +37,10 @@ _ENTRY_TIMEOUT = 180.0
 RUN_SH = """\
 #!/bin/bash
 set -euo pipefail
-python /app/agent/entry.py
+# The repo root is /app; put it on the path so entry.py can import the customer's own modules. Run
+# the sibling entry.py by location so the agent dir can live anywhere in the sandbox.
+export PYTHONPATH="/app:${PYTHONPATH:-}"
+python "$(dirname "$0")/entry.py"
 """
 
 TOOLS_TEMPLATE = '''\
@@ -78,8 +81,10 @@ entry.py must:
   the environment variable TOUCHSTONE_MODEL when it is set, otherwise the code's own default. Return
   the final assistant text.
 - under `if __name__ == "__main__":` read the entire message from standard input, call run(), print
-  the reply to stdout, and write {{"reply": <the reply>}} as JSON to /app/output.json.
+  the reply to stdout, and write {{"reply": <the reply>}} as JSON to the path in the environment
+  variable TOUCHSTONE_OUTPUT, defaulting to "/app/output.json" when it is unset.
 
+The repo root is already on sys.path, so `import <the customer's module>` works from entry.py.
 Do not read argv. Do not hardcode a model id. Do not swallow errors — let them exit non-zero.
 Return only the contents of entry.py.'''
 
@@ -194,6 +199,7 @@ def _entry_cmd(repo: Path, entry_path: Path, settings: Settings) -> list[str]:
 def _run_entry(repo: Path, entry_path: Path, env_extra: dict, message: str, settings: Settings):
     env = {**os.environ, **env_extra}
     env.pop("TOUCHSTONE_MODEL", None)  # the adapter check runs on the code's own default model
+    env["PYTHONPATH"] = os.pathsep.join([str(repo), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
     return subprocess.run(_entry_cmd(repo, entry_path, settings), cwd=str(repo), input=message,
                           capture_output=True, text=True, timeout=_ENTRY_TIMEOUT, env=env)
 
@@ -230,8 +236,9 @@ def _run_and_check(agent_dir: Path, repo: Path, base_urls: dict, message: str,
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "touchstone.db"
-        proc = _run_entry(repo, agent_dir / "entry.py",
-                          {**base_urls, "TOUCHSTONE_DB": str(db)}, message, settings)
+        env = {**base_urls, "TOUCHSTONE_DB": str(db),
+               "TOUCHSTONE_OUTPUT": str(Path(tmp) / "out.json")}
+        proc = _run_entry(repo, agent_dir / "entry.py", env, message, settings)
         if proc.returncode != 0:
             return False, f"exit {proc.returncode}: {_tail(proc)}"
         if not _has_tool_call(db):

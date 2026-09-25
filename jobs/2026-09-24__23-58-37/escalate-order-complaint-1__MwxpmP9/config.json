@@ -1,0 +1,12 @@
+{
+    "task": {
+        "path": "tasks/escalate-order-complaint-1",
+        "source": "tasks"
+    },
+    "trial_name": "escalate-order-complaint-1__MwxpmP9",
+    "trials_dir": "jobs/2026-09-24__23-58-37",
+    "agent": {
+        "name": "nop"
+    },
+    "job_id": "5fa0f75e-bfcb-40ee-aba0-831468f0accb"
+}

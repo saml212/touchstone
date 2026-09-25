@@ -63,15 +63,25 @@ touchstone/
   tasks/<name>/     one Harbor task per directory (instruction.md, task.toml, environment/,
                     solution/, tests/)
   environment/      the customer's system, copied to run in a sandbox
-  agent/            the agent under test as a Harbor custom agent (agent.toml + tools.py)
+  agent/            the agent under test as a Harbor custom agent (agent.toml, tools.py, entry.py)
   simulators/       a small local service per network boundary
+  baseline.json     what the current setup passes today (the first-five-minutes sentence)
   report.md         what was mapped, simulated, and left open
 ```
 
-The agent under test is packaged as a Harbor custom agent
-(`touchstone.harbor.agent:TouchstoneAgent`): an OpenAI-compatible tool-calling loop whose system
-prompt comes from `agent/agent.toml` and whose tool schemas and dispatch come from `agent/tools.py`.
-It records an ATIF `trajectory.json` for every run.
+The agent under test runs in one of two modes, chosen automatically and recorded in `agent/agent.toml`:
+
+- **packaged** (highest fidelity): the survey generates `agent/entry.py` — a `run(user_message)`
+  that drives the customer's *real* agent loop for one message, importing their own modules. The
+  Harbor agent runs `bash /app/agent/run.sh` in the sandbox with the model as a setting
+  (`TOUCHSTONE_MODEL`) and imports the trajectory the customer's own capture wrote. An adapter check
+  proves entry.py runs and calls a tool before this mode is chosen.
+- **replica** (fallback when the code will not run): `touchstone.harbor.agent:TouchstoneAgent` runs
+  an OpenAI-compatible tool-calling loop whose system prompt comes from `agent/agent.toml` and whose
+  tool schemas + dispatch come from `agent/tools.py`.
+
+Either way it records an ATIF `trajectory.json`, and `touchstone bench -m <candidate>` re-runs it on
+any model without touching the customer's code.
 
 ## Storage
 

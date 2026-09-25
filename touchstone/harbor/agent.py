@@ -35,9 +35,13 @@ except ImportError:  # importable and unit-testable without harbor installed
     AgentCapabilities = None
 
 DEFAULT_MAX_STEPS = 8
-# Inside the sandbox this is the host trial's agent dir (bind mount); the packaged customer app
-# points its own capture here, and _run_packaged reads the db back from the host.
+# Where the packaged customer app points its own capture inside the sandbox; _run_packaged downloads
+# it back to the host afterwards. /logs/agent is the trial's agent dir.
 PACKAGED_DB = "/logs/agent/touchstone.db"
+PACKAGED_OUTPUT = "/app/output.json"
+# The agent dir is uploaded here — NOT /app/agent, which would shadow a customer module named
+# `agent` once /app is on the path. run.sh runs its sibling entry.py by location.
+AGENT_SANDBOX = "/app/.touchstone_agent"
 
 
 @dataclass
@@ -135,17 +139,22 @@ class TouchstoneAgent(BaseAgent):
         return usage, traj
 
     async def _run_packaged(self, instruction: str, environment) -> tuple[dict, dict]:
-        """Run the customer's real entrypoint (`bash /app/agent/run.sh`) inside the sandbox with the
-        model as a setting, then import the trajectory its own capture wrote to the trace db."""
+        """Upload the agent dir into the sandbox, run the customer's real entrypoint (run.sh) with
+        the model as a setting, then download the trace db its own capture wrote and convert it."""
+        await environment.upload_dir(_agent_dir(), AGENT_SANDBOX)
         env = self._packaged_env(load_config())
-        cmd = f"printf '%s' {shlex.quote(instruction)} | bash /app/agent/run.sh"
+        cmd = f"printf '%s' {shlex.quote(instruction)} | bash {AGENT_SANDBOX}/run.sh"
         result = await environment.exec(cmd, cwd="/app", env=env)
-        return _import_trajectory(self.logs_dir, result)
+        with tempfile.TemporaryDirectory() as tmp:
+            local_db = Path(tmp) / "touchstone.db"
+            await _download(environment, PACKAGED_DB, local_db)
+            return _import_trajectory(local_db, result)
 
     def _packaged_env(self, config: AgentConfig) -> dict:
         env = dict(self._sim_env)
         env["TOUCHSTONE_MODEL"] = self._model_id(config)
         env["TOUCHSTONE_DB"] = PACKAGED_DB
+        env["TOUCHSTONE_OUTPUT"] = PACKAGED_OUTPUT
         var = keys.provider_key_var(self.model_name)
         value = os.environ.get(var) if var else None
         if var and value:
@@ -249,9 +258,16 @@ def _usage_from(traj: dict) -> dict:
             "tokens_out": metrics.get("total_completion_tokens") or 0}
 
 
-def _import_trajectory(logs_dir: Path, result) -> tuple[dict, dict]:
-    """Read the customer's own trace db from the trial's agent dir and convert its run to ATIF."""
-    db = logs_dir / "touchstone.db"
+async def _download(environment, remote: str, local: Path) -> None:
+    """Best-effort download; a missing db is handled by _import_trajectory as a run failure."""
+    try:
+        await environment.download_file(remote, str(local))
+    except Exception:  # noqa: BLE001 — treat any download failure as "no db", with the output tail
+        pass
+
+
+def _import_trajectory(db: Path, result) -> tuple[dict, dict]:
+    """Convert the customer's own captured run (downloaded from the sandbox) to ATIF."""
     if not db.exists():
         raise RuntimeError(f"packaged run wrote no trace db\n{_tail(result)}")
     conn = store.connect(db)

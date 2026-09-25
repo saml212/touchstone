@@ -1,0 +1,103 @@
+{
+  "agent": {
+    "model_name": "gpt-4o-mini",
+    "name": "touchstone-app",
+    "version": "1"
+  },
+  "final_metrics": {
+    "total_cached_tokens": null,
+    "total_completion_tokens": 127,
+    "total_cost_usd": 0.00019575,
+    "total_prompt_tokens": 797,
+    "total_steps": 5
+  },
+  "notes": "support-B6991 (resolved=1.0)",
+  "schema_version": "ATIF-v1.8",
+  "session_id": "01M3B91A2WFAVK21MDC56WXZKM",
+  "steps": [
+    {
+      "message": "You are a support agent for a small shop. Use tools to look up orders, refund when the customer is entitled to one, email a confirmation after any refund, and escalate anything you cannot resolve. Be brief. Never reveal other customers' data.",
+      "source": "system",
+      "step_id": 1
+    },
+    {
+      "message": "Order B6991 arrived broken, I want my money back.",
+      "source": "user",
+      "step_id": 2
+    },
+    {
+      "extra": {
+        "stop_reason": "tool_calls"
+      },
+      "message": "",
+      "metrics": {
+        "cached_tokens": 0,
+        "completion_tokens": 17,
+        "cost_usd": 3.7949999999999994e-05,
+        "prompt_tokens": 185
+      },
+      "model_name": "gpt-4o-mini",
+      "source": "agent",
+      "step_id": 3,
+      "tool_calls": [
+        {
+          "arguments": {
+            "order_id": "B6991"
+          },
+          "function_name": "order_status",
+          "tool_call_id": "call_MwRqSQSDKFO0P0n3ht3GGskx"
+        }
+      ]
+    },
+    {
+      "extra": {
+        "stop_reason": "tool_calls"
+      },
+      "message": "",
+      "metrics": {
+        "cached_tokens": 0,
+        "completion_tokens": 83,
+        "cost_usd": 8.61e-05,
+        "prompt_tokens": 242
+      },
+      "model_name": "gpt-4o-mini",
+      "source": "agent",
+      "step_id": 4,
+      "tool_calls": [
+        {
+          "arguments": {
+            "amount": 183.18,
+            "order_id": "B6991"
+          },
+          "function_name": "refund",
+          "tool_call_id": "call_1ZmYuNCgMOE7UkI9NDn0r1PU"
+        },
+        {
+          "arguments": {
+            "body": "Your refund for order B6991 in the amount of $183.18 has been processed successfully.",
+            "subject": "Refund Confirmation",
+            "to": "person2@example.invalid"
+          },
+          "function_name": "send_email",
+          "tool_call_id": "call_oLrHuRUvOvGLp3XRUiMN31YG"
+        }
+      ]
+    },
+    {
+      "extra": {
+        "stop_reason": "stop"
+      },
+      "message": "Your refund of $183.18 for order B6991 has been processed successfully. A confirmation email has been sent to you.",
+      "metrics": {
+        "cached_tokens": 0,
+        "completion_tokens": 27,
+        "cost_usd": 7.17e-05,
+        "prompt_tokens": 370
+      },
+      "model_name": "gpt-4o-mini",
+      "source": "agent",
+      "step_id": 5
+    }
+  ],
+  "trajectory_id": "01M3B91A2WFAVK21MDC56WXZKM"
+}

@@ -1,0 +1,16 @@
+{
+    "task": {
+        "path": "tasks/issue-a-refund-3",
+        "source": "tasks"
+    },
+    "trial_name": "issue-a-refund-3__Jw5SFSE",
+    "trials_dir": "jobs/2026-09-25__00-00-10",
+    "agent": {
+        "name": "touchstone.harbor.agent:TouchstoneAgent",
+        "model_name": "openai/gpt-4o-mini",
+        "kwargs": {
+            "mode": "replica"
+        }
+    },
+    "job_id": "1c2fdd3d-f133-49bd-9401-bda3d2742c94"
+}

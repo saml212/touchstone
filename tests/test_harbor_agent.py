@@ -133,24 +133,46 @@ def _packaged_agent(tmp_path, monkeypatch, *, simulators="", model="openai/gpt-4
     return TouchstoneAgent(logs, model_name=model, mode="packaged"), logs
 
 
+class _SandboxEnv(FakeEnv):
+    """Packaged-mode fake: records exec/upload; download_file copies the planted sandbox db."""
+
+    def __init__(self, sandbox_db=None):
+        super().__init__()
+        self.sandbox_db = sandbox_db
+        self.uploads = []
+        self.env = None
+
+    async def exec(self, command, **kwargs):
+        self.calls.append(command)
+        self.env = kwargs.get("env")
+        return SimpleNamespace(stdout="ran", stderr="Traceback: boom", return_code=1
+                               if self.sandbox_db is None else 0)
+
+    async def upload_dir(self, source_dir, target_dir):
+        self.uploads.append((str(source_dir), target_dir))
+
+    async def download_file(self, remote, local):
+        if self.sandbox_db is None:
+            raise FileNotFoundError(remote)
+        import shutil
+        shutil.copy(self.sandbox_db, local)
+
+
 def test_packaged_runs_run_sh_and_imports_the_customer_trajectory(tmp_path, monkeypatch):
     ta, logs = _packaged_agent(tmp_path, monkeypatch)
-    _plant_customer_db(logs / "touchstone.db")
+    sandbox_db = tmp_path / "sandbox.db"
+    _plant_customer_db(sandbox_db)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
-    class PlantingEnv(FakeEnv):
-        async def exec(self, command, **kwargs):
-            self.calls.append(command)
-            self.env = kwargs.get("env")
-            return SimpleNamespace(stdout="ran", stderr="", return_code=0)
-
-    env = PlantingEnv()
+    env = _SandboxEnv(sandbox_db)
     ctx = SimpleNamespace()
     asyncio.run(ta.run("Where is my order B1?", env, ctx))
 
-    assert "bash /app/agent/run.sh" in env.calls[0]  # the customer's entrypoint ran
+    assert env.uploads == [(str(tmp_path / "agent"), "/app/.touchstone_agent")]  # dir uploaded
+    assert "bash /app/.touchstone_agent/run.sh" in env.calls[0]  # the customer's entrypoint ran
     assert env.env["TOUCHSTONE_MODEL"] == "gpt-4o-mini"  # model after provider/
     assert env.env["TOUCHSTONE_DB"] == "/logs/agent/touchstone.db"
+    assert env.env["TOUCHSTONE_OUTPUT"] == "/app/output.json"
     assert env.env["OPENAI_API_KEY"] == "sk-test"  # provider key forwarded into the sandbox
     traj = json.loads((logs / "trajectory.json").read_text())
     tool_steps = [s for s in traj["steps"] if s.get("tool_calls")]
@@ -158,18 +180,12 @@ def test_packaged_runs_run_sh_and_imports_the_customer_trajectory(tmp_path, monk
     assert ctx.n_input_tokens == 11 and ctx.n_output_tokens == 4
 
 
-def test_packaged_missing_episode_raises_with_output_tail(tmp_path, monkeypatch):
+def test_packaged_missing_db_raises_with_output_tail(tmp_path, monkeypatch):
     import pytest
 
-    ta, logs = _packaged_agent(tmp_path, monkeypatch)
-    _plant_customer_db(logs / "touchstone.db", with_spans=False)  # episode, but no spans
-
-    class ErrEnv(FakeEnv):
-        async def exec(self, command, **kwargs):
-            return SimpleNamespace(stdout="", stderr="Traceback: boom", return_code=1)
-
+    ta, _ = _packaged_agent(tmp_path, monkeypatch)  # no sandbox db -> download fails
     with pytest.raises(RuntimeError, match="boom"):
-        asyncio.run(ta.run("hi", ErrEnv(), SimpleNamespace()))
+        asyncio.run(ta.run("hi", _SandboxEnv(None), SimpleNamespace()))
 
 
 def test_setup_starts_simulators_and_records_base_urls(tmp_path, monkeypatch):
