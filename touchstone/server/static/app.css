@@ -314,3 +314,27 @@ main.review { grid-template-columns: minmax(0, 1fr) minmax(340px, 460px); }
 }
 .reviewbar .chip:hover { color: var(--brick); border-color: var(--brick); }
 .reviewbar #next { padding: 4px 10px; font-size: 12px; }
+
+/* ---- five-page shell content (body.app main) ---- */
+
+.lede { font-size: 22px; line-height: 1.35; color: var(--ink); margin: 8px 0 14px; max-width: 720px; }
+.cta {
+  display: inline-block; background: var(--brick); color: var(--cream);
+  text-decoration: none; border-radius: 8px; padding: 9px 14px; font-size: 14px;
+}
+.cta:hover { opacity: 0.92; }
+.map { color: var(--muted); max-width: 720px; margin: 16px 0 4px; }
+
+body.app .instruction {
+  background: #fff; border: 1px solid var(--hair); border-radius: 8px;
+  padding: 10px 12px; margin: 0; white-space: pre-wrap; max-width: 720px;
+}
+body.app .reward { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--muted); margin: 4px 0 12px; }
+
+ul.mini { margin: 0; padding-left: 18px; }
+ul.mini li { font-size: 13px; margin-bottom: 2px; }
+td ul.mini { padding-left: 16px; }
+
+.dimblock { margin-bottom: 12px; }
+.dimhead { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
+.dimhead code { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--brick); }

@@ -1,5 +1,8 @@
 "use strict";
 
+// The five-page shell over the dataset + Harbor job dirs. Every page reads a /api/pages/* route at
+// request time; the Review page hands off to the stage-4 room at /rooms/{id}. Vanilla JS, no build.
+
 const view = document.getElementById("view");
 
 async function api(path, method = "GET", body) {
@@ -18,12 +21,8 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
 
-function pretty(v) {
-  return esc(JSON.stringify(v, null, 2));
-}
-
-function badge(label, cls = "") {
-  return `<span class="badge ${cls}">${esc(label)}</span>`;
+function link(hash, text) {
+  return `<a href="#${hash}">${esc(text)}</a>`;
 }
 
 function table(headers, rows) {
@@ -32,27 +31,28 @@ function table(headers, rows) {
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
-function link(hash, text) {
-  return `<a href="#${hash}">${esc(text)}</a>`;
+function pct(reward) {
+  return reward == null ? "—" : `${Math.round(reward * 100)}%`;
+}
+
+function fmtJob(job) {
+  const [date, time] = String(job).split("__");
+  return time ? `${date} ${time.replace(/-/g, ":")}` : job;
 }
 
 // ---- router ----------------------------------------------------------------
 
 const PAGES = {
   overview: overviewPage,
-  episodes: episodesPage,
-  checks: checksPage,
   tasks: tasksPage,
-  rooms: roomsPage,
-  benchmarks: benchmarksPage,
+  trials: trialsPage,
+  trial: trialDetail,
+  review: reviewPage,
   train: trainPage,
 };
 
-let pollTimer = null;
-
 async function render() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  const parts = (location.hash.replace(/^#\/?/, "") || "overview").split("/");
+  const parts = (location.hash.replace(/^#\/?/, "") || "overview").split("/").map(decodeURIComponent);
   const route = parts[0] || "overview";
   document.querySelectorAll("#nav a").forEach((a) => {
     a.classList.toggle("active", a.dataset.route === route);
@@ -69,498 +69,274 @@ async function render() {
 window.addEventListener("hashchange", render);
 window.addEventListener("DOMContentLoaded", render);
 
-// ---- overview --------------------------------------------------------------
+// ---- Overview --------------------------------------------------------------
 
 async function overviewPage() {
-  const o = await api("/api/overview");
-  const tiles = [
-    ["Episodes", o.episodes.total], ["Spans", o.spans],
-    ["Checks", `${o.checks.enabled}/${o.checks.total} on`],
-    ["Tasks", o.tasks.total], ["Benchmarks", o.benchmarks],
-    ["Runs", o.runs], ["Rooms open", o.rooms.open],
-  ].map(([k, v]) => `<div class="tile"><div class="num">${esc(v)}</div><div class="lbl">${esc(k)}</div></div>`).join("");
-
-  const total = o.episodes.total || 1;
-  const bar = Object.entries(o.episodes.outcomes)
-    .map(([label, n]) => `<span class="seg" style="width:${(100 * n) / total}%" title="${esc(label)}: ${n}">${esc(label)}</span>`)
-    .join("");
-
-  view.innerHTML = `<h2>Overview</h2>
-    <div class="tiles">${tiles}</div>
-    <h3>Outcomes</h3>
-    <div class="outcome-bar">${bar || `<span class="muted">no episodes yet</span>`}</div>
-    <div class="hint">${esc(o.next_step)}</div>`;
+  const o = await api("/api/pages/overview");
+  if (!o.has_dataset) {
+    view.innerHTML = `<h2>Overview</h2><p class="muted">No dataset here yet — run
+      <code>touchstone survey</code> to build <code>touchstone/</code>, then reload.</p>`;
+    return;
+  }
+  view.innerHTML = `
+    <div class="lede">${esc(o.sentence)}</div>
+    <a class="cta" href="#/review">Walk through the trials →</a>
+    ${o.map ? `<p class="map">${esc(o.map)}</p>` : ""}
+    ${overviewJobs(o.jobs_to_be_done)}
+    ${overviewServices(o.services)}
+    ${overviewLatest(o.latest_jobs)}
+    ${overviewTrust(o.trust)}`;
 }
 
-// ---- episodes --------------------------------------------------------------
+function overviewJobs(jobs) {
+  const entries = Object.entries(jobs || {});
+  if (!entries.length) return "";
+  const rows = entries.map(([job, n]) => [esc(job), esc(n)]);
+  return `<h3>Jobs to be done</h3>${table(["job", "tasks"], rows)}`;
+}
 
-async function episodesPage(args) {
-  if (args[0]) return episodeDetail(args[0]);
-  const { episodes, total } = await api("/api/episodes?limit=200");
-  const rows = episodes.map((e) => [
-    link(`/episodes/${e.id}`, e.name || e.id),
-    esc(e.source || ""),
-    e.outcome_label ? badge(e.outcome_label, "outcome") : "",
-    e.outcome_score == null ? "" : esc(e.outcome_score),
-    esc((e.started_at || "").slice(0, 19)),
+function overviewServices(services) {
+  if (!services || !services.length) return "";
+  const rows = services.map((s) => [
+    esc(s.service), pct(s.fidelity),
+    `${esc(s.reproduced ?? "?")}/${esc(s.calls ?? "?")}`,
+    s.status === "ok" ? badge("ok") : badge("flagged", "outcome"),
   ]);
-  view.innerHTML = `<h2>Episodes <span class="count">${total}</span></h2>` +
-    (rows.length ? table(["name", "source", "outcome", "score", "started"], rows) : `<p class="muted">No episodes captured yet.</p>`);
+  return `<h3>Services &amp; fidelity</h3>${table(["service", "fidelity", "reproduced", "status"], rows)}`;
 }
 
-async function episodeDetail(id) {
-  const { episode, spans } = await api(`/api/episodes/${id}`);
-  const msgs = conversation(spans);
-  view.innerHTML = `<div class="crumb">${link("/episodes", "← Episodes")}</div>
-    <h2>${esc(episode.name || episode.id)}
-      ${episode.outcome_label ? badge(episode.outcome_label, "outcome") : ""}</h2>
-    <div class="muted">${esc(episode.source || "")} · ${spans.length} spans</div>
-    <div class="chat">${msgs.map(bubble).join("") || `<p class="muted">No LLM turns recorded.</p>`}</div>`;
-}
-
-function conversation(spans) {
-  const llm = spans.filter((s) => s.kind === "model");
-  if (!llm.length) return [];
-  const last = llm[llm.length - 1];
-  const msgs = ((last.input && last.input.messages) || []).slice();
-  const out = last.output && last.output.message;
-  if (out) msgs.push(out);
-  return msgs;
-}
-
-function bubble(m) {
-  const role = m.role || "?";
-  const calls = (m.tool_calls || []).map((c) =>
-    `<div class="toolcall"><span class="tname">${esc(c.name)}</span><pre>${esc(c.arguments)}</pre></div>`).join("");
-  const content = m.content ? `<div class="body">${esc(m.content)}</div>` : "";
-  return `<div class="msg ${esc(role)}"><div class="who">${esc(m.name || role)}</div>${content}${calls}</div>`;
-}
-
-// ---- checks ----------------------------------------------------------------
-
-function checkCell(c) {
-  // Rule and reason read first; the machine params (kind + values) sit underneath, muted.
-  const rule = c.rule ? `<div class="crule">${esc(c.rule)}</div>` : "";
-  const because = c.because ? `<div class="rationale">${esc(c.because)}</div>` : "";
-  return `<div class="cname">${esc(c.name || c.kind)}</div>${rule}${because}` +
-    `<div class="cmeta"><code>${esc(c.kind)}</code> ${esc(JSON.stringify(c.params))}</div>`;
-}
-
-async function checksPage() {
-  const [{ checks }, { kinds }] = await Promise.all([api("/api/checks"), api("/api/checks/kinds")]);
-  const rows = checks.map((c) => [
-    `<input type="checkbox" data-enable="${esc(c.name)}" ${c.enabled ? "checked" : ""}>`,
-    checkCell(c),
-    badge(c.severity, c.severity),
-    badge(c.source, "src"),
-    `<button class="ghost" data-try="${esc(c.name)}">Try it</button>`,
+function overviewLatest(latest) {
+  if (!latest || !latest.length) return "";
+  const rows = latest.map((j) => [
+    link(`/trials/${encodeURIComponent(j.job)}`, fmtJob(j.job)),
+    esc(j.model || j.agent), `${esc(j.passed)}/${esc(j.tasks)}`,
   ]);
-  view.innerHTML = `<h2>Checks <span class="count">${checks.length}</span></h2>
-    ${newCheckForm(kinds)}
-    <div id="tryDrawer"></div>
-    ${checks.length ? table(["on", "check", "severity", "source", ""], rows) : `<p class="muted">No checks yet — mine them or add one above.</p>`}`;
-
-  view.querySelectorAll("[data-enable]").forEach((box) => {
-    box.onchange = () => api(`/api/checks/${encodeURIComponent(box.dataset.enable)}`, "PATCH", { enabled: box.checked });
-  });
-  view.querySelectorAll("[data-try]").forEach((b) => {
-    b.onclick = () => tryDrawer(b.dataset.try);
-  });
-  wireNewCheck(kinds);
+  return `<h3>Latest job per model</h3>${table(["job", "model", "passed"], rows)}`;
 }
 
-function newCheckForm(kinds) {
-  const opts = Object.keys(kinds).map((k) => `<option value="${k}">${k}</option>`).join("");
-  return `<details class="panel"><summary>New check</summary>
-    <div class="form">
-      <label>kind <select id="nc-kind">${opts}</select></label>
-      <label>name <input id="nc-name" placeholder="optional"></label>
-      <label>severity <select id="nc-sev"><option>hard</option><option>soft</option></select></label>
-      <label>applies to <select id="nc-applies"><option>final</option><option>any_turn</option><option>tool_calls</option></select></label>
-      <label class="wide">params <textarea id="nc-params" rows="3"></textarea></label>
-      <label class="wide">because <input id="nc-rationale" placeholder="why this matters"></label>
-      <button id="nc-save">Add check</button>
-      <span id="nc-msg" class="msg-inline"></span>
-    </div></details>`;
+function overviewTrust(trust) {
+  if (!trust) return "";
+  return `<div class="hint">Trust: the human agreed with the verifier on
+    <b>${trust.agreed}/${trust.reviewed}</b> reviewed trials (${pct(trust.score)}).</div>`;
 }
 
-function wireNewCheck(kinds) {
-  const kindSel = document.getElementById("nc-kind");
-  const params = document.getElementById("nc-params");
-  const hint = () => { params.placeholder = kinds[kindSel.value] || "{}"; };
-  kindSel.onchange = hint; hint();
-  document.getElementById("nc-save").onclick = async () => {
-    const msg = document.getElementById("nc-msg");
-    let parsed;
-    try {
-      parsed = JSON.parse(params.value || "{}");
-    } catch (e) {
-      msg.textContent = "params is not valid JSON";
-      return;
-    }
-    try {
-      await api("/api/checks", "POST", {
-        kind: kindSel.value, params: parsed,
-        name: document.getElementById("nc-name").value,
-        severity: document.getElementById("nc-sev").value,
-        applies_to: document.getElementById("nc-applies").value,
-        because: document.getElementById("nc-rationale").value,
-      });
-      render();
-    } catch (e) {
-      msg.textContent = e.message;
-    }
-  };
+function badge(label, cls = "") {
+  return `<span class="badge ${cls}">${esc(label)}</span>`;
 }
 
-function tryDrawer(id) {
-  const d = document.getElementById("tryDrawer");
-  d.innerHTML = `<div class="panel"><strong>Try check <code>${esc(id)}</code></strong>
-    <div class="form">
-      <label class="wide">output text <textarea id="try-text" rows="3"></textarea></label>
-      <label class="wide">tool calls (JSON) <textarea id="try-tools" rows="2" placeholder="[]"></textarea></label>
-      <button id="try-run">Evaluate</button>
-      <span id="try-result" class="msg-inline"></span>
-    </div></div>`;
-  document.getElementById("try-run").onclick = async () => {
-    const out = document.getElementById("try-result");
-    let tools = [];
-    const raw = document.getElementById("try-tools").value.trim();
-    if (raw) { try { tools = JSON.parse(raw); } catch (e) { out.textContent = "tool calls is not valid JSON"; return; } }
-    try {
-      const r = await api(`/api/checks/${encodeURIComponent(id)}/eval`, "POST", { text: document.getElementById("try-text").value, tool_calls: tools });
-      const verdict = r.passed === true ? "PASS" : r.passed === false ? "FAIL" : "N/A";
-      out.innerHTML = `<b>${verdict}</b> — ${esc(r.evidence)}`;
-    } catch (e) { out.textContent = e.message; }
-  };
-}
-
-// ---- tasks -----------------------------------------------------------------
-
-const TASK_QUEUES = [
-  ["active", "ready for benchmarks", ""],
-  ["needs_checks", "an empty reply already passes — add a check that measures the work", "Interview"],
-  ["needs_solution", "the recorded reply fails its own checks — supply a passing one", "Ask teacher"],
-];
+// ---- Tasks -----------------------------------------------------------------
 
 async function tasksPage(args) {
   if (args[0]) return taskDetail(args[0]);
-  const { tasks, total } = await api("/api/tasks?limit=500");
-  if (!total) {
-    view.innerHTML = `<h2>Tasks</h2><p class="muted">No tasks yet — run mine to cut replay tasks.</p>`;
+  const { tasks } = await api("/api/pages/tasks");
+  if (!tasks.length) {
+    view.innerHTML = `<h2>Tasks</h2><p class="muted">No tasks yet — run <code>touchstone survey</code>.</p>`;
     return;
   }
-  const sections = TASK_QUEUES.map(([status, hint, action]) => {
-    const group = tasks.filter((t) => t.status === status);
-    const rows = group.map((t) => [
-      link(`/tasks/${t.name}`, t.name),
-      (t.tags || []).map((x) => badge(x)).join(" "),
-      esc(t.check_count),
-      action ? `<button class="ghost" data-${status}="${esc(t.name)}">${action}</button>` : "",
-    ]);
-    return `<h3>${status} <span class="count">${group.length}</span></h3>
-      <p class="muted">${hint}</p>` +
-      (rows.length ? table(["name", "tags", "checks", ""], rows) : `<p class="muted">none</p>`);
-  }).join("");
-  view.innerHTML = `<h2>Tasks <span class="count">${total}</span></h2>${sections}`;
-  wireTaskActions();
+  const rows = tasks.map((t) => [
+    link(`/tasks/${encodeURIComponent(t.task)}`, t.task),
+    esc(t.job || "—"),
+    critList(t.criteria),
+    gateCell(t.gate),
+    rewardsCell(t.rewards),
+  ]);
+  view.innerHTML = `<h2>Tasks <span class="count">${tasks.length}</span></h2>
+    ${table(["task", "job to be done", "what the verifier checks", "gate", "last reward"], rows)}`;
 }
 
-function wireTaskActions() {
-  view.querySelectorAll("[data-needs_checks]").forEach((b) => {
-    b.onclick = () => startInterview(b.dataset.needs_checks);
-  });
-  view.querySelectorAll("[data-needs_solution]").forEach((b) => {
-    b.onclick = async () => {
-      b.disabled = true;
-      b.textContent = "asking…";
-      try {
-        const r = await api(`/api/tasks/${encodeURIComponent(b.dataset.needs_solution)}/teach`, "POST", {});
-        if (r.accepted && r.status === "active") render();
-        else { b.disabled = false; b.textContent = "Ask teacher"; alert(`Teacher (${r.teacher}) could not produce a passing reply.`); }
-      } catch (e) { b.disabled = false; b.textContent = "Ask teacher"; alert(e.message); }
-    };
-  });
+function critList(criteria) {
+  if (!criteria || !criteria.length) return `<span class="muted">—</span>`;
+  return `<ul class="mini">${criteria.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>`;
 }
 
-async function startInterview(taskName) {
-  const room = await api("/api/rooms", "POST", { task_id: taskName, topic: `review of ${taskName}` });
-  location.href = `/rooms/${room.room.id}`;
+function gateCell(gate) {
+  if (!gate || (gate.oracle == null && gate.nop == null)) return `<span class="muted">—</span>`;
+  return `<code>oracle ${pct(gate.oracle)} · nop ${pct(gate.nop)}</code>`;
 }
 
-function tomlBlock(block) {
-  // Render a check as it reads in task.toml: the block header, then key = value per line.
-  const lines = ["[[metadata.touchstone.check]]"];
-  for (const [k, v] of Object.entries(block || {})) lines.push(`${k} = ${JSON.stringify(v)}`);
-  return lines.join("\n");
+function rewardsCell(rewards) {
+  const entries = Object.entries(rewards || {});
+  if (!entries.length) return `<span class="muted">—</span>`;
+  return entries.map(([model, r]) => `<div><span class="muted">${esc(model)}</span> ${pct(r)}</div>`).join("");
 }
 
-async function taskDetail(id) {
-  const t = await api(`/api/tasks/${id}`);
-  const ctx = ((t.context || {}).messages || []).map(bubble).join("") || `<p class="muted">no context</p>`;
-  const checks = (t.checks || []).map((c) =>
-    `<div class="check-block"><button class="ghost" data-detach="${esc(c.name)}">detach</button>
-      <pre>${esc(tomlBlock(c.block))}</pre></div>`).join("") || `<p class="muted">no checks attached</p>`;
+async function taskDetail(name) {
+  const t = await api(`/api/pages/tasks/${encodeURIComponent(name)}`);
   view.innerHTML = `<div class="crumb">${link("/tasks", "← Tasks")}</div>
-    <h2>${esc(t.name)} ${(t.tags || []).map((x) => badge(x)).join(" ")}</h2>
-    <button id="interview">Interview</button>
-    <h3>Context</h3><div class="chat">${ctx}</div>
-    <h3>Reference</h3><pre>${pretty(t.reference)}</pre>
-    <h3>Checks</h3>${checks}`;
-
-  view.querySelectorAll("[data-detach]").forEach((b) => {
-    b.onclick = async () => { await api(`/api/tasks/${id}/checks/${encodeURIComponent(b.dataset.detach)}`, "DELETE"); taskDetail(id); };
-  });
-  document.getElementById("interview").onclick = async () => {
-    const room = await api("/api/rooms", "POST", { task_id: t.name, topic: `review of ${t.name}` });
-    location.href = `/rooms/${room.room.id}`;
-  };
+    <h2>${esc(t.task)} ${t.job ? badge(t.job) : ""}</h2>
+    <h3>What the customer asked</h3>
+    <p class="instruction">${esc(t.instruction) || `<span class="muted">—</span>`}</p>
+    ${t.persona ? `<h3>Persona</h3><p class="instruction">${esc(t.persona)}</p>` : ""}
+    <h3>Criteria &amp; weights</h3>${criteriaByDim(t.criteria, t.weights)}
+    <h3>Trials <span class="count">${t.trials.length}</span></h3>${taskTrials(name, t.trials)}`;
 }
 
-// ---- rooms -----------------------------------------------------------------
+function criteriaByDim(criteria, weights) {
+  const dims = Object.entries(criteria || {});
+  if (!dims.length) return `<p class="muted">No criteria.</p>`;
+  return dims.map(([dim, list]) => {
+    const w = (weights || {})[dim];
+    const wtag = w == null ? "" : `<span class="badge">weight ${esc(w)}</span>`;
+    const items = list.map((c) => `<li>${esc(c)}</li>`).join("");
+    return `<div class="dimblock"><div class="dimhead"><code>${esc(dim)}</code> ${wtag}</div>
+      <ul class="mini">${items}</ul></div>`;
+  }).join("");
+}
 
-async function roomsPage() {
+function taskTrials(name, trials) {
+  if (!trials.length) return `<p class="muted">No trials recorded yet.</p>`;
+  const rows = trials.map((t) => [
+    trialLink(name, t.trial, fmtJob(t.job)),
+    esc(t.model || "—"), pct(t.reward),
+  ]);
+  return table(["job", "model", "reward"], rows);
+}
+
+function trialLink(task, trialId, text) {
+  const [job, dir] = String(trialId).split("/");
+  const hash = `/trial/${encodeURIComponent(task)}/${encodeURIComponent(job)}/${encodeURIComponent(dir)}`;
+  return link(hash, text);
+}
+
+// ---- Trials (job picker + one trial) ---------------------------------------
+
+async function trialsPage(args) {
+  if (args[0]) return jobRewards(args[0]);
+  const { jobs } = await api("/api/pages/jobs");
+  if (!jobs.length) {
+    view.innerHTML = `<h2>Trials</h2><p class="muted">No jobs yet — run <code>touchstone bench</code>.</p>`;
+    return;
+  }
+  const rows = jobs.map((j) => [
+    link(`/trials/${encodeURIComponent(j.job)}`, fmtJob(j.job)),
+    esc(j.model || j.agent), `${esc(j.passed)}/${esc(j.tasks)}`,
+    j.gate ? badge("gate") : "",
+  ]);
+  view.innerHTML = `<h2>Trials <span class="count">${jobs.length}</span></h2>
+    <p class="muted">Pick a job to see its per-task rewards.</p>
+    ${table(["job", "agent / model", "passed", ""], rows)}`;
+}
+
+async function jobRewards(job) {
+  const d = await api(`/api/pages/jobs/${encodeURIComponent(job)}`);
+  const rows = d.rewards.map((r) => [
+    trialLink(r.task, r.trial, r.task),
+    esc(r.model || "—"), pct(r.reward),
+  ]);
+  view.innerHTML = `<div class="crumb">${link("/trials", "← Trials")}</div>
+    <h2>${esc(fmtJob(d.job))} ${badge(d.model || d.agent)}</h2>
+    ${rows.length ? table(["task", "model", "reward"], rows) : `<p class="muted">No trials.</p>`}`;
+}
+
+async function trialDetail(args) {
+  const [task, job, dir] = args;
+  const trialId = `${job}/${dir}`;
+  const d = await api(`/api/pages/trial?task=${encodeURIComponent(task)}&trial=${encodeURIComponent(trialId)}`);
+  view.innerHTML = `<div class="crumb">${link(`/tasks/${encodeURIComponent(task)}`, "← Task")}</div>
+    <h2>${esc(d.task)}</h2>
+    <div class="reward">reward ${pct(d.reward)} · ${esc(fmtJob(job))}</div>
+    <button id="reviewBtn" data-task="${esc(d.task)}">Review this trial</button>
+    <h3>What the customer asked</h3>
+    <p class="instruction">${esc(d.instruction) || `<span class="muted">—</span>`}</p>
+    <h3>What the agent did</h3>${transcript(d.trajectory)}
+    <h3>What the verifier checked</h3>${criteriaScores(d.criteria)}`;
+  document.getElementById("reviewBtn").onclick = () => startReview(d.task);
+}
+
+function transcript(steps) {
+  if (!steps || !steps.length) return `<p class="muted">The agent did nothing.</p>`;
+  return `<div class="trajectory">${steps.map((s) => `<div class="step">${esc(s)}</div>`).join("")}</div>`;
+}
+
+function criteriaScores(criteria) {
+  if (!criteria || !criteria.length) return `<p class="muted">No criteria.</p>`;
+  const items = criteria.map((c) => {
+    const passed = c.score != null && c.score >= 1;
+    const cls = c.score == null ? "" : passed ? "pass" : "fail";
+    const mark = c.score == null ? "" : `<span class="mark">${pct(c.score)}</span>`;
+    return `<li class="crit ${cls}"><span class="dim">${esc(c.dimension)}</span>
+      <span class="desc" title="${esc(c.raw || "")}">${esc(c.description)}</span>${mark}</li>`;
+  }).join("");
+  return `<ul class="criteria">${items}</ul>`;
+}
+
+async function startReview(task) {
+  const btn = document.getElementById("reviewBtn");
+  btn.disabled = true;
+  btn.textContent = "opening…";
+  try {
+    const state = await api("/api/rooms", "POST", { task_id: task, topic: `review of ${task}` });
+    location.href = `/rooms/${state.room.id}`;
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "Review this trial";
+    alert(e.message);
+  }
+}
+
+// ---- Review (link to the stage-4 room) -------------------------------------
+
+async function reviewPage() {
   const { rooms } = await api("/api/rooms");
+  const open = rooms.filter((r) => !r.closed_at);
   const rows = rooms.map((r) => [
-    `<a href="/rooms/${r.id}">${esc(r.topic)}</a>`,
-    r.task_name ? link(`/tasks/${r.task_id}`, r.task_name) : "",
+    `<a href="/rooms/${esc(r.id)}">${esc(r.topic)}</a>`,
+    esc(r.task_name || "—"),
     r.closed_at ? badge("closed") : badge("open", "outcome"),
   ]);
-  view.innerHTML = `<h2>Rooms <span class="count">${rooms.length}</span></h2>` +
-    (rows.length ? table(["topic", "task", "state"], rows) : `<p class="muted">No interview rooms yet — start one from a task.</p>`);
-}
-
-// ---- benchmarks ------------------------------------------------------------
-
-async function benchmarksPage() {
-  const [{ benchmarks }, { runs }, { tasks }] = await Promise.all([
-    api("/api/benchmarks"), api("/api/runs"), api("/api/tasks?limit=1"),
-  ]);
-  const benchRows = benchmarks.map((b) => [
-    esc(b.name), esc(b.task_count), loopForm(b),
-  ]);
-  const runRows = runs.map((r) => [
-    `<code>${esc(r.id.slice(-8))}</code>`, esc(r.model_spec),
-    r.finished_at ? badge("done", "outcome") : `<span data-run="${r.id}">${r.done}/${r.total}</span>`,
-  ]);
-  view.innerHTML = `<h2>Benchmarks</h2>
-    <details class="panel"><summary>New benchmark</summary>
-      <div class="form">
-        <label>name <input id="bm-name"></label>
-        <label>tags (comma-sep, blank = all) <input id="bm-tags" placeholder="failure"></label>
-        <button id="bm-save">Create</button><span id="bm-msg" class="msg-inline"></span>
-      </div></details>
-    ${benchmarks.length ? table(["benchmark", "tasks", "run / sample / distill"], benchRows) : `<p class="muted">No benchmarks — create one${tasks.total ? "" : " after mining tasks"}.</p>`}
-    <div id="loop-out"></div>
-    <h3>Runs</h3>
-    ${runs.length ? table(["run", "model", "progress"], runRows) : `<p class="muted">No runs yet.</p>`}
-    ${proofPanel(runs)}`;
-
-  document.getElementById("bm-save").onclick = createBenchmark;
-  wireLoopForms();
-  document.getElementById("proof-go").onclick = showProof;
-  pollRuns(runs);
-}
-
-function loopForm(b) {
-  return `<form data-bench="${esc(b.name)}" class="runform">
-    <input name="model" placeholder="scripted" required title="student / candidate model">
-    <input name="teacher" placeholder="teacher (optional)" title="teacher spec">
-    <input name="variants" type="number" min="1" value="1" title="variants per failing task">
-    <button data-act="run">Run</button>
-    <button data-act="sample">Sample</button>
-    <button data-act="distill">Distill</button>
-  </form>`;
-}
-
-function wireLoopForms() {
-  view.querySelectorAll("form[data-bench]").forEach((form) => {
-    form.querySelectorAll("button[data-act]").forEach((btn) => {
-      btn.onclick = (ev) => { ev.preventDefault(); loopAction(form, btn.dataset.act); };
-    });
-  });
-}
-
-async function loopAction(form, act) {
-  const bench = form.dataset.bench;
-  const model = form.model.value.trim();
-  if (!model) { alert("enter a student / model spec"); return; }
-  if (act === "run") return startRun2(bench, model);
-  const out = document.getElementById("loop-out");
-  out.innerHTML = `<div class="loading">${act === "sample" ? "Sampling" : "Distilling"}…</div>`;
-  const body = { target: bench, student: model, teacher: form.teacher.value.trim() || undefined };
-  if (act === "sample") body.variants = Number(form.variants.value) || 1;
-  try {
-    const r = await api(`/api/${act}`, "POST", body);
-    out.innerHTML = act === "sample" ? sampleResult(r) : distillResult(r);
-  } catch (e) { out.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
-}
-
-async function startRun2(bench, model) {
-  try { await api("/api/runs", "POST", { target: bench, model_spec: model }); render(); }
-  catch (e) { alert(e.message); }
-}
-
-function sampleResult(r) {
-  const s = r.frontier_split;
-  const list = r.frontier.map((t) => `<li>${esc(t)}</li>`).join("");
-  return `<div class="panel"><strong>Sample — ${esc(r.student)} on ${esc(r.benchmark)}</strong>
-    <p class="muted">teacher ${esc(r.teacher)} · ${r.variants_created.length} variant(s) created ·
-      frontier ${r.frontier.length} (${s.learnability.length} learnable, ${s.only_incumbent.length} only-incumbent)</p>
-    <ul>${list || `<li class="muted">frontier is empty — the student matches the incumbent</li>`}</ul></div>`;
-}
-
-function distillResult(r) {
-  return `<div class="panel"><strong>Distill — ${esc(r.student)} on ${esc(r.benchmark)}</strong>
-    <p class="muted">frontier ${r.frontier.length} · teacher demos ${r.demos.length} · backend ${esc(r.backend)} (${esc(r.status)})</p>
-    ${r.out_dir ? `<p>datasets in <code>${esc(r.out_dir)}</code></p>` : ""}
-    ${r.escalated && r.escalated.length ? `<p class="muted">escalated to rooms: ${r.escalated.map(esc).join(", ")}</p>` : ""}
-    <p>${esc(r.plan)}</p></div>`;
-}
-
-async function createBenchmark() {
-  const msg = document.getElementById("bm-msg");
-  const tags = document.getElementById("bm-tags").value.split(",").map((s) => s.trim()).filter(Boolean);
-  const body = { name: document.getElementById("bm-name").value };
-  if (tags.length) body.tags = tags; else body.all = true;
-  try { await api("/api/benchmarks", "POST", body); render(); }
-  catch (e) { msg.textContent = e.message; }
-}
-
-function pollRuns(runs) {
-  const pending = runs.filter((r) => !r.finished_at);
-  if (!pending.length) return;
-  pollTimer = setInterval(async () => {
-    let done = true;
-    for (const r of pending) {
-      const cur = await api(`/api/runs/${r.id}`);
-      const cell = view.querySelector(`[data-run="${r.id}"]`);
-      if (cell) cell.textContent = `${cur.done}/${cur.total}`;
-      if (!cur.finished_at) done = false;
-    }
-    if (done) render();
-  }, 2000);
-}
-
-function proofPanel(runs) {
-  if (runs.length < 2) return "";
-  const opts = runs.map((r) => `<option value="${r.id}">${esc(r.model_spec)} (${esc(r.id.slice(-6))})</option>`).join("");
-  return `<h3>Proof</h3><div class="form">
-    <label>candidate <select id="proof-cand">${opts}</select></label>
-    <label>incumbent <select id="proof-inc">${opts}</select></label>
-    <button id="proof-go">Compare</button></div><div id="proof-out"></div>`;
-}
-
-// ---- train -----------------------------------------------------------------
-
-async function trainPage() {
-  const { benchmarks } = await api("/api/benchmarks");
-  if (!benchmarks.length) {
-    view.innerHTML = `<h2>Train</h2><p class="muted">No benchmarks yet — create one on the Benchmarks page.</p>`;
-    return;
-  }
-  const opts = benchmarks.map((b) =>
-    `<option value="${esc(b.name)}">${esc(b.name)} (${b.task_count} tasks)</option>`).join("");
-  view.innerHTML = `<h2>Train</h2>
-    <p class="muted">Prepare SFT / preference / RL datasets from a benchmark, then emit a runnable backend config. Nothing trains here — Touchstone hands you the datasets and the exact command to run on GPU infra.</p>
-    <div class="form">
-      <label>benchmark <select id="tr-bench">${opts}</select></label>
-      <button id="tr-prepare">Prepare datasets</button>
-    </div>
-    <div id="tr-loop"></div>
-    <div id="tr-out"></div>`;
-  document.getElementById("tr-prepare").onclick = trainPrepare;
-  document.getElementById("tr-bench").onchange = showLoopState;
-  showLoopState();
-}
-
-async function showLoopState() {
-  const bench = document.getElementById("tr-bench").value;
-  const box = document.getElementById("tr-loop");
-  try {
-    const s = await api(`/api/loop/${encodeURIComponent(bench)}`);
-    if (!s || (s.last_sample === undefined && s.last_distill === undefined)) {
-      box.innerHTML = `<p class="muted">No Sample/Distill loop run yet for <code>${esc(bench)}</code> — start one on the Benchmarks page.</p>`;
-      return;
-    }
-    const stamp = (t) => (t ? esc(String(t).slice(0, 19).replace("T", " ")) : "—");
-    box.innerHTML = `<div class="panel">
-      <strong>Loop</strong>
-      <p class="muted">frontier ${esc(s.frontier_size ?? "—")} task(s) · student ${esc(s.student || "—")}</p>
-      <p class="muted">last Sample: ${stamp(s.last_sample)} · last Distill: ${stamp(s.last_distill)}</p></div>`;
-  } catch (e) { box.innerHTML = ""; }
-}
-
-async function trainPrepare() {
-  const bench = document.getElementById("tr-bench").value;
-  const out = document.getElementById("tr-out");
-  out.innerHTML = `<div class="loading">Preparing…</div>`;
-  try {
-    const b = await api("/api/train/prepare", "POST", { benchmark: bench });
-    out.innerHTML = trainResult(bench, b);
-    wireTrainSubmit(bench);
-  } catch (e) {
-    out.innerHTML = `<div class="error">${esc(e.message)}</div>`;
-  }
-}
-
-function dlLink(bench, file, rows) {
-  const href = `/api/train/download?benchmark=${encodeURIComponent(bench)}&file=${file}`;
-  const count = rows === undefined ? "" : ` <span class="muted">(${rows} rows)</span>`;
-  return `<a href="${href}" download>${file}</a>${count}`;
-}
-
-function trainResult(bench, b) {
-  const c = b.counts;
-  return `<div class="panel">
-    <p>Wrote datasets to <code>${esc(b.out_dir)}</code></p>
-    <ul>
-      <li>${dlLink(bench, "sft.jsonl", c.sft)}</li>
-      <li>${dlLink(bench, "preference.jsonl", c.preference)}</li>
-      <li>${dlLink(bench, "rl_tasks.jsonl", c.rl_tasks)}</li>
-      <li>${dlLink(bench, "manifest.json")}</li>
-    </ul>
-    <div class="form">
-      <label>backend <select id="tr-backend">
-        <option value="null">null (write plan)</option>
-        <option value="art">art (RL)</option>
-        <option value="trl">trl (SFT)</option>
-      </select></label>
-      <label>base model <input id="tr-model" placeholder="Qwen/Qwen2.5-7B-Instruct"></label>
-      <button id="tr-submit">Submit</button>
-    </div>
-    <div id="tr-submit-out"></div>
-  </div>`;
-}
-
-function wireTrainSubmit(bench) {
-  document.getElementById("tr-submit").onclick = async () => {
-    const out = document.getElementById("tr-submit-out");
-    const body = { benchmark: bench, backend: document.getElementById("tr-backend").value };
-    const model = document.getElementById("tr-model").value.trim();
-    if (model) body.base_model = model;
-    out.innerHTML = `<div class="loading">Submitting…</div>`;
-    try {
-      const r = await api("/api/train/submit", "POST", body);
-      out.innerHTML = `<p class="muted"><b>${esc(r.status)}</b> — ${esc(r.detail)}</p>`;
-    } catch (e) {
-      out.innerHTML = `<div class="error">${esc(e.message)}</div>`;
-    }
+  view.innerHTML = `<h2>Review</h2>
+    <p class="muted">A voice/text room over one task and its trials — agree with the verifier, or
+      correct it and Harbor regrades. ${open.length} open.</p>
+    <button id="startRoom">Start a review</button>
+    <h3>Rooms</h3>
+    ${rows.length ? table(["room", "task", "state"], rows) : `<p class="muted">No rooms yet.</p>`}`;
+  document.getElementById("startRoom").onclick = async () => {
+    const state = await api("/api/rooms", "POST", { topic: "review" });
+    location.href = `/rooms/${state.room.id}`;
   };
 }
 
-async function showProof() {
-  const cand = document.getElementById("proof-cand").value;
-  const inc = document.getElementById("proof-inc").value;
-  const out = document.getElementById("proof-out");
-  try {
-    const p = await api(`/api/proof?candidate=${cand}&incumbent=${inc}`);
-    const verdict = { both_pass: "= both", only_incumbent: "− lost", only_candidate: "+ gained", both_fail: "× both fail" };
-    const rows = p.tasks.map((r) => [
-      esc(r.task), r.incumbent_passed ? "pass" : "fail", r.candidate_passed ? "pass" : "fail", verdict[r.category],
-    ]);
-    const c = p.counts;
-    out.innerHTML = `<p class="muted">both pass ${c.both_pass} · only incumbent ${c.only_incumbent} · only candidate ${c.only_candidate} · both fail ${c.both_fail}</p>` +
-      table(["task", "incumbent", "candidate", "verdict"], rows);
-  } catch (e) { out.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+// ---- Train -----------------------------------------------------------------
+
+async function trainPage() {
+  const t = await api("/api/pages/train");
+  if (!t.present) {
+    view.innerHTML = `<h2>Train</h2><p class="muted">No training data yet. Run
+      <code>touchstone train</code> to route finished jobs into distill / RL / hold-out.</p>`;
+    return;
+  }
+  const c = t.counts;
+  const tiles = [
+    ["Distill", c.distill], ["RL", c.rl], ["Hold-out", c.hold_out], ["Stuck", c.stuck],
+  ].map(([k, v]) => `<div class="tile"><div class="num">${esc(v)}</div><div class="lbl">${esc(k)}</div></div>`).join("");
+  view.innerHTML = `<h2>Train</h2>
+    <p class="muted">Each task routes by its pass rate: 0 → distill · 0–1 → RL · 1 → hold out.
+      ${t.trajectories} distill trajectories · threshold ${esc(t.threshold)}.</p>
+    <div class="tiles">${tiles}</div>
+    <h3>Re-run</h3>
+    <pre id="cmd">${esc(t.command)}</pre>
+    <button id="copyCmd" class="ghost">Copy command</button>
+    <h3>Inputs</h3>${trainInputs(t.inputs)}`;
+  wireCopy(t.command);
+}
+
+function trainInputs(inputs) {
+  const rows = [];
+  for (const role of ["teacher", "student"]) {
+    for (const job of inputs[role] || []) {
+      rows.push([esc(role), esc(fmtJob(job.dir)), esc(job.model || job.agent || "—")]);
+    }
+  }
+  return rows.length ? table(["role", "job", "model"], rows) : `<p class="muted">—</p>`;
+}
+
+function wireCopy(command) {
+  document.getElementById("copyCmd").onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      document.getElementById("copyCmd").textContent = "copied ✓";
+    } catch (e) {
+      document.getElementById("copyCmd").textContent = "copy failed";
+    }
+  };
 }
