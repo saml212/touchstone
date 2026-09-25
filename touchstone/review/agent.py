@@ -12,13 +12,12 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from .. import store
 from ..harbor import run as run_mod
 from ..interview import rooms
 from ..survey.report import passes_counts
-from . import changes, regrade, replies, trials
+from . import changes, readback, regrade, replies, snapshot, trials
 from .facts import (
     _baseline_sets,
     _editable,
@@ -28,6 +27,7 @@ from .facts import (
     _shared_tasks,
 )
 from .prompt import SYSTEM, TOOLS
+from .scratch import _Scratch
 
 MAX_STEPS = 6
 
@@ -45,17 +45,6 @@ class AgentTurn:
     def to_dict(self) -> dict:
         return {"say": self.say, "draft": self.draft, "commit": self.commit}
 
-
-@dataclass
-class _Scratch:
-    current: dict | None = None   # {"task", "trial"}
-    proposed: object = None       # a change (object or list) awaiting confirmation
-    readback: str = ""
-    applied: list = None          # summaries of applied changes this room
-
-    def to_dict(self) -> dict:
-        return {"current": self.current, "proposed": self.proposed,
-                "readback": self.readback, "applied": self.applied or []}
 
 
 class ReviewAgent:
@@ -154,7 +143,7 @@ class ReviewAgent:
             messages.append({"role": "tool", "tool_call_id": call.get("id"),
                              "name": call.get("name"), "content": result})
             last_error = replies.error_of(result)
-            applied = _applied(call, result)
+            applied = replies.applied_result(call, result)
             if applied is not None:
                 return applied, last_error
         return None, last_error
@@ -228,7 +217,7 @@ class ReviewAgent:
         task, change = self._task_arg(args), args.get("change")
         changes.validate(self.dataset_dir / "tasks" / task, change)  # bad shape -> re-draft
         self.scratch.proposed = change
-        self.scratch.readback = changes.describe(change)
+        self.scratch.readback = readback.describe(change)
         return {"readback": self.scratch.readback}
 
     def _apply_change(self, args: dict) -> dict:
@@ -245,13 +234,14 @@ class ReviewAgent:
         targets = _shared_tasks(self.dataset_dir, task) if everywhere else [task]
         for name in targets:  # refuse an unvalidated/malformed change before writing any file
             changes.validate(self.dataset_dir / "tasks" / name, change)
-        backups = {name: _read_tests(self.dataset_dir / "tasks" / name) for name in targets}
+        backups = {name: snapshot.snapshot_tests(self.dataset_dir / "tasks" / name)
+                   for name in targets}
         for name in targets:
             changes.apply(self.dataset_dir / "tasks" / name, change)
         result = self._regrade_current()
         if len(result.get("failed", [])) >= len(targets) > 0:  # broke the verifier everywhere
             for name, files in backups.items():
-                _write_tests(self.dataset_dir / "tasks" / name, files)
+                snapshot.restore_tests(self.dataset_dir / "tasks" / name, files)
             result["reverted"] = targets
         self._note_applied(change, targets, result)
         return {"applied_to": targets, **result}
@@ -268,7 +258,7 @@ class ReviewAgent:
 
     def _note_applied(self, change, targets: list[str], result: dict) -> None:
         self.scratch.applied = (self.scratch.applied or []) + [
-            {"summary": changes.describe(change), "tasks": targets,
+            {"summary": readback.describe(change), "tasks": targets,
              "deltas": result.get("deltas", [])}]
         self.scratch.proposed = None
         self.scratch.readback = ""
@@ -324,23 +314,3 @@ class ReviewAgent:
         if not current:
             return None
         return trials.read(self.dataset_dir, self.jobs_dir, current["task"], current["trial"])
-
-
-def _read_tests(task_dir: Path) -> dict[Path, str]:
-    """Every file under tests/, so a change that breaks the verifier can be put back."""
-    tests = task_dir / "tests"
-    return {p.relative_to(tests): p.read_text(encoding="utf-8")
-            for p in tests.rglob("*") if p.is_file()}
-
-
-def _write_tests(task_dir: Path, files: dict[Path, str]) -> None:
-    for rel, text in files.items():
-        (task_dir / "tests" / rel).write_text(text, encoding="utf-8")
-
-
-def _applied(call: dict, result: str) -> dict | None:
-    """The apply_change result dict when the call succeeded, else None."""
-    if call.get("name") != "apply_change":
-        return None
-    data = json.loads(result)
-    return data if isinstance(data, dict) and "applied_to" in data else None

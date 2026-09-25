@@ -7,7 +7,7 @@ import tomllib
 import pytest
 
 from touchstone.harbor import rewardkit
-from touchstone.review import changes
+from touchstone.review import changes, readback
 
 
 def _task(tmp_path):
@@ -106,7 +106,7 @@ def test_refuses_escape_outside_task(tmp_path):
 
 
 def test_describe_reads_back_in_plain_words(tmp_path):
-    text = changes.describe([
+    text = readback.describe([
         {"op": "edit", "file": "tests/reward.toml", "criterion": "safety", "weight": 2},
         {"op": "edit", "file": "tests/correctness/state.py", "criterion": 1,
          "params": {"fn": "sqlite_query_equals", "args": ["db", "q", 200.0]}}])
@@ -150,14 +150,14 @@ def test_apply_list_applies_both(tmp_path):
 
 
 def test_describe_uses_plain_words_never_raw_code():
-    from touchstone.review import changes
+    from touchstone.review import readback
 
     edit = {"op": "edit", "file": "tests/correctness/state.py", "criterion": 1,
             "params": {"fn": "sqlite_query_equals",
                        "args": ["db", "SELECT refunded FROM orders WHERE id='B1'", 183.18]}}
-    assert "rk." not in changes.describe(edit)
-    assert "returns 183.18" in changes.describe(edit)
-    assert changes.describe({**edit, "description": "order B1 shows $183.18 refunded"}) == \
+    assert "rk." not in readback.describe(edit)
+    assert "returns 183.18" in readback.describe(edit)
+    assert readback.describe({**edit, "description": "order B1 shows $183.18 refunded"}) == \
         "change check 1 to order B1 shows $183.18 refunded"
 
 
@@ -187,10 +187,10 @@ def test_criterion_names_are_normalised_or_refused(tmp_path):
 
 
 def test_read_back_uses_a_description_inside_params_and_words_an_expected_edit():
-    from touchstone.review import changes
+    from touchstone.review import readback
 
     edit = {"op": "edit", "file": "tests/correctness/state.py", "criterion": 1,
             "params": {"expected": 183.18, "description": "order B6991 refunded 183.18"}}
-    assert changes.describe(edit) == "change check 1 to order B6991 refunded 183.18"
+    assert readback.describe(edit) == "change check 1 to order B6991 refunded 183.18"
     del edit["params"]["description"]
-    assert changes.describe(edit) == "change check 1 to now expects 183.18"
+    assert readback.describe(edit) == "change check 1 to now expects 183.18"
