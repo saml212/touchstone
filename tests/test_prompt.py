@@ -45,6 +45,13 @@ def test_extract_json_array():
     assert json.loads(extract_json("result: [1, 2, 3]")) == [1, 2, 3]
 
 
+def test_extract_json_fenced_with_inner_fence_in_string():
+    # The JSON's own string value contains a ``` fence (generated code / README).
+    payload = {"app.py": "print(1)\n```\nusage: python app.py", "n": 2}
+    text = "Here it is:\n```json\n" + json.dumps(payload) + "\n```\n"
+    assert json.loads(extract_json(text)) == payload
+
+
 def test_extract_json_ignores_braces_in_strings():
     text = '{"note": "a } is fine", "n": 1}'
     assert json.loads(extract_json(text)) == {"note": "a } is fine", "n": 1}

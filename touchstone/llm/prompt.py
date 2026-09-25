@@ -67,22 +67,20 @@ def serialize_messages(messages: list[dict], tools: list[dict] | None = None) ->
 def extract_json(text: str) -> str | None:
     """Return the first balanced JSON object/array substring in `text`, or None.
 
-    Tolerates fenced ```json blocks and leading prose. Ignores braces inside strings.
+    Tolerates fenced ```json blocks and leading prose. Ignores braces inside strings. Fence
+    stripping is tried first, then the raw text — so JSON whose own string values contain ```
+    (generated code, a README) is still recovered when the fenced slice would be truncated.
     """
     if not text:
         return None
-    candidate = _strip_fence(text)
-    start = _first_open(candidate)
-    if start is None:
-        # Fence stripping may have removed the opener; retry on the raw text.
-        candidate = text
+    for candidate in (_strip_fence(text), text):
         start = _first_open(candidate)
         if start is None:
-            return None
-    end = _match_bracket(candidate, start)
-    if end is None:
-        return None
-    return candidate[start : end + 1]
+            continue
+        end = _match_bracket(candidate, start)
+        if end is not None:
+            return candidate[start : end + 1]
+    return None
 
 
 def _strip_fence(text: str) -> str:
