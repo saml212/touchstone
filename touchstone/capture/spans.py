@@ -1,9 +1,10 @@
 """Shared span lifecycle for the SDK patches.
 
 The patches for openai and anthropic differ only in how they read their own wire shapes. Everything
-else — reading defensively, splitting call kwargs, running one span per model call, accumulating a
-stream, normalizing the stop reason, pricing the call, and recording output/usage/error — lives
-here. A patch supplies an `extract(resp) -> result` for a whole response, plus a
+else — reading defensively, splitting call kwargs, rewriting the model when `TOUCHSTONE_MODEL` is
+set (`override_model`), running one span per model call, accumulating a stream, normalizing the stop
+reason, pricing the call, and recording output/usage/error — lives here. A patch supplies an
+`extract(resp) -> result` for a whole response, plus a
 `state`/`accumulate(chunk, state)`/`finish(state) -> result` trio for streams. A `result` is the
 dict built by `model_result(...)`.
 
@@ -16,6 +17,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+import os
 
 from ..messages import canonical
 from ..messages import get as get  # shared field accessor, re-exported for the SDK patches
@@ -57,6 +59,15 @@ def model_result(content, tool_calls, usage, *, stop_reason=None, reasoning=None
     return {"content": content or "", "tool_calls": tool_calls or [], "usage": usage,
             "stop_reason": normalize_stop(stop_reason, refusal),
             "reasoning": reasoning or None, "refusal": refusal}
+
+
+def override_model(kwargs: dict) -> None:
+    """Run the real agent on a different model with one env var: if TOUCHSTONE_MODEL is set, rewrite
+    `kwargs["model"]` to it before the SDK call goes through (same SDK, same everything else). A
+    model passed positionally is left untouched (there is no keyword to rewrite) — see README."""
+    forced = os.environ.get("TOUCHSTONE_MODEL")
+    if forced and isinstance(kwargs.get("model"), str):
+        kwargs["model"] = forced
 
 
 def split(kwargs):
@@ -165,6 +176,7 @@ def instrument_create(orig, default_name, extract, wrap_stream, split_fn=split):
     @functools.wraps(orig)
     def create(self, *args, **kwargs):
         from .. import store
+        override_model(kwargs)
         model, messages, tools, stream, params = split_fn(kwargs)
         rec = _recorder(default_name, model, messages, tools, params, store.now())
         try:
@@ -185,6 +197,7 @@ def instrument_acreate(orig, default_name, extract, wrap_astream, split_fn=split
     @functools.wraps(orig)
     async def acreate(self, *args, **kwargs):
         from .. import store
+        override_model(kwargs)
         model, messages, tools, stream, params = split_fn(kwargs)
         rec = _recorder(default_name, model, messages, tools, params, store.now())
         try:

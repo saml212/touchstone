@@ -201,6 +201,7 @@ def patch() -> bool:
         @functools.wraps(sorig)
         def stream(self, *args, **kwargs):
             from .. import store
+            spans.override_model(kwargs)
             model, messages, tools, _, params = spans.split(kwargs)
             mgr = sorig(self, *args, **kwargs)
             return _StreamProxy(mgr, model, messages, tools, params, store.now())

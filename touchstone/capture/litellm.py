@@ -3,6 +3,7 @@ required; the logger works even when litellm is absent (base class falls back to
 
 from __future__ import annotations
 
+import functools
 from datetime import datetime
 
 from . import spans
@@ -52,12 +53,43 @@ class TouchstoneLogger(_base()):
         self._record(kwargs, response_obj, start_time, "failure")
 
 
+def _override(orig):
+    """Wrap a litellm entrypoint so TOUCHSTONE_MODEL rewrites `model` before the call runs."""
+    @functools.wraps(orig)
+    def wrapper(*args, **kwargs):
+        spans.override_model(kwargs)
+        return orig(*args, **kwargs)
+    wrapper._touchstone = True
+    return wrapper
+
+
+def _override_async(orig):
+    @functools.wraps(orig)
+    async def wrapper(*args, **kwargs):
+        spans.override_model(kwargs)
+        return await orig(*args, **kwargs)
+    wrapper._touchstone = True
+    return wrapper
+
+
+def _patch_model_override(litellm) -> None:
+    """Rewrite the model on `litellm.completion`/`acompletion` (attribute callers only; `from
+    litellm import completion` binds before this runs, so those callers keep the recorded model)."""
+    fn = getattr(litellm, "completion", None)
+    if fn is not None and not getattr(fn, "_touchstone", False):
+        litellm.completion = _override(fn)
+    afn = getattr(litellm, "acompletion", None)
+    if afn is not None and not getattr(afn, "_touchstone", False):
+        litellm.acompletion = _override_async(afn)
+
+
 def install() -> bool:
-    """Register the logger with litellm if it is installed. Returns False if litellm is absent."""
+    """Register the logger with litellm and rewire the model setting. False if litellm is absent."""
     try:
         import litellm
     except Exception:
         return False
     logger = TouchstoneLogger()
     litellm.callbacks = list(getattr(litellm, "callbacks", []) or []) + [logger]
+    _patch_model_override(litellm)
     return True

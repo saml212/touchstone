@@ -47,6 +47,11 @@ import touchstone
 touchstone.trace()   # records every model + tool call to .touchstone/touchstone.db
 ```
 
+Run your real agent on a different model with one env var: set `TOUCHSTONE_MODEL` and capture rewrites
+the `model=` keyword on every openai/anthropic/litellm call before it goes through — same SDK, same
+code path. (A model passed positionally is left untouched.) This is how the packaged agent under test
+is benched against a candidate model without editing the customer's code.
+
 ## The dataset
 
 A survey produces a `touchstone/` directory in the customer's repo — a plain Harbor dataset they own
