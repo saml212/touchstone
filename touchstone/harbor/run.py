@@ -314,10 +314,13 @@ def _task_multi_turn(task_dir: Path) -> bool:
 
 
 def dataset_is_multi_turn(path: str | Path) -> bool:
-    """True when any task in the dataset is multi-turn — the run then needs Harbor's simulated user,
-    because a conversational agent asks for the details across turns instead of acting on one
-    message. A single-turn dataset returns False and runs unchanged."""
-    tasks = _tasks_dir(Path(path))
+    """True when the target task, or any task in the dataset, is multi-turn, so the run needs
+    Harbor's simulated user: a conversational agent asks for details across turns rather than acting
+    on one message. Accepts a single task dir or a dataset root; a single-turn dataset is False."""
+    p = Path(path)
+    if (p / "task.toml").is_file():
+        return _task_multi_turn(p)
+    tasks = _tasks_dir(p)
     return any(_task_multi_turn(d) for d in tasks.glob("*") if (d / "task.toml").is_file())
 
 

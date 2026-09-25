@@ -30,6 +30,8 @@ def test_dataset_is_multi_turn_reads_task_metadata(tmp_path):
     (ds / "tasks" / "chat" / "task.toml").write_text(
         "[metadata.touchstone]\nturns = 3\nmulti_turn = true\n")
     assert run_mod.dataset_is_multi_turn(ds) is True  # any multi-turn task flips the dataset
+    assert run_mod.dataset_is_multi_turn(ds / "tasks" / "chat") is True  # a single task dir too
+    assert run_mod.dataset_is_multi_turn(ds / "tasks" / "single") is False
 
 
 def test_simulated_user_args_builds_the_bridge_flags():
