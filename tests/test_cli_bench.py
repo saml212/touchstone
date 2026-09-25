@@ -73,3 +73,23 @@ def test_bench_rejects_unknown_agent(tmp_path):
     result = runner.invoke(app, ["bench", "-m", "m", "--agent", "wizard"])
     assert result.exit_code != 0
     assert "packaged" in result.output or "replica" in result.output
+
+
+def test_bench_passes_mode_to_the_agent_kwargs(tmp_path, monkeypatch):
+    import touchstone.harbor.run as run_mod
+
+    jobs = tmp_path / "jobs"
+    job_dir = _job(jobs, "j")
+    _trial(job_dir, "t1__a", "ds/t1", 1.0)
+    seen = {}
+
+    def fake_run(path, agent, **kwargs):
+        seen["agent"] = agent
+        seen["extra_args"] = kwargs.get("extra_args")
+        return job_dir
+
+    monkeypatch.setattr(run_mod, "run", fake_run)
+    result = runner.invoke(app, ["bench", "-m", "m", "--agent", "packaged"])
+    assert result.exit_code == 0, result.output
+    assert seen["agent"] == "touchstone.harbor.agent:TouchstoneAgent"
+    assert seen["extra_args"] == ["--ak", "mode=packaged"]

@@ -102,6 +102,20 @@ def test_run_passes_tool_schemas_to_the_model(tmp_path, monkeypatch):
     assert provider.seen[0][0]["function"]["name"] == "lookup"  # tools forwarded to chat
 
 
+def test_packaged_mode_not_implemented_yet(tmp_path, monkeypatch):
+    import pytest
+
+    _agent_dir(tmp_path)
+    monkeypatch.setenv("TOUCHSTONE_AGENT_DIR", str(tmp_path / "agent"))
+    monkeypatch.setattr(agent_mod, "provider_from_spec", lambda spec: QueuedProvider([]))
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    ta = TouchstoneAgent(logs, model_name="openai/gpt-4o-mini", mode="packaged")
+    assert ta.mode == "packaged"
+    with pytest.raises(NotImplementedError):
+        asyncio.run(ta.run("hi", FakeEnv(), SimpleNamespace()))
+
+
 def test_run_with_no_tools_module_still_writes_a_trajectory(tmp_path, monkeypatch):
     _agent_dir(tmp_path, with_tools=False)
     provider = QueuedProvider([Reply(content="hi", tool_calls=[])])

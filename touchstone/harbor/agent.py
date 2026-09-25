@@ -80,9 +80,11 @@ class TouchstoneAgent(BaseAgent):
     if AgentCapabilities is not None:
         capabilities = AgentCapabilities(atif=True)
 
-    def __init__(self, logs_dir, model_name: str | None = None, **kwargs) -> None:
+    def __init__(self, logs_dir, model_name: str | None = None, mode: str = "replica",
+                 **kwargs) -> None:
         self.logs_dir = Path(logs_dir)
         self.model_name = model_name
+        self.mode = mode  # "replica" (this loop) | "packaged" (stage 3); set via `--ak mode=…`
         if BaseAgent is not object:
             super().__init__(logs_dir, model_name=model_name, **kwargs)
 
@@ -114,6 +116,8 @@ class TouchstoneAgent(BaseAgent):
         The survey's packaged agent (stage 3) overrides this to run the customer's real entrypoint
         inside the sandbox and import the trajectory that capture wrote to its `.touchstone` db.
         """
+        if self.mode == "packaged":
+            raise NotImplementedError("packaged mode arrives with the survey's packaged agent")
         config = load_config()
         provider = provider_from_spec(_provider_spec(self.model_name))
         messages = [{"role": "system", "content": config.system},

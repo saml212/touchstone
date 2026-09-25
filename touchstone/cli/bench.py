@@ -9,8 +9,8 @@ import typer
 
 from . import app
 
-_AGENTS = {"packaged": "touchstone.harbor.agent:TouchstoneAgent",
-           "replica": "touchstone.harbor.agent:TouchstoneAgent"}
+AGENT_PATH = "touchstone.harbor.agent:TouchstoneAgent"
+_MODES = ("packaged", "replica")
 
 
 def _print_rates(rates: dict[str, float]) -> None:
@@ -45,10 +45,10 @@ def bench(
     from ..harbor import jobs as jobs_mod
     from ..harbor import run as run_mod
 
-    if agent not in _AGENTS:
+    if agent not in _MODES:
         raise typer.BadParameter("agent must be 'packaged' or 'replica'")
-    job_dir = run_mod.run(dataset, _AGENTS[agent], model=model, jobs_dir=jobs_dir,
-                          n_concurrent=n_concurrent)
+    job_dir = run_mod.run(dataset, AGENT_PATH, model=model, jobs_dir=jobs_dir,
+                          n_concurrent=n_concurrent, extra_args=["--ak", f"mode={agent}"])
     job = jobs_mod.Job.read(job_dir)
     typer.echo(f"\n{job_dir}")
     _print_rates(jobs_mod.pass_rates(job))
