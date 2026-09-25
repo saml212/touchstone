@@ -192,6 +192,53 @@ def _run(tmp_path, conn, groups, responses=None):
                              Scrubber(), _settings())
 
 
+def test_provider_authored_criteria_replace_the_mechanical_ones(tmp_path, conn):
+    import tomllib
+    _paint_episode(conn)
+    authored = ["widget w1 is now blue", "one note was logged for w1"]
+    text = json.dumps({"instruction": "Please recolour my widget w1 and log it.",
+                       "persona": "Person 1.", "criteria": authored})
+    repo, _ = _run(tmp_path, conn, _groups("paint1"), responses=[text])
+    d = tomllib.loads(
+        (repo / "touchstone" / "tasks" / "recolour-1" / "tests" / "descriptions.toml").read_text())
+    corr = [v for k, v in d.items() if k.startswith("tests/correctness/")]
+    assert corr and all(v in authored for v in corr)     # the plain sentences the provider wrote
+    assert "widget w1 is now blue" in corr               # (the surviving criterion's authored text)
+    assert d["tests/safety/no_pii.py:1"]                 # safety description stays fixed
+
+
+def test_provider_criteria_count_mismatch_falls_back_to_mechanical(tmp_path, conn):
+    import tomllib
+    _paint_episode(conn)
+    text = json.dumps({"instruction": "Please recolour my widget w1 and log it.",
+                       "persona": "Person 1.", "criteria": ["only one sentence"]})
+    repo, _ = _run(tmp_path, conn, _groups("paint1"), responses=[text])
+    d = tomllib.loads(
+        (repo / "touchstone" / "tasks" / "recolour-1" / "tests" / "descriptions.toml").read_text())
+    corr = [v for k, v in d.items() if k.startswith("tests/correctness/")]
+    assert any("widgets w1" in v for v in corr)          # the mechanical, path-free description
+
+
+def test_apply_authored_overlay_and_fallback():
+    from touchstone.survey.tasks import _apply_authored
+    state, tool = [("c1", "m1")], [("c2", "m2")]
+    assert _apply_authored(state, tool, ["A", "B"]) == ([("c1", "A")], [("c2", "B")])
+    assert _apply_authored(state, tool, ["only one"]) == (state, tool)
+    assert _apply_authored(state, tool, None) == (state, tool)
+
+
+def test_author_criteria_uses_provider_or_falls_back(tmp_path):
+    from touchstone.survey.provider import ScriptedSurveyProvider
+    from touchstone.survey.tasks import author_criteria
+    mech = ["m1", "m2"]
+    ok = ScriptedSurveyProvider([json.dumps({"criteria": ["a", "b"]})])
+    assert author_criteria(ok, tmp_path, mech) == ["a", "b"]
+    assert author_criteria(ScriptedSurveyProvider([json.dumps({"criteria": ["x"]})]),
+                           tmp_path, mech) == mech      # count mismatch -> mechanical
+    assert author_criteria(ScriptedSurveyProvider(["not json"]), tmp_path, mech) == mech
+    assert author_criteria(ok, tmp_path, []) == []
+
+
 def test_task_state_and_trajectory_criteria(tmp_path, conn):
     _paint_episode(conn)
     repo, result = _run(tmp_path, conn, _groups("paint1"))
