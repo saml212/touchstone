@@ -62,16 +62,16 @@ def _accumulate_tool_call(tc, st):
         st["args"][idx] = st["args"].get(idx, "") + a
 
 
-def _accumulate(chunk, st):
+def _accumulate_usage(chunk, st):
     u = _usage(chunk)
     if u and (u["tokens_in"] or u["tokens_out"]):
         st["usage"] = u
-    choices = get(chunk, "choices") or []
-    if not choices:
-        return
-    if get(choices[0], "finish_reason"):
-        st["stop"] = get(choices[0], "finish_reason")
-    delta = get(choices[0], "delta")
+
+
+def _accumulate_choice(choice, st):
+    if get(choice, "finish_reason"):
+        st["stop"] = get(choice, "finish_reason")
+    delta = get(choice, "delta")
     c = get(delta, "content")
     if c:
         st["parts"].append(c)
@@ -79,6 +79,13 @@ def _accumulate(chunk, st):
         st["refusal"].append(get(delta, "refusal"))
     for tc in get(delta, "tool_calls") or []:
         _accumulate_tool_call(tc, st)
+
+
+def _accumulate(chunk, st):
+    _accumulate_usage(chunk, st)
+    choices = get(chunk, "choices") or []
+    if choices:
+        _accumulate_choice(choices[0], st)
 
 
 def _finish(st):

@@ -139,35 +139,44 @@ def _recorder(default_name, model, messages, tools, params, started):
 _ERROR = {"content": "", "tool_calls": [], "usage": None}
 
 
+def _step(accumulate, chunk, state) -> None:
+    try:
+        accumulate(chunk, state)
+    except Exception as exc:  # a bad chunk must not break the stream the user is reading
+        _log.warning("touchstone stream capture failed: %r", exc)
+
+
+def _sync_stream(resp, rec, state_factory, accumulate, finish):
+    state = state_factory()
+    try:
+        for chunk in resp:
+            _step(accumulate, chunk, state)
+            yield chunk
+    except Exception as exc:
+        rec(lambda: finish(state), repr(exc))
+        raise
+    rec(lambda: finish(state), None)
+
+
+async def _async_stream(resp, rec, state_factory, accumulate, finish):
+    state = state_factory()
+    try:
+        async for chunk in resp:
+            _step(accumulate, chunk, state)
+            yield chunk
+    except Exception as exc:
+        rec(lambda: finish(state), repr(exc))
+        raise
+    rec(lambda: finish(state), None)
+
+
 def stream_wrappers(state_factory, accumulate, finish):
     """Build (sync, async) generator wrappers that accumulate a stream and record at its end."""
-    def _step(chunk, state):
-        try:
-            accumulate(chunk, state)
-        except Exception as exc:
-            _log.warning("touchstone stream capture failed: %r", exc)
-
     def wrap(resp, rec):
-        state = state_factory()
-        try:
-            for chunk in resp:
-                _step(chunk, state)
-                yield chunk
-        except Exception as exc:
-            rec(lambda: finish(state), repr(exc))
-            raise
-        rec(lambda: finish(state), None)
+        return _sync_stream(resp, rec, state_factory, accumulate, finish)
 
-    async def awrap(resp, rec):
-        state = state_factory()
-        try:
-            async for chunk in resp:
-                _step(chunk, state)
-                yield chunk
-        except Exception as exc:
-            rec(lambda: finish(state), repr(exc))
-            raise
-        rec(lambda: finish(state), None)
+    def awrap(resp, rec):
+        return _async_stream(resp, rec, state_factory, accumulate, finish)
 
     return wrap, awrap
 
