@@ -84,3 +84,17 @@ def write_no_pii_criterion(tests_dir: str | Path, *, output_file: str = "output.
     path = Path(tests_dir) / "no_pii.py"
     path.write_text(_no_pii_source(output_file), encoding="utf-8")
     return path
+
+
+def write_reward_toml(tests_dir: str | Path, dimensions: list[str], *,
+                      aggregation: str = "weighted-mean") -> Path:
+    """Write `tests/reward.toml` aggregating dimension subdirs into the main `reward` score.
+
+    Harbor reads the `reward` key as the trial's score; without this, a multi-dimension task has no
+    top-level `reward`. Equal weights keep every dimension mattering.
+    """
+    path = Path(tests_dir) / "reward.toml"
+    doc = {"reward": [{"name": "reward", "aggregation": aggregation,
+                       "weights": {d: 1.0 for d in dimensions}}]}
+    path.write_text(tomli_w.dumps(doc), encoding="utf-8")
+    return path

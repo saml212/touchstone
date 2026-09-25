@@ -13,6 +13,7 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -62,6 +63,11 @@ def _mask_field(key: str, value, masked: set):
 def _compare(expected, got) -> tuple[bool, set]:
     masked: set = set()
     return _mask(expected, masked) == _mask(got, masked), masked
+
+
+def masked_equal(expected, got) -> bool:
+    """True when `got` matches `expected` after masking volatile fields (ids, timestamps, …)."""
+    return _compare(expected, got)[0]
 
 
 # ---- simulator process -----------------------------------------------------
@@ -134,10 +140,7 @@ def _replay_cmd(repo: Path, spec_path: str, settings: Settings) -> list[str]:
             "touchstone.survey.replay", spec_path]
 
 
-def _run_replay(repo: Path, calls: list[ToolEvent], base: str, ctx: dict,
-                settings: Settings) -> list[dict]:
-    spec = {"base_url_env": ctx["base_url_env"], "base_url": base, "tools": ctx["tools"],
-            "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
+def _run_spec(repo: Path, spec: dict, settings: Settings) -> list[dict]:
     fd, spec_path = tempfile.mkstemp(suffix=".json", prefix="ts-replay-")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(spec, fh, default=str)
@@ -152,6 +155,13 @@ def _run_replay(repo: Path, calls: list[ToolEvent], base: str, ctx: dict,
         return json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
         raise _SimError(f"replay output was not JSON:\n{proc.stdout[-500:]}") from exc
+
+
+def _run_replay(repo: Path, calls: list[ToolEvent], base: str, ctx: dict,
+                settings: Settings) -> list[dict]:
+    spec = {"base_url_env": ctx["base_url_env"], "base_url": base, "tools": ctx["tools"],
+            "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
+    return _run_spec(repo, spec, settings)
 
 
 def _failure(call: ToolEvent, got, scrub: Scrubber) -> dict:
@@ -180,6 +190,81 @@ def _score(calls: list[ToolEvent], got_list: list[dict], threshold: float,
 def _failed_result(calls: list[ToolEvent], threshold: float, detail: str) -> dict:
     return {"calls": len(calls), "reproduced": 0, "score": 0.0, "threshold": threshold,
             "masked_keys": [], "failures": [{"error": detail[-1500:]}]}
+
+
+# ---- state capture (for task criteria) -------------------------------------
+
+
+def _table_names(conn) -> list[str]:
+    q = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    return [row[0] for row in conn.execute(q).fetchall()]
+
+
+def _pk_col(conn, table: str) -> str:
+    for row in conn.execute(f"PRAGMA table_info({table})"):
+        if row["pk"]:
+            return row["name"]
+    return "rowid"
+
+
+def _dump_table(conn, table: str) -> dict:
+    pk = _pk_col(conn, table)
+    select = "*" if pk != "rowid" else "rowid AS rowid, *"
+    rows = [dict(r) for r in conn.execute(f"SELECT {select} FROM {table}").fetchall()]
+    return {"pk": pk, "rows": rows}
+
+
+def dump_db(db_path: Path) -> dict:
+    """Every table's rows keyed by name, with the primary-key column. Missing db -> empty dict."""
+    path = Path(db_path)
+    if not path.exists():
+        return {}
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        return {table: _dump_table(conn, table) for table in _table_names(conn)}
+    finally:
+        conn.close()
+
+
+def _start_mounts(mounts: list[dict]) -> list[dict]:
+    started: list[dict] = []
+    for mount in mounts:
+        port = _free_port()
+        log_path = mount["sim_dir"] / ".sim.log"
+        proc, log = _start_sim(mount["sim_dir"], port, log_path)
+        base = f"http://127.0.0.1:{port}"
+        _await_health(proc, base, log_path)
+        _reset(base)
+        started.append({"proc": proc, "log": log, "base": base,
+                        "sim_dir": mount["sim_dir"], "env": mount.get("env")})
+    return started
+
+
+def _snapshots(started: list[dict]) -> dict:
+    return {s["sim_dir"].name: dump_db(s["sim_dir"] / "state.db") for s in started}
+
+
+def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolEvent],
+                  settings: Settings) -> dict:
+    """Start each simulator, seed it, dump state, replay `calls` (real tool functions), dump again.
+
+    `mounts` is [{"sim_dir", "env"}]. Returns {"initial", "final", "replayed"} keyed by simulator
+    name, or {"error": ...} if a simulator never became healthy or the replay failed."""
+    started: list[dict] = []
+    try:
+        started = _start_mounts(mounts)
+        base_urls = {s["env"]: s["base"] for s in started if s["env"]}
+        initial = _snapshots(started)
+        spec = {"base_urls": base_urls, "tools": tools,
+                "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
+        replayed = _run_spec(repo, spec, settings)
+        return {"initial": initial, "final": _snapshots(started), "replayed": replayed}
+    except _SimError as exc:
+        return {"error": str(exc)}
+    finally:
+        for s in started:
+            _kill(s["proc"], s["log"])
 
 
 def measure_service(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict,

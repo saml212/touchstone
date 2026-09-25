@@ -7,8 +7,8 @@ a module may build its HTTP client at import time. Output is a JSON list on stdo
 
 Spec: {"base_url_env": str|null, "base_url": str, "tools": {name: "module:function"},
        "calls": [{"tool": name, "arguments": <obj|value>}]}
-`base_urls` ({env: url}) may point several services at their simulators at once; it is applied before
-the single `base_url_env`/`base_url` pair (both are optional).
+`base_urls` ({env: url}) may point several services at their simulators at once; it is applied
+before the single `base_url_env`/`base_url` pair (both are optional).
 """
 
 from __future__ import annotations
@@ -40,9 +40,7 @@ def _invoke(fn, arguments):
 
 
 def replay(spec: dict) -> list[dict]:
-    env = spec.get("base_url_env")
-    if env:
-        os.environ[env] = spec["base_url"]
+    _apply_base_urls(spec)
     tools = spec["tools"]
     results = []
     for call in spec["calls"]:
