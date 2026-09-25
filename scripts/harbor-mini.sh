@@ -8,5 +8,5 @@
 # Usage: scripts/harbor-mini.sh -m <provider/model> [--agent packaged|replica] [--dataset <path>]
 #   scripts/harbor-mini.sh -m openai/gpt-4o-mini --dataset touchstone
 set -euo pipefail
-export TOUCHSTONE_HARBOR_HOST="${TOUCHSTONE_HARBOR_HOST:-100.64.110.35}"
+export TOUCHSTONE_HARBOR_HOST="${TOUCHSTONE_HARBOR_HOST:-harbor-host.example}"
 exec uv run touchstone bench "$@"

@@ -121,8 +121,8 @@ daemon can offload to a host: set
 
 ```toml
 [harbor]
-host = "100.64.110.35"           # an SSH host with Docker + harbor
-remote_root = "/Volumes/1TB_SSD/pebble"
+host = "harbor-host.example"           # an SSH host with Docker + harbor
+remote_root = "/srv/touchstone"
 ```
 
 and `touchstone bench` (via `touchstone/harbor/run.py`) rsyncs the dataset to that host, runs Harbor

@@ -183,7 +183,7 @@ the placeholder `interview/agent.py` + `touchstone interview`, superseded by the
 ## Quality bar
 
 `uv run pytest -q`, `ruff`, complexity ≤ 8 on every function (CI runs `complexipy`). Every stage
-live-verified with `harbor run` on the Mac mini's Docker (`DOCKER_HOST=ssh://100.64.110.35` from the
+live-verified with `harbor run` on the Mac mini's Docker (`DOCKER_HOST=ssh://harbor-host.example` from the
 laptop); `touchstone/harbor/run.py` rsyncs the dataset to the host, runs Harbor over SSH, and rsyncs
 the job directory back. A provider API key needed there is forwarded on **stdin** (`read -r` into an
 env var), never on argv or in the printed command, so it never lands in a process list. The
