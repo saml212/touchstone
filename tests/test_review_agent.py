@@ -391,3 +391,13 @@ def test_apply_reverts_when_the_change_breaks_every_verifier(tmp_path):
     out = ra._apply_change({"task": "t1"})
     assert out["reverted"] == ["t1"]
     assert (task / "tests" / "correctness" / "state.py").read_text() == before
+
+
+def test_apply_scope_comes_from_the_persons_words(tmp_path):
+    from touchstone.review import replies
+
+    history = [{"role": "assistant", "text": "apply everywhere?"},
+               {"role": "user", "speaker": "sam", "text": "Just this task."}]
+    assert replies.wants_everywhere(history) is False
+    history.append({"role": "user", "speaker": "sam", "text": "Actually, everywhere, always."})
+    assert replies.wants_everywhere(history) is True

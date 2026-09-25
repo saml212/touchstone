@@ -318,9 +318,12 @@ _WORDS = {
 def _summarise_target(change: dict) -> str:
     """Plain words for the read-back: the change's own description first, else the check in
     words (never raw code — a product person has to say yes to this sentence)."""
-    if change.get("description"):
-        return change["description"]
     params = change.get("params", {})
+    description = change.get("description") or params.get("description")
+    if description:
+        return description
+    if "expected" in params:
+        return f"now expects {params['expected']!r}"
     fn, args = params.get("fn"), params.get("args", [])
     words = _WORDS.get(fn)
     try:

@@ -113,6 +113,7 @@ class ReviewAgent:
             return AgentTurn(say="Closing the room — thanks all.")
         if self.provider is None:
             return AgentTurn(say="Tell me when to start and I'll pull up the first trial.")
+        self._scope_all = replies.wants_everywhere(history)
         say = self._ground(self._run_loop(history))
         self._save_scratch()
         return AgentTurn(say=say, draft=self.draft(), commit=self.committed())
@@ -240,7 +241,8 @@ class ReviewAgent:
             return {"error": "no change has been proposed yet — call propose_change and read it "
                              "back first, then apply."}
         task = self._task_arg(args)
-        targets = _shared_tasks(self.dataset_dir, task) if args.get("always") else [task]
+        everywhere = bool(args.get("always")) and getattr(self, "_scope_all", False)
+        targets = _shared_tasks(self.dataset_dir, task) if everywhere else [task]
         for name in targets:  # refuse an unvalidated/malformed change before writing any file
             changes.validate(self.dataset_dir / "tasks" / name, change)
         backups = {name: _read_tests(self.dataset_dir / "tasks" / name) for name in targets}

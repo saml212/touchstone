@@ -74,10 +74,15 @@ def _review_jobs(jobs_dir: Path) -> list[tuple[Path, str]]:
     latest: dict[tuple, Path] = {}
     for job_dir in _job_dirs(jobs_dir):  # ascending by timestamped name -> last write wins
         agent, model = _agent_model(job_dir)
-        if _is_gate(agent):
+        if _is_gate(agent) or not _has_rewards(job_dir):
             continue
         latest[(agent, model)] = job_dir
     return [(jd, _label(*_agent_model(jd), jd.name)) for jd in latest.values()]
+
+
+def _has_rewards(job_dir: Path) -> bool:
+    """A run that produced no reward at all (every trial raised) is broken, not review material."""
+    return any(t.reward is not None for t in jobs.Job.read(job_dir).trials)
 
 
 def _trial_dirs(job_dir: Path) -> list[Path]:

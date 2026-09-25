@@ -29,7 +29,7 @@ def tool_error_reply(error: str | None) -> str:
 
 
 def reward_pct(reward) -> str:
-    return "unknown" if reward is None else f"{round(reward * 100)}%"
+    return "no reward recorded" if reward is None else f"{round(reward * 100)}%"
 
 
 def _passed(score) -> bool:
@@ -54,6 +54,17 @@ def wants_done(history: list[dict]) -> bool:
     idx = max((i for i, m in enumerate(history) if m.get("role") == "assistant"), default=-1)
     return any(m.get("role") == "user" and m.get("text", "").strip().lower().startswith("/done")
                for m in history[idx + 1:])
+
+
+_EVERYWHERE = ("every", "all ", "always", "everywhere", "each ")
+
+
+def wants_everywhere(history: list[dict]) -> bool:
+    """Did the participants, since the agent last spoke, ask for a change everywhere? The scope of
+    an apply is decided from their words here, never from the model's `always` flag alone."""
+    idx = max((i for i, m in enumerate(history) if m.get("role") == "assistant"), default=-1)
+    said = " ".join(m.get("text", "").lower() for m in history[idx + 1:] if m.get("role") == "user")
+    return any(word in f" {said} " for word in _EVERYWHERE)
 
 
 def as_messages(history: list[dict]) -> list[dict]:

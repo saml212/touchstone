@@ -137,3 +137,26 @@ def test_needs_review_reads_gate_json(tmp_path):
            {"failed_side": "oracle", "oracle": 0.5, "nop": 0.0})
     got = trials.needs_review(dataset)
     assert got == [{"task": "broken", "failed_side": "oracle", "oracle": 0.5, "nop": 0.0}]
+
+
+def test_a_run_with_no_rewards_is_never_the_latest_run(tmp_path):
+    import json
+
+    from touchstone.review import trials
+
+    def job(name, reward):
+        d = tmp_path / name / "t__x"
+        (d / "verifier").mkdir(parents=True)
+        (tmp_path / name / "config.json").write_text(json.dumps(
+            {"agents": [{"name": "touchstone", "model_name": "m"}]}))
+        body = {"task_name": "t", "agent_info": {"name": "touchstone", "model_info": {"name": "m"}}}
+        if reward is None:
+            body["exception_info"] = {"exception_type": "RegradeError", "exception_message": "x"}
+        else:
+            (d / "verifier" / "reward.txt").write_text(str(reward))
+        (d / "result.json").write_text(json.dumps(body))
+
+    job("2026-01-01__00-00-00", 1.0)
+    job("2026-01-02__00-00-00", None)
+    kept = [jd.name for jd, _ in trials._review_jobs(tmp_path)]
+    assert kept == ["2026-01-01__00-00-00"]

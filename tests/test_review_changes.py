@@ -184,3 +184,13 @@ def test_criterion_names_are_normalised_or_refused(tmp_path):
     assert changes._render_call({"fn": "rk.file_exists", "args": ["x"]}) == "rk.file_exists('x')"
     with pytest.raises(changes.ChangeError):
         changes._render_call({"fn": "made_up", "args": []})
+
+
+def test_read_back_uses_a_description_inside_params_and_words_an_expected_edit():
+    from touchstone.review import changes
+
+    edit = {"op": "edit", "file": "tests/correctness/state.py", "criterion": 1,
+            "params": {"expected": 183.18, "description": "order B6991 refunded 183.18"}}
+    assert changes.describe(edit) == "change check 1 to order B6991 refunded 183.18"
+    del edit["params"]["description"]
+    assert changes.describe(edit) == "change check 1 to now expects 183.18"
