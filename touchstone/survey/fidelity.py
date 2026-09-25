@@ -193,6 +193,12 @@ def _failed_result(calls: list[ToolEvent], threshold: float, detail: str) -> dic
             "masked_keys": [], "failures": [{"error": detail[-1500:]}]}
 
 
+_NO_REDIRECT = (
+    "service base URL is a constant (no base_url_env in the map): the tool cannot be pointed at "
+    "the simulator, so fidelity was not measured — survey never calls the real service"
+)
+
+
 # ---- state capture (for task criteria) -------------------------------------
 
 
@@ -286,6 +292,11 @@ def measure_service(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict
                     settings: Settings, scrub: Scrubber) -> dict:
     """Fidelity of the simulator in `sim_dir` against `calls`. Always kills the process."""
     threshold = settings.survey_fidelity_threshold
+    if calls and not ctx.get("base_url_env"):
+        # No env var to override means the real tool would hit its hardcoded/constant base URL —
+        # i.e. the real (possibly production) service. Survey must never do that, so flag the
+        # simulator (below-threshold) with an honest reason instead of measuring against it.
+        return _failed_result(calls, threshold, _NO_REDIRECT)
     port = _free_port()
     log_path = sim_dir / ".sim.log"
     proc = log = None

@@ -24,3 +24,25 @@ def test_iso_timestamps_masked():
 def test_nested_masking():
     ok, _ = _compare({"data": {"id": 1, "v": 5}}, {"data": {"id": 999, "v": 5}})
     assert ok
+
+
+def test_constant_base_url_service_is_flagged_not_replayed(tmp_path):
+    # Attack (stage-7 survey): a tool whose base URL is a hardcoded constant (no base_url_env in
+    # the map) cannot be pointed at the simulator. measure_service must flag it (below threshold)
+    # with an honest reason and NEVER start a replay against the real (possibly production) service.
+    from touchstone.survey.fidelity import measure_service
+    from touchstone.survey.recordings import ToolEvent
+    from touchstone.survey.scrub import Scrubber
+
+    class _S:
+        survey_fidelity_threshold = 0.8
+        survey_python = None
+
+    calls = [ToolEvent(tool="charge", arguments={"id": "A1"}, output={"ok": True}, episode="e1")]
+    ctx = {"base_url_env": None, "tools": {"charge": "mod:charge"}}
+    # sim_dir has no app.py; if the guard failed to short-circuit, starting the sim would error out
+    # differently — the honest no-redirect reason proves it never tried.
+    result = measure_service(tmp_path, tmp_path, calls, ctx, _S(), Scrubber())
+    assert result["score"] == 0.0
+    assert result["score"] < result["threshold"]
+    assert "constant" in result["failures"][0]["error"]
