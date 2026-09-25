@@ -245,3 +245,11 @@ def test_stage_src_uses_the_checkout_root_when_it_has_a_pyproject(tmp_path, monk
     (root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     monkeypatch.setattr(remote, "_src_paths", lambda: (root, root / "touchstone"))
     assert remote._stage_src(tmp_path / "unused") == root  # synced as-is, no staging
+
+
+def test_simulated_user_agent_follows_the_model_provider():
+    from touchstone.harbor import run as run_mod
+
+    assert run_mod.simulated_user_args("", "openai/gpt-4o-mini")[:2] == ["--user-agent", "codex"]
+    assert run_mod.simulated_user_args("", "anthropic/claude-sonnet-4-5")[1] == "claude-code"
+    assert run_mod.simulated_user_args("aider", "openai/x")[1] == "aider"

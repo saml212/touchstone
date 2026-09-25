@@ -265,14 +265,20 @@ def dataset_is_multi_turn(path: str | Path) -> bool:
     return any(_task_multi_turn(d) for d in tasks.glob("*") if (d / "task.toml").is_file())
 
 
+def user_agent_for(model: str) -> str:
+    """The Harbor simulated-user agent that can sign in with the model's provider key: codex for
+    an OpenAI model, claude-code for an Anthropic one. A wrong pairing fails authentication inside
+    the sandbox and every trial scores 0."""
+    return "claude-code" if model.split("/", 1)[0] == "anthropic" else "codex"
+
+
 def simulated_user_args(user_agent: str, user_model: str,
-                        persona_path: str | None = None) -> list[str]:
-    """Harbor flags that put a simulated user in front of the agent under test over the ACP bridge.
-    With no persona path the default persona is used and each task's instruction.md carries the
-    facts the user reveals; a single-task run may pass its own tasks/<t>/persona.md."""
-    args = ["--user-agent", user_agent, "--user-model", user_model, "--bridge", "acp"]
-    if persona_path:
-        args += ["--user-persona-path", persona_path]
+                        persona: str | Path | None = None) -> list[str]:
+    """Harbor flags that put a simulated user on the other side of the agent (multi-turn tasks)."""
+    agent = user_agent or user_agent_for(user_model)
+    args = ["--user-agent", agent, "--user-model", user_model, "--bridge", "acp"]
+    if persona:
+        args += ["--user-persona-path", str(persona)]
     return args
 
 

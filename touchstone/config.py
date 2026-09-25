@@ -39,7 +39,7 @@ class Settings:
     survey_dataset_name: str = ""  # dataset.toml name; defaults to "<repo>/<repo>" when empty
     # Simulated user (multi-turn tasks): the Harbor user agent that plays the customer over the ACP
     # bridge, and the model it runs on (empty -> the agent-under-test's model).
-    survey_user_agent: str = "claude-code"
+    survey_user_agent: str = ""  # simulated-user agent; empty = pick by the model's provider
     survey_user_model: str = ""
     # Review room: the dataset directory (under the project root) the room reviews, and the Harbor
     # jobs directory it reads trials from (empty -> "<dataset>/jobs").
