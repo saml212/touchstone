@@ -184,8 +184,10 @@ def _tool_criteria(map_data: dict, calls: list[ToolEvent],
 
 
 def _mounts(services: list[dict], out: Path, base_url_envs: dict) -> list[dict]:
-    return [{"sim_dir": out / "simulators" / s["name"], "env": base_url_envs.get(s["name"])}
-            for s in services]
+    from .simulate import service_host
+
+    return [{"sim_dir": out / "simulators" / s["name"], "env": base_url_envs.get(s["name"]),
+             "host": service_host(s)} for s in services]
 
 
 def capture_effect(services, out, base_url_envs, repo, tools, calls, settings) -> dict:

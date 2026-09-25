@@ -89,6 +89,52 @@ def test_environment_snapshot_and_deps(tmp_path):
     assert result["image_tag"].startswith("touchstone-env-repo:")
 
 
+CONST_MAP = {
+    "tools": [{"name": "get_today_weather", "calls": ["weather"]}],
+    "services": [{"name": "weather", "kind": "http", "base_url_env": None,
+                  "base_url_default": "http://api.weatherapi.com/v1", "calls": []}],
+}
+
+
+def test_environment_writes_sitecustomize_and_service_hosts(tmp_path):
+    repo = _git_repo(tmp_path)
+    out = tmp_path / "touchstone"
+    result = build_environment(repo, CONST_MAP, out)
+
+    # the net-shim loader is written where PYTHONPATH picks it up, and is self-contained
+    site = (out / "environment" / "_touchstone" / "sitecustomize.py").read_text()
+    assert "TOUCHSTONE_SIMULATORS" in site and "netshim.py" in site
+    assert "import touchstone" not in site  # loads netshim by path, not the whole package
+
+    # a constant-base-URL service exposes its host so the shim can rewrite it
+    assert result["hosts"] == {"weather": "api.weatherapi.com"}
+    assert result["base_url_envs"] == {"weather": None}
+
+
+def test_packaged_manifest_and_simulators_map_use_host_for_constant_service():
+    from touchstone.survey.package import _sim_manifest, _simulators_map
+
+    env_result = {"services": ["weather"], "ports": {"weather": 8000},
+                  "base_url_envs": {"weather": None}, "hosts": {"weather": "api.weatherapi.com"}}
+    assert _sim_manifest(env_result) == [{"name": "weather", "port": 8000,
+                                          "host": "api.weatherapi.com"}]
+    assert _simulators_map(env_result) == {"api.weatherapi.com": "http://127.0.0.1:8000"}
+
+
+def test_trace_installs_net_shim_from_env(monkeypatch, tmp_path):
+    import touchstone
+    import touchstone.survey.netshim as netshim
+
+    netshim._PATCHED.clear()
+    netshim._MAPPING.clear()
+    monkeypatch.setenv("TOUCHSTONE_SIMULATORS", '{"api.weatherapi.com": "http://127.0.0.1:8000"}')
+    monkeypatch.chdir(tmp_path)
+    touchstone.trace(db=str(tmp_path / "t.db"))
+    assert netshim._MAPPING == {"api.weatherapi.com": "http://127.0.0.1:8000"}
+    netshim._PATCHED.clear()
+    netshim._MAPPING.clear()
+
+
 def test_environment_flags_missing_deps(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

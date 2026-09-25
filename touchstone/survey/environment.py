@@ -24,7 +24,7 @@ from pathlib import Path
 
 import touchstone
 
-from .simulate import crossing_services
+from .simulate import crossing_services, service_host
 from .writes import atomic_write
 
 _SKIP_DIRS = {".git", ".touchstone", "touchstone", ".venv", "node_modules", "__pycache__"}
@@ -67,6 +67,27 @@ for _ in $(seq 1 100); do
 done
 poke "http://127.0.0.1:$port/__reset" POST || true
 """
+
+
+# Auto-imported at interpreter startup (this dir is on PYTHONPATH in the image). When
+# TOUCHSTONE_SIMULATORS names host->simulator base URLs, install the net shim so a tool that
+# hard-codes its host is rewritten to the loopback simulator. Loads netshim by file path so the
+# whole touchstone package is not imported into every python process in the container.
+SITECUSTOMIZE = '''\
+"""Touchstone environment: install the net shim from TOUCHSTONE_SIMULATORS when set."""
+import os
+
+if os.environ.get("TOUCHSTONE_SIMULATORS"):
+    import importlib.util
+    import pathlib
+
+    _p = pathlib.Path(__file__).resolve().parent / "touchstone" / "survey" / "netshim.py"
+    if _p.exists():
+        _spec = importlib.util.spec_from_file_location("_touchstone_netshim", _p)
+        _mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _mod.install_from_env()
+'''
 
 
 def _is_secret(rel: str) -> bool:
@@ -188,13 +209,14 @@ def _image_tag(repo_name: str, env_dir: Path) -> str:
     return f"touchstone-env-{_sanitize_tag(repo_name)}:{digest.hexdigest()[:12]}"
 
 
-def _ports(map_data: dict) -> tuple[dict, dict]:
-    ports, base_url_envs = {}, {}
+def _ports(map_data: dict) -> tuple[dict, dict, dict]:
+    ports, base_url_envs, hosts = {}, {}, {}
     for i, service in enumerate(crossing_services(map_data)):
         name = service["name"]
         ports[name] = 8000 + i
         base_url_envs[name] = service.get("base_url_env")
-    return ports, base_url_envs
+        hosts[name] = service_host(service)
+    return ports, base_url_envs, hosts
 
 
 def build_environment(repo: Path, map_data: dict, out: Path, force: bool = False) -> dict:
@@ -209,9 +231,10 @@ def build_environment(repo: Path, map_data: dict, out: Path, force: bool = False
         _copy_simulators(out / "simulators", env_dir / "simulators")
         atomic_write(env_dir / "simulators" / "start.sh", START_SH)
         _vendor_touchstone(env_dir / "_touchstone")
+        atomic_write(env_dir / "_touchstone" / "sitecustomize.py", SITECUSTOMIZE)
         atomic_write(env_dir / "requirements.txt", _requirements_text(deps or []))
         atomic_write(env_dir / "Dockerfile", DOCKERFILE)
-    ports, base_url_envs = _ports(map_data)
+    ports, base_url_envs, hosts = _ports(map_data)
     return {"deps_ok": deps is not None, "deps_reason": reason, "ports": ports,
-            "base_url_envs": base_url_envs, "image_tag": _image_tag(repo.name, env_dir),
-            "services": sorted(ports)}
+            "base_url_envs": base_url_envs, "hosts": hosts,
+            "image_tag": _image_tag(repo.name, env_dir), "services": sorted(ports)}

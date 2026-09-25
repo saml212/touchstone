@@ -34,6 +34,9 @@ def trace(db: str | None = None, otel: bool = False) -> dict:
     settings = load_settings()
     db_path = db or settings.db_path
     capture.configure(db_path)
+    from .survey.netshim import install_from_env
+
+    install_from_env()  # no-op in prod; rewrites a hardcoded host if TOUCHSTONE_SIMULATORS is set
     patched = []
     if _patch_openai():
         patched.append("openai")

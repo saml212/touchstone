@@ -18,7 +18,6 @@ import json
 import os
 import subprocess
 import tomllib
-from collections import Counter
 from pathlib import Path
 
 import tomli_w
@@ -27,6 +26,7 @@ from .. import store
 from ..config import Settings
 from . import fidelity
 from .criteria import tools_map
+from .package_spans import first_user_turn, recorded_model_and_system
 from .provider import SurveyProvider
 from .simulate import crossing_services
 from .writes import atomic_write
@@ -53,6 +53,14 @@ import shlex
 TOOLS = {tools!r}
 _IMPORTS = {imports!r}
 _BASE_URLS = {base_urls!r}
+_SIMULATORS = {simulators!r}
+
+
+def _env():
+    env = dict(_BASE_URLS)
+    if _SIMULATORS:  # rewrite a constant hardcoded host to its simulator via the net shim
+        env["TOUCHSTONE_SIMULATORS"] = json.dumps(_SIMULATORS)
+    return env
 
 
 async def call(name, arguments, environment):
@@ -62,7 +70,7 @@ async def call(name, arguments, environment):
     payload = json.dumps(arguments, ensure_ascii=False)
     cmd = ("python -m touchstone.survey.replay --one "
            + shlex.quote(path) + " " + shlex.quote(payload))
-    result = await environment.exec(cmd, cwd="/app", env=dict(_BASE_URLS))
+    result = await environment.exec(cmd, cwd="/app", env=_env())
     return result.stdout
 '''
 
@@ -89,47 +97,6 @@ Do not read argv. Do not hardcode a model id. Do not swallow errors — let them
 Return only the contents of entry.py.'''
 
 
-# ---- reading the recorded spans --------------------------------------------
-
-
-def _messages(span) -> list:
-    return (span.input or {}).get("messages", [])
-
-
-def _role_content(span, role: str) -> str:
-    for msg in _messages(span):
-        if msg.get("role") == role:
-            return str(msg.get("content") or "")
-    return ""
-
-
-def _model_spans(conn):
-    for ep in store.list_episodes(conn):
-        for span in store.list_spans(conn, ep.id):
-            if span.kind == "model":
-                yield span
-
-
-def _recorded_model_and_system(conn) -> tuple[str, str]:
-    """The most-common recorded model id and the first recorded system prompt (full text)."""
-    models: Counter = Counter()
-    system = ""
-    for span in _model_spans(conn):
-        if span.model:
-            models[span.model] += 1
-        system = system or _role_content(span, "system")
-    model = models.most_common(1)[0][0] if models else ""
-    return model, system
-
-
-def _first_user_turn(conn) -> str:
-    for span in _model_spans(conn):
-        turn = _role_content(span, "user")
-        if turn:
-            return turn
-    return ""
-
-
 # ---- writing agent.toml + tools.py -----------------------------------------
 
 
@@ -139,13 +106,25 @@ def _base_urls(env_result: dict) -> dict:
             for n in env_result.get("services", []) if envs.get(n)}
 
 
+def _simulators_map(env_result: dict) -> dict:
+    """host -> simulator base URL for each constant-base-URL service (no env var to override), so
+    the net shim can rewrite a hardcoded host inside the sandbox."""
+    ports, envs, hosts = (env_result.get("ports", {}), env_result.get("base_url_envs", {}),
+                          env_result.get("hosts", {}))
+    return {hosts[n]: f"http://127.0.0.1:{ports[n]}"
+            for n in env_result.get("services", []) if hosts.get(n) and not envs.get(n)}
+
+
 def _sim_manifest(env_result: dict) -> list:
-    ports, envs = env_result.get("ports", {}), env_result.get("base_url_envs", {})
+    ports, envs, hosts = (env_result.get("ports", {}), env_result.get("base_url_envs", {}),
+                          env_result.get("hosts", {}))
     manifest = []
     for name in env_result.get("services", []):
         sim = {"name": name, "port": ports[name]}
         if envs.get(name):
             sim["base_url_env"] = envs[name]
+        elif hosts.get(name):
+            sim["host"] = hosts[name]
         manifest.append(sim)
     return manifest
 
@@ -154,7 +133,8 @@ def _write_tools_py(agent_dir: Path, map_data: dict, env_result: dict) -> None:
     schemas = map_data.get("schemas") or {}
     tools = [schemas[t["name"]] for t in map_data.get("tools", []) if t.get("name") in schemas]
     atomic_write(agent_dir / "tools.py", TOOLS_TEMPLATE.format(
-        tools=tools, imports=tools_map(map_data), base_urls=_base_urls(env_result)))
+        tools=tools, imports=tools_map(map_data), base_urls=_base_urls(env_result),
+        simulators=_simulators_map(env_result)))
 
 
 def _write_agent_toml(agent_dir: Path, system: str, model_id: str, mode: str,
@@ -242,18 +222,22 @@ def _has_tool_call(db_path: Path) -> bool:
 
 
 def _sim_mounts(map_data: dict, env_result: dict, out: Path) -> list[dict]:
+    from .simulate import service_host
+
     envs = env_result.get("base_url_envs", {})
-    return [{"sim_dir": out / "simulators" / s["name"], "env": envs.get(s["name"])}
-            for s in crossing_services(map_data)]
+    return [{"sim_dir": out / "simulators" / s["name"], "env": envs.get(s["name"]),
+             "host": service_host(s)} for s in crossing_services(map_data)]
 
 
-def _run_and_check(agent_dir: Path, repo: Path, base_urls: dict, message: str,
+def _run_and_check(agent_dir: Path, repo: Path, base_urls: dict, sim_hosts: dict, message: str,
                    settings: Settings) -> tuple[bool, str]:
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "touchstone.db"
         env = {**base_urls, "TOUCHSTONE_DB": str(db),
                "TOUCHSTONE_OUTPUT": str(Path(tmp) / "out.json")}
+        if sim_hosts:  # constant-host services: entry.py's trace() installs the net shim
+            env["TOUCHSTONE_SIMULATORS"] = json.dumps(sim_hosts)
         proc = _run_entry(repo, agent_dir / "entry.py", env, message, settings)
         if proc.returncode != 0:
             return False, f"exit {proc.returncode}: {_tail(proc)}"
@@ -265,8 +249,9 @@ def _run_and_check(agent_dir: Path, repo: Path, base_urls: dict, message: str,
 def _adapter_check(agent_dir: Path, repo: Path, map_data: dict, env_result: dict, out: Path,
                    message: str, settings: Settings) -> tuple[bool, str]:
     try:
-        with fidelity.simulators_running(_sim_mounts(map_data, env_result, out)) as base_urls:
-            return _run_and_check(agent_dir, repo, base_urls, message, settings)
+        with fidelity.simulators_running(_sim_mounts(map_data, env_result, out)) as (base_urls,
+                                                                                     sim_hosts):
+            return _run_and_check(agent_dir, repo, base_urls, sim_hosts, message, settings)
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         return False, f"adapter check error: {str(exc)[:400]}"
 
@@ -280,7 +265,7 @@ def _drop_packaged(agent_dir: Path) -> None:
 
 def _try_packaged(agent_dir: Path, repo: Path, conn, map_data: dict, env_result: dict,
                   provider: SurveyProvider, out: Path, settings: Settings) -> dict:
-    message = _first_user_turn(conn)
+    message = first_user_turn(conn)
     if not map_data.get("entrypoints") or not message:
         return {"mode": "replica", "ok": False, "flag": "no runnable entrypoint or recorded turn"}
     prompt = ENTRY_PROMPT.format(map=_map_digest(map_data))
@@ -311,7 +296,7 @@ def build_package(repo: Path, conn, map_data: dict, env_result: dict, provider: 
     if (agent_dir / "agent.toml").exists() and not force:
         return _existing(agent_dir)
     agent_dir.mkdir(parents=True, exist_ok=True)
-    model_id, system = _recorded_model_and_system(conn)
+    model_id, system = recorded_model_and_system(conn)
     _write_tools_py(agent_dir, map_data, env_result)
     result = _try_packaged(agent_dir, repo, conn, map_data, env_result, provider, out, settings)
     _write_agent_toml(agent_dir, system, model_id, result["mode"], map_data, env_result)

@@ -100,6 +100,7 @@ class TouchstoneAgent(BaseAgent):
         self.model_name = model_name
         self.mode = mode  # "replica" (this loop) | "packaged" (customer's agent); via --ak mode=
         self._sim_env: dict[str, str] = {}  # base-url envs of the simulators setup() started
+        self._sim_hosts: dict[str, str] = {}  # host -> sim base for constant-base-URL services
         if BaseAgent is not object:
             super().__init__(logs_dir, model_name=model_name, **kwargs)
 
@@ -112,7 +113,8 @@ class TouchstoneAgent(BaseAgent):
 
     async def setup(self, environment) -> None:
         """Start the dataset's simulators inside the sandbox so both modes can reach them."""
-        self._sim_env = await _start_simulators(environment, load_config().simulators)
+        self._sim_env, self._sim_hosts = await _start_simulators(
+            environment, load_config().simulators)
 
     async def run(self, instruction: str, environment, context) -> None:
         if self.mode == "packaged":
@@ -152,6 +154,8 @@ class TouchstoneAgent(BaseAgent):
 
     def _packaged_env(self, config: AgentConfig) -> dict:
         env = dict(self._sim_env)
+        if self._sim_hosts:  # constant-base-URL services: sitecustomize installs the net shim
+            env["TOUCHSTONE_SIMULATORS"] = json.dumps(self._sim_hosts)
         env["TOUCHSTONE_MODEL"] = self._model_id(config)
         env["TOUCHSTONE_DB"] = PACKAGED_DB
         env["TOUCHSTONE_OUTPUT"] = PACKAGED_OUTPUT
@@ -229,15 +233,20 @@ def _apply_usage(context, usage: dict) -> None:
     context.n_output_tokens = usage["tokens_out"] or None
 
 
-async def _start_simulators(environment, simulators: list) -> dict:
-    """Start each simulator on its fixed port and return the base-url env each service reads."""
+async def _start_simulators(environment, simulators: list) -> tuple[dict, dict]:
+    """Start each simulator on its fixed port. Return (base-url envs, host->base map): a service
+    with a base_url_env is repointed by env var; a constant-host service by the net shim."""
     env: dict[str, str] = {}
+    hosts: dict[str, str] = {}
     for sim in simulators:
         name, port = sim["name"], int(sim["port"])
         await environment.exec(f"bash /app/simulators/start.sh {name} {port}")
+        base = f"http://127.0.0.1:{port}"
         if sim.get("base_url_env"):
-            env[sim["base_url_env"]] = f"http://127.0.0.1:{port}"
-    return env
+            env[sim["base_url_env"]] = base
+        elif sim.get("host"):
+            hosts[sim["host"]] = base
+    return env, hosts
 
 
 def _tail(result) -> str:

@@ -224,8 +224,8 @@ def _start_mounts(mounts: list[dict]) -> list[dict]:
         base = f"http://127.0.0.1:{port}"
         _await_health(proc, base, log_path)
         _reset(base)
-        started.append({"proc": proc, "log": log, "base": base,
-                        "sim_dir": mount["sim_dir"], "env": mount.get("env")})
+        started.append({"proc": proc, "log": log, "base": base, "sim_dir": mount["sim_dir"],
+                        "env": mount.get("env"), "host": mount.get("host")})
     return started
 
 
@@ -233,15 +233,25 @@ def _snapshots(started: list[dict]) -> dict:
     return {s["sim_dir"].name: dump_db(s["sim_dir"] / "state.db") for s in started}
 
 
+def _base_urls(started: list[dict]) -> dict:
+    return {s["env"]: s["base"] for s in started if s["env"]}
+
+
+def _sim_hosts(started: list[dict]) -> dict:
+    """host -> simulator base for a constant-host service (no env var): the net-shim rewrite map."""
+    return {s["host"]: s["base"] for s in started if s.get("host") and not s["env"]}
+
+
 @contextlib.contextmanager
 def simulators_running(mounts: list[dict]):
-    """Start each simulator (`mounts` = [{"sim_dir", "env"}]), yield {env: base_url}, always kill.
+    """Start each simulator (`mounts` = [{"sim_dir", "env", "host"}]) and yield
+    ({base_url_env: base}, {host: base}), always killing the processes.
 
     For a local check that needs the real services up (the packaged adapter check) rather than a
     fidelity score. Ports are free ports, so the base urls are yielded for the caller to pass on."""
     started = _start_mounts(mounts)
     try:
-        yield {s["env"]: s["base"] for s in started if s["env"]}
+        yield _base_urls(started), _sim_hosts(started)
     finally:
         for s in started:
             _kill(s["proc"], s["log"])
@@ -256,9 +266,8 @@ def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolE
     started: list[dict] = []
     try:
         started = _start_mounts(mounts)
-        base_urls = {s["env"]: s["base"] for s in started if s["env"]}
         initial = _snapshots(started)
-        spec = {"base_urls": base_urls, "tools": tools,
+        spec = {"base_urls": _base_urls(started), "simulators": _sim_hosts(started), "tools": tools,
                 "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
         replayed = _run_spec(repo, spec, settings)
         return {"initial": initial, "final": _snapshots(started), "replayed": replayed}
