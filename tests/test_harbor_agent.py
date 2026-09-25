@@ -7,6 +7,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+from touchstone import store
 from touchstone.harbor import agent as agent_mod
 from touchstone.harbor.agent import TouchstoneAgent, load_config
 from touchstone.llm import Reply
@@ -102,18 +103,83 @@ def test_run_passes_tool_schemas_to_the_model(tmp_path, monkeypatch):
     assert provider.seen[0][0]["function"]["name"] == "lookup"  # tools forwarded to chat
 
 
-def test_packaged_mode_not_implemented_yet(tmp_path, monkeypatch):
+def _plant_customer_db(db_path, *, with_spans=True):
+    """Write a trace db as the customer's own capture would: one episode, one model span whose
+    assistant message carries a tool call (ATIF surfaces it without a @touchstone.tool span)."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = store.connect(db_path)
+    ep = store.insert_episode(conn, store.Episode(name="support-B1", meta={"agent": "app"}))
+    if with_spans:
+        store.insert_span(conn, store.Span(
+            episode_id=ep.id, kind="model", name="model", model="gpt-4o-mini",
+            input={"messages": [{"role": "user", "content": "Where is B1?"}], "tools": [],
+                   "params": {}},
+            output={"message": {"role": "assistant", "content": "It shipped.",
+                                "tool_calls": [{"id": "c1", "name": "order_status",
+                                                "arguments": '{"order_id": "B1"}'}]}},
+            tokens_in=11, tokens_out=4))
+    conn.close()
+
+
+def _packaged_agent(tmp_path, monkeypatch, *, simulators="", model="openai/gpt-4o-mini"):
+    d = tmp_path / "agent"
+    d.mkdir(exist_ok=True)
+    (d / "agent.toml").write_text(
+        '[agent]\nsystem = "s"\nmax_steps = 5\nmode = "packaged"\n'
+        f'model_default = "gpt-4o-mini"\n{simulators}')
+    monkeypatch.setenv("TOUCHSTONE_AGENT_DIR", str(d))
+    logs = tmp_path / "logs"
+    logs.mkdir(exist_ok=True)
+    return TouchstoneAgent(logs, model_name=model, mode="packaged"), logs
+
+
+def test_packaged_runs_run_sh_and_imports_the_customer_trajectory(tmp_path, monkeypatch):
+    ta, logs = _packaged_agent(tmp_path, monkeypatch)
+    _plant_customer_db(logs / "touchstone.db")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    class PlantingEnv(FakeEnv):
+        async def exec(self, command, **kwargs):
+            self.calls.append(command)
+            self.env = kwargs.get("env")
+            return SimpleNamespace(stdout="ran", stderr="", return_code=0)
+
+    env = PlantingEnv()
+    ctx = SimpleNamespace()
+    asyncio.run(ta.run("Where is my order B1?", env, ctx))
+
+    assert "bash /app/agent/run.sh" in env.calls[0]  # the customer's entrypoint ran
+    assert env.env["TOUCHSTONE_MODEL"] == "gpt-4o-mini"  # model after provider/
+    assert env.env["TOUCHSTONE_DB"] == "/logs/agent/touchstone.db"
+    assert env.env["OPENAI_API_KEY"] == "sk-test"  # provider key forwarded into the sandbox
+    traj = json.loads((logs / "trajectory.json").read_text())
+    tool_steps = [s for s in traj["steps"] if s.get("tool_calls")]
+    assert tool_steps and tool_steps[0]["tool_calls"][0]["function_name"] == "order_status"
+    assert ctx.n_input_tokens == 11 and ctx.n_output_tokens == 4
+
+
+def test_packaged_missing_episode_raises_with_output_tail(tmp_path, monkeypatch):
     import pytest
 
-    _agent_dir(tmp_path)
-    monkeypatch.setenv("TOUCHSTONE_AGENT_DIR", str(tmp_path / "agent"))
-    monkeypatch.setattr(agent_mod, "provider_from_spec", lambda spec: QueuedProvider([]))
-    logs = tmp_path / "logs"
-    logs.mkdir()
-    ta = TouchstoneAgent(logs, model_name="openai/gpt-4o-mini", mode="packaged")
-    assert ta.mode == "packaged"
-    with pytest.raises(NotImplementedError):
-        asyncio.run(ta.run("hi", FakeEnv(), SimpleNamespace()))
+    ta, logs = _packaged_agent(tmp_path, monkeypatch)
+    _plant_customer_db(logs / "touchstone.db", with_spans=False)  # episode, but no spans
+
+    class ErrEnv(FakeEnv):
+        async def exec(self, command, **kwargs):
+            return SimpleNamespace(stdout="", stderr="Traceback: boom", return_code=1)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(ta.run("hi", ErrEnv(), SimpleNamespace()))
+
+
+def test_setup_starts_simulators_and_records_base_urls(tmp_path, monkeypatch):
+    ta, _ = _packaged_agent(tmp_path, monkeypatch, simulators=(
+        '\n[[agent.simulator]]\nname = "orders_service"\nport = 8000\n'
+        'base_url_env = "ORDERS_URL"\n'))
+    env = FakeEnv()
+    asyncio.run(ta.setup(env))
+    assert any("simulators/orders_service/app.py 8000" in c for c in env.calls)
+    assert ta._sim_env == {"ORDERS_URL": "http://127.0.0.1:8000"}
 
 
 def test_run_with_no_tools_module_still_writes_a_trajectory(tmp_path, monkeypatch):
