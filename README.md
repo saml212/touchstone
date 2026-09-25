@@ -29,7 +29,7 @@ touchstone demo                          # run the built-in agent and capture ep
 touchstone survey <repo>                 # read-only: map the code, simulate its services, score fidelity
 touchstone bench -m <provider/model>     # run a model over the dataset; print pass rate per task
 touchstone jobs                          # list Harbor job dirs with their pass rate per task
-touchstone serve  /  touchstone interview  # open the review room UI
+touchstone serve  /  touchstone review     # open the review room (voice or text)
 ```
 
 `touchstone survey` reads the recordings and the code with a read-only coding agent
@@ -82,6 +82,21 @@ The agent under test runs in one of two modes, chosen automatically and recorded
 
 Either way it records an ATIF `trajectory.json`, and `touchstone bench -m <candidate>` re-runs it on
 any model without touching the customer's code.
+
+## The review room
+
+`touchstone serve` then `touchstone review` opens a room (voice or text) where a product person walks
+the finished trials with an AI. It opens from the product's goal (the job labels and the baseline
+pass count), then picks trials in order — verifier unsure, models disagree, never reviewed, then
+gate failures — and for each reads the instruction, the trajectory in plain words, and every
+criterion's score, and asks "do you agree it passed?". Agreement records trust (the share of
+reviewed trials where the human agreed with the verifier, shown live). On a disagreement the agent
+drafts a criterion change — edit/add/remove a rewardkit check, a dimension weight, a judge line, or
+the instruction wording — reads it back, and on "yes" writes the `tests/` file and runs
+`harbor job regrade` (the tasks are authored with a separate verifier so grading reruns from the
+recorded artifacts, no agent), then reads out the new reward and any other trials that moved.
+"Always" applies the same criterion to every task with the same job. Everything the room decides is
+a row in `reviews` and a file change under `touchstone/` — nothing else.
 
 ## Storage
 
