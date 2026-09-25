@@ -91,3 +91,38 @@ def test_no_api_route_500s_on_an_empty_project(db):
     for path in gets:
         assert c.get(path).status_code < 500, path
     assert c.post("/api/rooms", json={"topic": "x"}).status_code < 500
+
+
+def _seed_review_dataset(db):
+    """A minimal touchstone/ dataset + one job under the project root, for the review room."""
+    import json
+    from pathlib import Path
+    root = Path(db).parent.parent
+    ds = root / "touchstone"
+    for name, reward in (("refund-1", 0.5), ("refund-2", 1.0)):
+        task = ds / "tasks" / name
+        (task / "tests").mkdir(parents=True)
+        (task / "instruction.md").write_text("Refund my order.")
+        (task / "task.toml").write_text('[metadata.touchstone]\njob = "Issue a refund"\n')
+        trial = ds / "jobs" / "j1" / f"{name}__x"
+        trial.mkdir(parents=True)
+        (trial / "result.json").write_text(json.dumps({"task_name": name}))
+        (trial / "verifier").mkdir()
+        (trial / "verifier" / "reward.json").write_text(json.dumps({"reward": reward}))
+    (ds / "jobs" / "j1" / "config.json").write_text("{}")
+    (ds / "baseline.json").write_text(json.dumps(
+        {"pass_rates": {"refund-1": 0.5, "refund-2": 1.0}, "passed": ["refund-2"]}))
+
+
+def test_room_state_carries_a_review_block(db):
+    _seed_review_dataset(db)
+    c = _client(db)
+    room_id = c.post("/api/rooms", json={"topic": "review"}).json()["room"]["id"]
+    state = c.get(f"/api/rooms/{room_id}").json()
+    review = state["review"]
+    assert review["counts"]["unsure"] == 1          # refund-1 scored 0.5
+    assert review["trust"] == {"agreed": 0, "reviewed": 0, "score": None}
+    assert review["current"] is None
+    # the opening statement names the job and the baseline pass count
+    opening = state["messages"][0]["text"]
+    assert "issue a refund" in opening and "passes 1" in opening

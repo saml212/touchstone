@@ -256,3 +256,61 @@ td .cmeta { font-size: 12px; color: var(--muted); margin-top: 4px; font-family: 
 .toolcall pre { margin: 0; padding: 6px 8px; font-size: 12px; overflow-x: auto; }
 body.app pre { background: #fff; border: 1px solid var(--hair); border-radius: 8px; padding: 10px; font-family: "JetBrains Mono", monospace; font-size: 12px; overflow-x: auto; }
 .check { background: #fff; border: 1px solid var(--hair); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
+
+/* ---- review room (two columns: the trial, then the conversation) ---- */
+
+main.review { grid-template-columns: minmax(0, 1fr) minmax(340px, 460px); }
+@media (max-width: 820px) {
+  main.review { grid-template-columns: 1fr; height: auto; }
+  main.review #trial { border-right: none; border-bottom: 1px solid var(--hair); }
+}
+
+#trial {
+  border-right: 1px solid var(--hair);
+  padding: 16px 20px;
+  overflow-y: auto;
+  min-height: 0;
+}
+#trial h2 { color: var(--brick); font-size: 18px; margin: 0 0 2px; }
+#trial h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 18px 0 6px; }
+#trial .reward { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--muted); }
+#trial .instruction { background: #fff; border: 1px solid var(--hair); border-radius: 8px; padding: 10px 12px; margin: 0; }
+
+.trajectory .step {
+  font-size: 13px;
+  border-left: 2px solid var(--hair);
+  padding: 4px 0 4px 10px;
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.trajectory .step:nth-child(odd) { border-left-color: var(--brick); }
+
+.criteria { list-style: none; padding: 0; margin: 0; }
+.criteria .crit {
+  display: flex; gap: 8px; align-items: baseline;
+  padding: 7px 10px; margin-bottom: 6px;
+  background: #fff; border: 1px solid var(--hair); border-radius: 8px;
+}
+.criteria .crit.fail { border-color: var(--brick); }
+.criteria .crit .dim { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--muted); min-width: 76px; }
+.criteria .crit .desc { flex: 1; font-size: 13px; }
+.criteria .crit .mark { font-family: "JetBrains Mono", monospace; font-size: 12px; white-space: nowrap; }
+.criteria .crit.pass .mark { color: #3f7a2f; }
+.criteria .crit.fail .mark { color: var(--brick); }
+
+.proposed { margin-top: 18px; padding: 12px 14px; background: var(--soft); border: 1px solid var(--brick); border-radius: 8px; font-size: 14px; }
+.proposed .hint { margin-top: 6px; padding: 0; background: none; border: none; font-size: 12px; color: var(--muted); }
+
+.reviewbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 8px 8px; border-bottom: 1px solid var(--hair);
+}
+.reviewbar .trust { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--brick); margin-right: auto; }
+.reviewbar .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.reviewbar .chip {
+  background: transparent; color: var(--muted); border: 1px solid var(--hair);
+  border-radius: 12px; padding: 3px 10px; font-size: 12px;
+}
+.reviewbar .chip:hover { color: var(--brick); border-color: var(--brick); }
+.reviewbar #next { padding: 4px 10px; font-size: 12px; }

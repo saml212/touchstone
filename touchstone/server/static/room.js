@@ -25,17 +25,18 @@ function talkLabel() {
   return mode === "realtime" ? "● hold to talk" : "● talk";
 }
 
-// While the mic is held, the button shows who has the floor.
 function setTalking(holding) {
   $("talk").textContent = holding ? `● ${speaker} holding` : talkLabel();
 }
+
+// -- conversation ------------------------------------------------------------
 
 function renderMessages(messages) {
   const box = $("messages");
   box.innerHTML = messages
     .map((m) => {
       const cls = m.role === "assistant" ? "msg agent" : "msg";
-      const who = m.role === "assistant" ? "Interviewer" : m.speaker;
+      const who = m.role === "assistant" ? "Reviewer" : m.speaker;
       return `<div class="${cls}"><div class="who"><b>${esc(who)}</b></div>` +
         `<div class="body">${esc(m.text)}</div></div>`;
     })
@@ -44,35 +45,77 @@ function renderMessages(messages) {
   const lastAgent = [...messages].reverse().find((m) => m.role === "assistant");
   if (lastAgent && lastAgent.id !== lastAgentAudioId) {
     lastAgentAudioId = lastAgent.id;
-    if (mode !== "realtime") speak(lastAgent);  // realtime speaks via streamed audio frames
+    if (mode !== "realtime") speak(lastAgent);
   }
 }
 
-function checkCard(c, committed) {
-  const params = JSON.stringify(c.params);
-  const commitBtn = committed
-    ? `<span class="badge">${esc(c.severity)} · committed</span>`
-    : `<button data-check="${c.id}" class="commitBtn">Commit</button>`;
-  return `<div class="check ${committed ? "committed" : ""}">` +
-    `<div class="kind">${esc(c.kind)}</div>` +
-    `<div class="name">${esc(c.name || c.kind)}</div>` +
-    `<div class="params">${esc(params)}</div>` +
-    (c.rationale ? `<div class="rationale">${esc(c.rationale)}</div>` : "") +
-    commitBtn + `</div>`;
+// -- review panels -----------------------------------------------------------
+
+function pct(x) {
+  return x === null || x === undefined ? "—" : `${Math.round(x * 100)}%`;
 }
 
-function renderChecks(draft, committed) {
-  $("draftList").innerHTML = draft.length
-    ? draft.map((c) => checkCard(c, false)).join("")
-    : `<div class="badge">nothing drafted yet</div>`;
-  $("committedList").innerHTML = committed.map((c) => checkCard(c, true)).join("");
-  document.querySelectorAll(".commitBtn").forEach((b) => {
-    b.onclick = () => send("/commit");
+function renderTrust(trust) {
+  const el = $("trust");
+  if (!trust || !trust.reviewed) { el.textContent = "trust — (no reviews yet)"; return; }
+  el.textContent = `trust ${pct(trust.score)} · agreed ${trust.agreed}/${trust.reviewed}`;
+}
+
+const FILTERS = [
+  ["unsure", "unsure"], ["disagree", "disagree"],
+  ["unreviewed", "unreviewed"], ["needs_review", "needs review"],
+];
+
+function renderChips(review) {
+  const counts = (review && review.counts) || {};
+  const parts = FILTERS.map(([key, label]) => {
+    const n = key === "needs_review" ? (review && review.needs_review) || 0 : counts[key] || 0;
+    return `<button class="chip" data-filter="${key}">${label} ${n}</button>`;
+  });
+  $("chips").innerHTML = parts.join("");
+  document.querySelectorAll(".chip").forEach((b) => {
+    b.onclick = () => send(`Show me the ${b.dataset.filter.replace("_", " ")} trials.`);
   });
 }
 
-let draftState = [];
-let committedState = [];
+function criterionRow(c) {
+  const ok = c.score === 1 || c.score === true;
+  const mark = c.score === null || c.score === undefined ? "" : ok ? "✓" : "✗";
+  return `<li class="crit ${ok ? "pass" : "fail"}"><span class="dim">${esc(c.dimension)}</span>` +
+    `<span class="desc">${esc(c.description)}</span><span class="mark">${mark} ${pct(c.score)}</span></li>`;
+}
+
+function renderProposed(review) {
+  const el = $("trialProposed");
+  if (!review || !review.proposed) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  el.classList.remove("hidden");
+  el.innerHTML = `<strong>Proposed change</strong><div>${esc(review.proposed.readback)}</div>` +
+    `<div class="hint">Say “yes” to apply, or tell me what to change.</div>`;
+}
+
+function renderTrial(review) {
+  const cur = review && review.current;
+  $("trialEmpty").classList.toggle("hidden", !!cur);
+  $("trialCard").classList.toggle("hidden", !cur);
+  if (!cur) return;
+  $("trialTask").textContent = cur.task;
+  $("trialReward").textContent = `verifier reward ${pct(cur.reward)}`;
+  $("trialInstruction").textContent = cur.instruction || "—";
+  $("trialTrajectory").innerHTML = (cur.trajectory || [])
+    .map((line) => `<div class="step">${esc(line)}</div>`).join("") || "<div class='muted'>—</div>";
+  $("trialCriteria").innerHTML = (cur.criteria || []).map(criterionRow).join("") ||
+    "<li class='muted'>no criteria</li>";
+  renderProposed(review);
+}
+
+function applyReview(review) {
+  reviewState = review || {};
+  renderTrust(reviewState.trust);
+  renderChips(reviewState);
+  renderTrial(reviewState);
+}
+
+let reviewState = {};
 let messagesState = [];
 let pollTimer = null;
 
@@ -80,11 +123,9 @@ function applyState(s) {
   $("topic").textContent = s.room.topic;
   $("closed").classList.toggle("hidden", !s.room.closed_at);
   if (s.mode) { mode = s.mode; setTalking(false); }
-  draftState = s.draft;
-  committedState = s.committed;
   messagesState = s.messages;
   renderMessages(messagesState);
-  renderChecks(draftState, committedState);
+  applyReview(s.review);
 }
 
 async function refresh() {
@@ -92,7 +133,6 @@ async function refresh() {
   if (r.ok) applyState(await r.json());
 }
 
-// The WebSocket is the live channel; only fall back to HTTP polling while it is down.
 function startPolling() {
   if (!pollTimer) pollTimer = setInterval(refresh, 1000);
 }
@@ -108,8 +148,7 @@ function connect() {
   ws.onmessage = (ev) => {
     const { type, data } = JSON.parse(ev.data);
     if (type === "state") applyState(data);
-    else if (type === "draft") { draftState = data.checks; renderChecks(draftState, committedState); }
-    else if (type === "committed") { committedState = committedState.concat(data.checks); renderChecks(draftState, committedState); }
+    else if (type === "review") applyReview(data);
     else if (type === "closed") { $("closed").classList.remove("hidden"); }
     else if (type === "audio") { playPCM(base64ToInt16(data.b64)); }
     else if (type === "message") { messagesState = messagesState.concat(data); renderMessages(messagesState); }
@@ -190,7 +229,7 @@ async function startRealtimeTalk() {
     wsSend({ type: "audio", b64: bytesToBase64(new Uint8Array(pcm.buffer)), speaker });
   };
   src.connect(procNode);
-  procNode.connect(captureCtx.destination);  // output left silent; keeps the processor running
+  procNode.connect(captureCtx.destination);
   wsSend({ type: "ptt", state: "down", speaker });
   setVoiceState("● listening");
   return true;
@@ -277,6 +316,7 @@ function boot() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send($("text").value); }
   });
   $("talk").onclick = toggleTalk;
+  $("next").onclick = () => send("Next trial, please.");
   refresh();
   connect();
 }

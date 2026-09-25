@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Touchstone interview</title>
+  <title>Touchstone review</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -16,29 +16,42 @@
     <span class="closed hidden" id="closed">closed</span>
   </header>
 
-  <main>
+  <main class="review">
+    <section id="trial">
+      <div id="trialEmpty" class="muted">No trial open yet — say “start” and I'll pull one up.</div>
+      <article id="trialCard" class="hidden">
+        <h2 id="trialTask"></h2>
+        <div id="trialReward" class="reward"></div>
+        <h3>What the customer asked</h3>
+        <p id="trialInstruction" class="instruction"></p>
+        <h3>What the agent did</h3>
+        <div id="trialTrajectory" class="trajectory"></div>
+        <h3>What the verifier checked</h3>
+        <ul id="trialCriteria" class="criteria"></ul>
+        <div id="trialProposed" class="proposed hidden"></div>
+      </article>
+    </section>
+
     <section id="conversation">
+      <div class="reviewbar">
+        <span class="trust" id="trust">trust —</span>
+        <span class="chips" id="chips"></span>
+        <button id="next" class="ghost" title="Next trial">next trial ›</button>
+      </div>
       <div id="messages"></div>
       <div id="notice" class="notice hidden" role="status"></div>
       <div id="composer">
-        <textarea id="text" rows="2" placeholder="Say what good looks like… (/commit, /done)"></textarea>
+        <textarea id="text" rows="2" placeholder="Agree? Or say what should have counted… (/done)"></textarea>
         <span id="voiceState" class="voiceState hidden"></span>
         <button id="talk" class="ghost" title="Push to talk">● talk</button>
         <button id="send">Send</button>
       </div>
     </section>
-
-    <aside id="drafts">
-      <h2>Draft checks</h2>
-      <div id="draftList"></div>
-      <h2>Committed</h2>
-      <div id="committedList"></div>
-    </aside>
   </main>
 
   <div id="join">
     <div class="card">
-      <strong>Join the interview</strong>
+      <strong>Join the review</strong>
       <input id="name" placeholder="Your display name" />
       <button id="joinBtn">Join</button>
     </div>
