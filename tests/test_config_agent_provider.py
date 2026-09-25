@@ -32,12 +32,24 @@ def test_keychain_prefix_from_toml_overrides_default(tmp_path):
     assert load_settings(cfg).keychain_prefix == "rockie-"
 
 
-def test_speech_mode_defaults_to_local(tmp_path, monkeypatch):
+def test_speech_mode_defaults_to_auto(tmp_path, monkeypatch):
     monkeypatch.delenv("TOUCHSTONE_SPEECH_MODE", raising=False)
     s = load_settings(tmp_path / "missing.toml")
-    assert s.speech_mode == "local"
+    assert s.speech_mode == "auto"
     assert s.realtime_model == "gpt-realtime-2.1-mini"
     assert s.realtime_voice == "marin"
+
+
+def test_voice_mode_resolves_by_key(tmp_path, monkeypatch):
+    import touchstone.config as config
+
+    monkeypatch.setattr(config, "_openai_key", lambda s: "sk-test")
+    assert config.Settings(speech_mode="auto").voice_mode() == "realtime"
+    assert config.Settings(speech_mode="realtime").voice_mode() == "realtime"
+    assert config.Settings(speech_mode="local").voice_mode() == "local"  # explicit local wins
+    monkeypatch.setattr(config, "_openai_key", lambda s: None)
+    assert config.Settings(speech_mode="auto").voice_mode() == "local"  # no key -> local
+    assert config.Settings(speech_mode="realtime").voice_mode() == "local"
 
 
 def test_speech_mode_from_toml_and_env(tmp_path, monkeypatch):

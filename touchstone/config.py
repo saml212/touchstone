@@ -21,7 +21,7 @@ class Settings:
     keychain_anthropic: str = "anthropic-api-key"
     stt: str = "none"
     tts: str = "browser"
-    speech_mode: str = "local"  # local | realtime
+    speech_mode: str = "auto"  # auto | local | realtime
     realtime_model: str = "gpt-realtime-2.1-mini"
     realtime_voice: str = "marin"
     # `harbor run` executes on this SSH host when the local machine has no Docker daemon; empty
@@ -71,6 +71,21 @@ class Settings:
     def keychain_service(self, name: str) -> str:
         """Full service for a bare name: 'openai-api-key' -> 'touchstone-openai-api-key'."""
         return f"{self.keychain_prefix}{name}"
+
+    def voice_mode(self) -> str:
+        """Effective voice surface — the single source of truth for how a room speaks. Returns
+        'realtime' when the mode is 'realtime'/'auto' and an OpenAI key resolves, else 'local'."""
+        if self.speech_mode in ("realtime", "auto") and _openai_key(self) is not None:
+            return "realtime"
+        return "local"
+
+
+def _openai_key(settings: Settings) -> str | None:
+    """The OpenAI key the realtime bridge needs — the same secret lookup speech/realtime use.
+    Imported lazily so config does not pull in the llm package at import time (circular)."""
+    from .llm.keychain import secret
+
+    return secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai))
 
 
 def _load_toml(path: Path) -> dict:

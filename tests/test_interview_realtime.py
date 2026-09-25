@@ -257,12 +257,15 @@ async def test_bridges_client_here_cancels_a_pending_idle_close(tmp_path, monkey
 
 
 def test_realtime_available_needs_mode_and_key(monkeypatch):
+    import touchstone.config as config
     from touchstone.interview import realtime
-    monkeypatch.setattr(realtime, "secret", lambda *a: "sk-test")
+    monkeypatch.setattr(config, "_openai_key", lambda s: "sk-test")
     assert realtime.realtime_available(Settings(speech_mode="realtime")) is True
+    assert realtime.realtime_available(Settings(speech_mode="auto")) is True  # auto + key
     assert realtime.realtime_available(Settings(speech_mode="local")) is False
-    monkeypatch.setattr(realtime, "secret", lambda *a: None)
+    monkeypatch.setattr(config, "_openai_key", lambda s: None)
     assert realtime.realtime_available(Settings(speech_mode="realtime")) is False
+    assert realtime.realtime_available(Settings(speech_mode="auto")) is False  # auto, no key
 
 
 async def test_second_ptt_holder_is_told_to_wait_first_holder_keeps_floor(tmp_path):

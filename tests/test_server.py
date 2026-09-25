@@ -215,13 +215,21 @@ async def test_done_twice_second_is_rejected(db):
         assert second.status_code == 409
 
 
-async def test_room_state_reports_speech_mode(db):
+async def test_room_state_reports_speech_mode(db, monkeypatch):
+    import touchstone.config as config
     task_id = _seed_task(db)
-    async with _client(_app(db)) as c:  # default local
+    monkeypatch.setattr(config, "_openai_key", lambda s: None)  # no key -> auto resolves to local
+    async with _client(_app(db)) as c:  # default auto, no key
         state = (await c.post("/api/rooms", json={"task_id": task_id})).json()
         assert state["mode"] == "local"
+        assert state["you"]  # the page names the speaker without a join card
+    monkeypatch.setattr(config, "_openai_key", lambda s: "sk-test")  # key present
     rt = create_app(Settings(db_path=db, agent_provider="scripted", speech_mode="realtime"))
     async with _client(rt) as c:
+        state = (await c.post("/api/rooms", json={"task_id": task_id})).json()
+        assert state["mode"] == "realtime"
+    auto = create_app(Settings(db_path=db, agent_provider="scripted"))  # default auto + key
+    async with _client(auto) as c:
         state = (await c.post("/api/rooms", json={"task_id": task_id})).json()
         assert state["mode"] == "realtime"
 
@@ -259,7 +267,9 @@ class _FakeBridges:
         pass
 
 
-def test_realtime_ws_routes_audio_and_ptt_to_the_bridge(db):
+def test_realtime_ws_routes_audio_and_ptt_to_the_bridge(db, monkeypatch):
+    import touchstone.config as config
+    monkeypatch.setattr(config, "_openai_key", lambda s: "sk-test")  # realtime needs a key
     task_id = _seed_task(db)
     app = create_app(Settings(db_path=db, agent_provider="scripted", speech_mode="realtime"))
     fake = _FakeBridges()
@@ -276,9 +286,11 @@ def test_realtime_ws_routes_audio_and_ptt_to_the_bridge(db):
     assert fake.here == 1 and fake.gone == 1
 
 
-def test_local_ws_ignores_audio_frames(db):
+def test_local_ws_ignores_audio_frames(db, monkeypatch):
+    import touchstone.config as config
+    monkeypatch.setattr(config, "_openai_key", lambda s: None)  # no key -> auto resolves to local
     task_id = _seed_task(db)
-    app = _app(db)  # local mode
+    app = _app(db)  # local mode (auto, no key)
     fake = _FakeBridges()
     app.state.bridges = fake
     client = TestClient(app)

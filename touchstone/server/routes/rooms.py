@@ -9,6 +9,7 @@ events fan out through the in-process `Hub` so a slow WebSocket client never blo
 from __future__ import annotations
 
 import asyncio
+import getpass
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -146,7 +147,7 @@ async def room_feed(websocket: WebSocket, room_id: str) -> None:
 
     hub: Hub = websocket.app.state.hub
     bridges: Bridges = websocket.app.state.bridges
-    realtime = settings.speech_mode == "realtime"
+    realtime = settings.voice_mode() == "realtime"
     if realtime:
         bridges.client_here(room_id)
     queue = hub.subscribe(room_id)
@@ -283,6 +284,14 @@ async def _pump(websocket: WebSocket, queue: asyncio.Queue) -> None:
 # ---- views -----------------------------------------------------------------
 
 
+def _current_user() -> str:
+    """The local OS user, so the page can name the speaker without a join card ('you' fallback)."""
+    try:
+        return getpass.getuser() or "you"
+    except Exception:
+        return "you"
+
+
 def _msg_view(m: store.RoomMessage) -> dict:
     return {"id": m.id, "speaker": m.speaker, "role": m.role, "text": m.text,
             "audio_path": m.audio_path, "ts": m.ts,
@@ -301,7 +310,8 @@ def _room_state(conn, settings: Settings, room_id: str) -> dict | None:
     agent = ReviewAgent(None, conn, room, settings)
     return {
         "room": asdict(room),
-        "mode": settings.speech_mode,
+        "mode": settings.voice_mode(),
+        "you": _current_user(),
         "messages": _history(conn, room_id),
         "draft": agent.draft(),
         "committed": agent.committed(),

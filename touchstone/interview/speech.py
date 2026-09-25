@@ -281,13 +281,20 @@ class Speech:
 
 
 def realtime_status(settings: Settings) -> Resolution:
-    """For `doctor`: the speech mode and whether realtime is reachable (key present), no network."""
-    has_key = _openai_key(settings) is not None
-    if settings.speech_mode == "realtime":
-        avail = settings.realtime_model if has_key else "no OPENAI_API_KEY — falls back to local"
-        return Resolution("mode", "realtime", avail)
-    avail = "available (key present)" if has_key else "needs OPENAI_API_KEY"
-    return Resolution("mode", "local", f"realtime {avail}")
+    """For `doctor`: what the configured mode resolves to and why (key present?), no network. Reads
+    e.g. `auto → realtime — gpt-realtime-2.1-mini` or `auto → local — no OPENAI_API_KEY`."""
+    from ..config import _openai_key as _key  # the same secret lookup voice_mode() uses
+
+    configured = settings.speech_mode
+    resolved = settings.voice_mode()
+    has_key = _key(settings) is not None
+    if resolved == "realtime":
+        detail = settings.realtime_model
+    elif configured == "realtime":
+        detail = "no OPENAI_API_KEY — falls back to local"
+    else:
+        detail = "realtime available (key present)" if has_key else "no OPENAI_API_KEY"
+    return Resolution("mode", f"{configured} → {resolved}", detail)
 
 
 def speech_status(settings: Settings) -> list[Resolution]:

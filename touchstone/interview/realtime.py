@@ -44,10 +44,9 @@ TOOLS: list[dict] = []
 
 
 def realtime_available(settings: Settings) -> bool:
-    """True when realtime mode is on and an OpenAI key resolves (no network)."""
-    if settings.speech_mode != "realtime":
-        return False
-    return secret("OPENAI_API_KEY", settings.keychain_service(settings.keychain_openai)) is not None
+    """True when a room should use the realtime bridge — realtime/auto with an OpenAI key that
+    resolves (no network). Delegates to Settings.voice_mode so the decision lives in one place."""
+    return settings.voice_mode() == "realtime"
 
 
 class RealtimeBridge:

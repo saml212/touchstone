@@ -53,7 +53,7 @@ agent_provider = "claude-cli"   # surveys and reviews: claude-cli | codex-cli | 
 # keychain_prefix = "touchstone-"   # Keychain items <prefix>openai-api-key / anthropic-api-key
 {{keychain_prefix}}
 [speech]
-mode = "local"                 # local | realtime (OpenAI Realtime, needs OPENAI_API_KEY)
+mode = "auto"                  # auto | local | realtime (auto = realtime when a key resolves)
 stt = "none"
 tts = "browser"
 
