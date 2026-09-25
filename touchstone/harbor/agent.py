@@ -39,21 +39,6 @@ DEFAULT_MAX_STEPS = 8
 # points its own capture here, and _run_packaged reads the db back from the host.
 PACKAGED_DB = "/logs/agent/touchstone.db"
 
-# Start one simulator in the background (nohup survives the exec), wait for health, reset it.
-_SIM_START = """\
-poke() {{ python - "$1" "${{2:-GET}}" <<'PY' 2>/dev/null
-import sys, urllib.request as u
-u.urlopen(u.Request(sys.argv[1], method=sys.argv[2]), timeout=2)
-PY
-}}
-nohup python /app/simulators/{name}/app.py {port} >/tmp/ts-sim-{name}.log 2>&1 &
-for _ in $(seq 1 100); do
-  poke "http://127.0.0.1:{port}/__health" && break
-  sleep 0.2
-done
-poke "http://127.0.0.1:{port}/__reset" POST || true
-"""
-
 
 @dataclass
 class AgentConfig:
@@ -240,7 +225,7 @@ async def _start_simulators(environment, simulators: list) -> dict:
     env: dict[str, str] = {}
     for sim in simulators:
         name, port = sim["name"], int(sim["port"])
-        await environment.exec(_SIM_START.format(name=name, port=port))
+        await environment.exec(f"bash /app/simulators/start.sh {name} {port}")
         if sim.get("base_url_env"):
             env[sim["base_url_env"]] = f"http://127.0.0.1:{port}"
     return env

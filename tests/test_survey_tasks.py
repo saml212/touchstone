@@ -230,7 +230,8 @@ def test_task_solution_replays_recorded_calls(tmp_path, conn):
     assert spec["base_urls"] == {"WIDGET_URL": "http://127.0.0.1:8000"}
     assert [c["tool"] for c in spec["calls"]] == ["get_widget", "paint", "add_note"]
     solve = (sol / "solve.sh").read_text()
-    assert "start_sim widget 8000" in solve
+    assert "bash /app/simulators/start.sh widget 8000" in solve
+    assert 'export WIDGET_URL="http://127.0.0.1:8000"' in solve
     assert "touchstone.survey.replay /solution/spec.json" in solve
     assert "/logs/agent/trajectory.json" in solve
     traj = json.loads((sol / "trajectory.json").read_text())

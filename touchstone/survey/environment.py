@@ -45,6 +45,29 @@ COPY requirements.txt /app/requirements.txt
 RUN uv pip install --system -r /app/requirements.txt
 """
 
+# The one copy of "start a simulator" in the image. `start.sh <name> <port>` starts the sim in the
+# background (nohup survives the exec), waits for /__health, and POSTs /__reset. It exports nothing:
+# the caller sets the service's base-url env. Both solve.sh (oracle) and TouchstoneAgent.setup()
+# call `bash /app/simulators/start.sh <name> <port>`.
+START_SH = """\
+#!/bin/bash
+set -u
+name="$1"
+port="$2"
+poke() {
+  python - "$1" "${2:-GET}" <<'PY' 2>/dev/null
+import sys, urllib.request as u
+u.urlopen(u.Request(sys.argv[1], method=sys.argv[2]), timeout=2)
+PY
+}
+nohup python "/app/simulators/$name/app.py" "$port" >"/tmp/ts-sim-$name.log" 2>&1 &
+for _ in $(seq 1 100); do
+  poke "http://127.0.0.1:$port/__health" && break
+  sleep 0.2
+done
+poke "http://127.0.0.1:$port/__reset" POST || true
+"""
+
 
 def _is_secret(rel: str) -> bool:
     return any(_SECRET_RE.search(part) for part in Path(rel).parts)
@@ -184,6 +207,7 @@ def build_environment(repo: Path, map_data: dict, out: Path, force: bool = False
         (env_dir / "repo").mkdir(parents=True, exist_ok=True)
         _copy_repo(repo, env_dir / "repo", _repo_files(repo))
         _copy_simulators(out / "simulators", env_dir / "simulators")
+        atomic_write(env_dir / "simulators" / "start.sh", START_SH)
         _vendor_touchstone(env_dir / "_touchstone")
         atomic_write(env_dir / "requirements.txt", _requirements_text(deps or []))
         atomic_write(env_dir / "Dockerfile", DOCKERFILE)

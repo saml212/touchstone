@@ -62,6 +62,11 @@ def test_environment_snapshot_and_deps(tmp_path):
     assert not (env / "simulators" / "widget" / "state.db").exists()
     assert not (env / "simulators" / "widget" / ".sim.log").exists()
 
+    # the one shared simulator-start script is baked into the image
+    start = (env / "simulators" / "start.sh").read_text()
+    assert 'python "/app/simulators/$name/app.py" "$port"' in start
+    assert "/__health" in start and "/__reset" in start
+
     # touchstone vendored for offline import
     assert (env / "_touchstone" / "touchstone" / "__init__.py").exists()
 

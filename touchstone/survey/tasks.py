@@ -64,27 +64,6 @@ _SOLVE_TEMPLATE = """\
 set -euo pipefail
 cd /app
 
-poke() {{  # url [method]
-  python - "$1" "${{2:-GET}}" <<'PY' 2>/dev/null
-import sys, urllib.request as u
-u.urlopen(u.Request(sys.argv[1], method=sys.argv[2]), timeout=2)
-PY
-}}
-
-start_sim() {{  # name port
-  python "/app/simulators/$1/app.py" "$2" &
-  for _ in $(seq 1 100); do
-    poke "http://127.0.0.1:$2/__health" && return 0
-    sleep 0.2
-  done
-  echo "simulator $1 did not become healthy" >&2
-  return 1
-}}
-
-reset_sim() {{  # port
-  poke "http://127.0.0.1:$1/__reset" POST || true
-}}
-
 {body}
 
 python -m touchstone.survey.replay /solution/spec.json >/dev/null
@@ -178,8 +157,7 @@ def _solve_lines(services: list[dict], ports: dict, base_url_envs: dict) -> list
         name = service["name"]
         port = ports[name]
         env = base_url_envs.get(name)
-        lines.append(f"start_sim {name} {port}")
-        lines.append(f"reset_sim {port}")
+        lines.append(f"bash /app/simulators/start.sh {name} {port}")
         if env:
             lines.append(f'export {env}="http://127.0.0.1:{port}"')
     return lines

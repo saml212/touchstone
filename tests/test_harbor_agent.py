@@ -178,7 +178,7 @@ def test_setup_starts_simulators_and_records_base_urls(tmp_path, monkeypatch):
         'base_url_env = "ORDERS_URL"\n'))
     env = FakeEnv()
     asyncio.run(ta.setup(env))
-    assert any("simulators/orders_service/app.py 8000" in c for c in env.calls)
+    assert env.calls == ["bash /app/simulators/start.sh orders_service 8000"]
     assert ta._sim_env == {"ORDERS_URL": "http://127.0.0.1:8000"}
 
 

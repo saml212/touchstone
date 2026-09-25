@@ -9,6 +9,7 @@ healthy scores 0.0 with the traceback tail, so the survey can continue and flag 
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -243,6 +244,20 @@ def _start_mounts(mounts: list[dict]) -> list[dict]:
 
 def _snapshots(started: list[dict]) -> dict:
     return {s["sim_dir"].name: dump_db(s["sim_dir"] / "state.db") for s in started}
+
+
+@contextlib.contextmanager
+def simulators_running(mounts: list[dict]):
+    """Start each simulator (`mounts` = [{"sim_dir", "env"}]), yield {env: base_url}, always kill.
+
+    For a local check that needs the real services up (the packaged adapter check) rather than a
+    fidelity score. Ports are free ports, so the base urls are yielded for the caller to pass on."""
+    started = _start_mounts(mounts)
+    try:
+        yield {s["env"]: s["base"] for s in started if s["env"]}
+    finally:
+        for s in started:
+            _kill(s["proc"], s["log"])
 
 
 def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolEvent],
