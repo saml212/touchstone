@@ -203,9 +203,9 @@ def test_task_state_and_trajectory_criteria(tmp_path, conn):
     assert "'blue'" in state
     assert "COUNT(*) FROM notes WHERE widget_id='w1'" in state
 
-    traj = (task / "tests" / "correctness" / "trajectory.py").read_text()
-    for tool in ("get_widget", "paint", "add_note"):
-        assert f"trajectory_tool_used('{tool}')" in traj
+    # paint + add_note mutate and are covered by state; get_widget is read-only -> no tool_used;
+    # every mutating tool was used -> no tool_not_used -> no trajectory.py at all
+    assert not (task / "tests" / "correctness" / "trajectory.py").exists()
 
     assert (task / "tests" / "test.sh").exists()
     assert (task / "tests" / "reward.toml").exists()

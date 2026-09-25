@@ -23,7 +23,7 @@ from .simulate import crossing_services
 _VOLATILE = re.compile(r"(^id$|^rowid$|_id$|^created|^updated|^ts$|^timestamp$|token)", re.I)
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 _MAX_AVOID = 3
-_MAX_IDENT_LEN = 64
+_MAX_IDENT_LEN = 32
 
 
 # ---- service + tool mapping ------------------------------------------------
@@ -97,14 +97,20 @@ def _changed_cells(table: str, before: dict, after: dict, db_rel: str) -> list[s
     return lines
 
 
-def _short_value(val) -> bool:
-    return isinstance(val, int | float) or (isinstance(val, str) and len(val) <= _MAX_IDENT_LEN)
+def _token_value(val) -> bool:
+    """A stable identifier: a number, or a short whitespace-free string. Free text (subjects,
+    bodies, reasons) is rejected so a different-but-correct model's wording never fails a criterion."""
+    if isinstance(val, bool):
+        return False
+    if isinstance(val, int | float):
+        return True
+    return isinstance(val, str) and len(val) <= _MAX_IDENT_LEN and not any(c.isspace() for c in val)
 
 
 def _identifying_where(row: dict, pk: str, arg_values: set) -> str:
     parts = []
     for col, val in row.items():
-        if col != pk and val in arg_values and _short_value(val):
+        if col != pk and val in arg_values and _token_value(val):
             parts.append(f"{col}={_sql_literal(val)}")
     return " AND ".join(parts)
 
@@ -143,10 +149,18 @@ def _avoid_tools(map_data: dict, calls: list[ToolEvent]) -> list[str]:
     return sorted(_mutating_tools(map_data) - used)[:_MAX_AVOID]
 
 
-def _tool_criteria(calls: list[ToolEvent], avoid: list[str]) -> list[str]:
-    used = sorted({c.tool for c in calls if c.tool})
-    lines = [f"rk.trajectory_tool_used({name!r})" for name in used]
-    lines += [f"rk.trajectory_tool_not_used({name!r})" for name in avoid]
+def _tool_criteria(map_data: dict, calls: list[ToolEvent], has_state: bool) -> list[str]:
+    """Trajectory criteria that don't over-fit: require a mutating tool the episode used only when
+    its effect is NOT already captured by a state criterion; forbid the mutating tools it avoided;
+    never require a read-only tool. Fall back to requiring the used tools only when nothing else
+    would verify the task at all."""
+    used_mutating = sorted({c.tool for c in calls if c.tool in _mutating_tools(map_data)})
+    avoid = _avoid_tools(map_data, calls)
+    lines = [] if has_state else [f"rk.trajectory_tool_used({t!r})" for t in used_mutating]
+    lines += [f"rk.trajectory_tool_not_used({t!r})" for t in avoid]
+    if not lines and not has_state:
+        used = sorted({c.tool for c in calls if c.tool})
+        lines = [f"rk.trajectory_tool_used({t!r})" for t in used]
     return lines
 
 
@@ -186,5 +200,5 @@ def derive_criteria(effect: dict, services: list[dict], map_data: dict,
     state: list[str] = []
     for service in services:
         state += _state_criteria(effect, service["name"], arg_values)
-    tool = _tool_criteria(calls, _avoid_tools(map_data, calls))
+    tool = _tool_criteria(map_data, calls, bool(state))
     return state, tool

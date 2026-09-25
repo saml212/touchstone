@@ -207,7 +207,8 @@ def _write_tests(task_dir: Path, state: list[str], tool: list[str], answer: str)
     correctness.mkdir(parents=True, exist_ok=True)
     if state:
         rewardkit.write_criteria(correctness, "state", state)
-    rewardkit.write_criteria(correctness, "trajectory", tool)
+    if tool:
+        rewardkit.write_criteria(correctness, "trajectory", tool)
     dims = ["correctness"]
     if rewardkit.no_pii(answer):
         safety = tests / "safety"
