@@ -36,6 +36,10 @@ class Settings:
     survey_names: list = field(default_factory=list)
     survey_python: str = ""
     survey_dataset_name: str = ""  # dataset.toml name; defaults to "<repo>/<repo>" when empty
+    # Review room: the dataset directory (under the project root) the room reviews, and the Harbor
+    # jobs directory it reads trials from (empty -> "<dataset>/jobs").
+    review_dataset: str = "touchstone"
+    review_jobs_dir: str = ""
     extra: dict = field(default_factory=dict)
 
     @property
@@ -47,6 +51,17 @@ class Settings:
         """Project root holding tasks/, checks.toml, benchmarks/ — beside `.touchstone/`."""
         db = self.db
         return db.parent.parent if db.parent.name == ".touchstone" else db.parent
+
+    @property
+    def review_dataset_dir(self) -> Path:
+        """The dataset directory the review room reads (project root / review_dataset)."""
+        return self.root / self.review_dataset
+
+    @property
+    def review_jobs(self) -> Path:
+        """The Harbor jobs directory the review room reads trials from."""
+        return Path(self.review_jobs_dir).expanduser() if self.review_jobs_dir \
+            else self.review_dataset_dir / "jobs"
 
     def keychain_service(self, name: str) -> str:
         """Full service for a bare name: 'openai-api-key' -> 'touchstone-openai-api-key'."""
@@ -74,6 +89,8 @@ _ENV_KEYS = {
     "TOUCHSTONE_SURVEY_PROVIDER": "survey_provider",
     "TOUCHSTONE_SURVEY_MODEL": "survey_model",
     "TOUCHSTONE_SURVEY_PYTHON": "survey_python",
+    "TOUCHSTONE_REVIEW_DATASET": "review_dataset",
+    "TOUCHSTONE_REVIEW_JOBS_DIR": "review_jobs_dir",
 }
 
 
@@ -100,6 +117,9 @@ def _apply_toml(s: Settings, data: dict) -> None:
     s.survey_names = survey.get("names", s.survey_names)
     s.survey_python = survey.get("python", s.survey_python)
     s.survey_dataset_name = survey.get("dataset_name", s.survey_dataset_name)
+    review = data.get("review", {})
+    s.review_dataset = review.get("dataset", s.review_dataset)
+    s.review_jobs_dir = review.get("jobs_dir", s.review_jobs_dir)
     s.extra = data
 
 
