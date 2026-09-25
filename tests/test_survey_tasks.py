@@ -263,12 +263,16 @@ def test_task_toml_provenance(tmp_path, conn):
     # a separate verifier + declared artifacts so `harbor job regrade` can regrade a corrected
     # criterion without rerunning the agent (the review room depends on this).
     assert doc["verifier"]["environment_mode"] == "separate"
+    assert doc["environment"]["network_mode"] == "public"
     assert "/logs/agent/trajectory.json" in doc["artifacts"]
     assert "/app/output.json" in doc["artifacts"]
     assert any(a.endswith("/state.db") for a in doc["artifacts"])
     # the environment is the shared image, layered via a FROM Dockerfile (so Harbor discovers it)
-    dockerfile = (repo / "touchstone" / "tasks" / "recolour-1" / "environment" / "Dockerfile")
-    assert dockerfile.read_text() == "FROM touchstone-env-x:abc123\n"
+    task = repo / "touchstone" / "tasks" / "recolour-1"
+    assert (task / "environment" / "Dockerfile").read_text() == "FROM touchstone-env-x:abc123\n"
+    # the verifier image bakes the tests in (separate-mode grading + regrade)
+    assert (task / "tests" / "Dockerfile").read_text() == \
+        "FROM touchstone-env-x:abc123\nCOPY . /tests/\n"
 
 
 def test_task_no_pii_safety_when_clean(tmp_path, conn):

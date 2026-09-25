@@ -216,6 +216,9 @@ def _task_toml(name: str, dataset: str, group: dict, ep_id: str, calls: list[Too
     # its name must be exactly org/name, which a per-task slug is not. Provenance lives in metadata.
     # environment_mode = "separate" grades in a fresh env against the collected artifacts, so
     # `touchstone review` can `harbor job regrade` a corrected criterion without rerunning agents.
+    # The verifier env is built from tests/Dockerfile (tests baked in); network_mode "public" lets
+    # it fetch harbor-rewardkit via uvx (a no-network verifier cannot reach pypi). Verified on the
+    # example: oracle 7/7 in separate mode, and a review criterion change regrades live.
     tools = sorted({c.tool for c in calls if c.tool})
     return {
         "schema_version": "1.3",
@@ -223,7 +226,7 @@ def _task_toml(name: str, dataset: str, group: dict, ep_id: str, calls: list[Too
             "dataset": dataset, "episodes": [ep_id], "job": group["label"], "tools": tools,
             "created_at": datetime.now(UTC).isoformat(), "version": _touchstone_version()}},
         "artifacts": _verifier_artifacts(services),
-        "environment": {"build_timeout_sec": 600.0},
+        "environment": {"network_mode": "public", "build_timeout_sec": 600.0},
         "agent": {"timeout_sec": 300.0},
         "verifier": {"timeout_sec": 300.0, "environment_mode": "separate"},
     }
@@ -251,8 +254,12 @@ def _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub,
     _write_task_toml(task_dir,
                      _task_toml(task_dir.name, dataset, group, ep_id, calls, ctx["services"]))
     # Every task's environment is the one shared image, layered as a trivial FROM: Harbor requires
-    # an environment/ dir to discover the task, and the build is a cache hit on the base.
+    # an environment/ dir to discover the task, and the build is a cache hit on the base. The
+    # verifier runs in a separate env built from tests/Dockerfile (the tests baked in), so a review
+    # criterion change can be regraded from the recorded artifacts.
     atomic_write(task_dir / "environment" / "Dockerfile", f"FROM {ctx['image_tag']}\n")
+    atomic_write(task_dir / "tests" / "Dockerfile",
+                 f"FROM {ctx['image_tag']}\nCOPY . /tests/\n")
     spec = _replay_spec(calls, ctx["tools"], ctx["services"], ctx["ports"], ctx["base_url_envs"])
     trajectory = scrub.scrub(to_atif(conn, ep_id))
     _write_solution(task_dir, spec, trajectory, answer, ctx["services"], ctx["ports"],

@@ -142,8 +142,11 @@ def _run_remote(path: Path, agent: str, model: str | None, jobs_dir: Path, n_con
     if _is_custom_agent(agent):  # ship the touchstone repo so harbor can import the custom agent
         with_path = f"{remote_root}/touchstone-src"
         _call(["rsync", "-az", "--delete", f"{_repo_root()}/", f"{host}:{with_path}/"])
+    # -o must be an ABSOLUTE remote path: a separate verifier's `docker compose cp` resolves a
+    # relative artifact/host path against the task's tests dir, not the dataset root, and fails.
     remote_cmd = " ".join(
-        _harbor_cmd(rel_run, agent, model, "jobs", n_concurrent, extra_args, with_path))
+        _harbor_cmd(rel_run, agent, model, f"{remote_path}/jobs", n_concurrent,
+                    extra_args, with_path))
     prefix, stdin_data = _remote_key_prefix(key)
     _call(["ssh", host, f"{prefix}{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"],
           stdin_data=stdin_data)
@@ -194,7 +197,9 @@ def _regrade_remote(job_dir: Path, tasks_path: Path, settings: Settings) -> Path
     _call(["rsync", "-az", "--delete", "--exclude", "jobs",
            f"{sync_root}/", f"{host}:{remote_path}/"])
     _call(["rsync", "-az", f"{job_dir}/", f"{host}:{remote_path}/jobs/{job_dir.name}/"])
-    remote_cmd = " ".join(_regrade_cmd(f"jobs/{job_dir.name}", rel_tasks, "jobs"))
+    # Absolute -o for the same compose-cp reason as _run_remote.
+    remote_cmd = " ".join(
+        _regrade_cmd(f"{remote_path}/jobs/{job_dir.name}", rel_tasks, f"{remote_path}/jobs"))
     _call(["ssh", host, f"{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"])
     out = job_dir.parent
     before = _job_dirs(out)
