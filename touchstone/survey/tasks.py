@@ -297,6 +297,39 @@ def _record(result: dict, outcome: dict) -> None:
         result["skipped"].append(outcome["skipped"])
 
 
+def _plan(groups: dict, by_ep: dict, resolved: set) -> list[tuple[str, dict, str]]:
+    """(task name, group, episode id) for every variant, in sorted, deterministic order."""
+    plan = []
+    for group in groups.get("groups", []):
+        for i, ep_id in enumerate(variant_episodes(group, by_ep, resolved), 1):
+            plan.append((f"{group['slug']}-{i}", group, ep_id))
+    return sorted(plan)
+
+
+def _clear_prior_review(out: Path, name: str) -> None:
+    """A task being (re)built starts fresh: drop any needs-review copy the gate left last time."""
+    import shutil
+    review = out / "needs-review" / name
+    if review.exists():
+        shutil.rmtree(review)
+
+
+def _prune_dir(root: Path, expected: set[str]) -> None:
+    import shutil
+    if not root.is_dir():
+        return
+    for d in root.iterdir():
+        if d.is_dir() and d.name not in expected:
+            shutil.rmtree(d)
+
+
+def _prune_orphans(out: Path, expected: set[str]) -> None:
+    """Remove task dirs (under tasks/ and needs-review/) that the current run no longer produces,
+    so re-runs stay diff-friendly even when the provider renames a job's slug."""
+    for parent in ("tasks", "needs-review"):
+        _prune_dir(out / parent, expected)
+
+
 def write_tasks(repo: Path, conn, map_data: dict, groups: dict, events: list[ToolEvent],
                 env_result: dict, provider: SurveyProvider, scrub: Scrubber, settings,
                 force: bool = False) -> dict:
@@ -305,16 +338,18 @@ def write_tasks(repo: Path, conn, map_data: dict, groups: dict, events: list[Too
     by_ep = _events_by_episode(events)
     resolved = _resolved_ids(conn)
     dataset = _dataset_name(repo, settings)
+    plan = _plan(groups, by_ep, resolved)
+    _prune_orphans(out, {name for name, _, _ in plan})
     result: dict = {"written": [], "reused": [], "skipped": []}
-    for group in groups.get("groups", []):
-        for i, ep_id in enumerate(variant_episodes(group, by_ep, resolved), 1):
-            name = f"{group['slug']}-{i}"
-            task_dir = out / "tasks" / name
-            if (task_dir / "task.toml").exists() and not force:
-                result["reused"].append(name)
-                continue
-            outcome = _build_task(task_dir, name, dataset, group, ep_id, conn, map_data,
-                                  env_result, provider, repo, scrub, settings,
-                                  _scrub_calls(by_ep.get(ep_id, []), scrub))
-            _record(result, outcome)
+    for name, group, ep_id in plan:
+        task_dir = out / "tasks" / name
+        gated = (task_dir / "task.toml").exists()
+        if gated and not force:
+            result["reused"].append(name)
+            continue
+        _clear_prior_review(out, name)
+        outcome = _build_task(task_dir, name, dataset, group, ep_id, conn, map_data,
+                              env_result, provider, repo, scrub, settings,
+                              _scrub_calls(by_ep.get(ep_id, []), scrub))
+        _record(result, outcome)
     return result

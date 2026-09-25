@@ -294,6 +294,23 @@ def test_task_idempotent_then_force(tmp_path, conn):
     assert len(provider.calls) == 2
 
 
+def test_task_prunes_orphans_and_stale_review(tmp_path, conn):
+    _paint_episode(conn)
+    repo = _repo(tmp_path)
+    out = repo / "touchstone"
+    # a leftover task dir from an earlier run under a slug no longer produced
+    (out / "tasks" / "old-slug-1").mkdir(parents=True)
+    (out / "tasks" / "old-slug-1" / "task.toml").write_text("x", encoding="utf-8")
+    # a stale needs-review copy of the name this run will (re)build
+    (out / "needs-review" / "recolour-1").mkdir(parents=True)
+    provider = ScriptedSurveyProvider([TEXT])
+    write_tasks(repo, conn, MAP, _groups("paint1"), tool_events(conn), ENV, provider,
+                Scrubber(), _settings())
+    assert not (out / "tasks" / "old-slug-1").exists()  # orphan pruned
+    assert not (out / "needs-review" / "recolour-1").exists()  # stale review cleared
+    assert (out / "tasks" / "recolour-1" / "task.toml").exists()
+
+
 def test_task_skipped_when_simulator_disagrees(tmp_path, conn):
     # recorded color is 'green' but paint sets whatever arg says; recorded get_widget says color
     # 'purple' while the seed is 'red' -> the first recorded output cannot be reproduced.
