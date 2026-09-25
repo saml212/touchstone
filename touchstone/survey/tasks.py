@@ -357,8 +357,6 @@ def _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub,
     atomic_write(task_dir / "instruction.md",
                  _canary(task_dir.name) + text["instruction"].strip() + "\n")
     atomic_write(task_dir / "persona.md", text["persona"].strip() + "\n")
-    _write_task_toml(task_dir,
-                     _task_toml(task_dir.name, dataset, group, ep_id, calls, ctx["services"]))
     # Every task's environment is the one shared image, layered as a trivial FROM: Harbor requires
     # an environment/ dir to discover the task, and the build is a cache hit on the base. The
     # verifier runs in a separate env built from tests/Dockerfile (the tests baked in), so a review
@@ -372,6 +370,11 @@ def _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub,
                     ctx["base_url_envs"])
     allowed = rewardkit.pii_matches(f"{text['instruction']} {text['persona']}")
     _write_tests(task_dir, ctx["state"], ctx["tool"], sorted(allowed))
+    # task.toml LAST: `write_tasks` reuses a task iff its task.toml exists, so writing it after all
+    # other files makes its atomic appearance a completeness sentinel — an interrupted build (Ctrl-C
+    # between files) leaves no task.toml, so the next run rebuilds instead of reusing a partial dir.
+    _write_task_toml(task_dir,
+                     _task_toml(task_dir.name, dataset, group, ep_id, calls, ctx["services"]))
 
 
 # ---- orchestration ---------------------------------------------------------

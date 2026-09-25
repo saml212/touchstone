@@ -4,6 +4,8 @@ criteria, trajectory criteria, canary, scrubbing, idempotency, and the fidelity 
 import json
 import sys
 
+import pytest
+
 from touchstone import store
 from touchstone.config import Settings
 from touchstone.survey.provider import ScriptedSurveyProvider
@@ -409,3 +411,24 @@ def test_task_skipped_when_simulator_disagrees(tmp_path, conn):
     repo, result = _run(tmp_path, conn, _groups("bad1"))
     assert result["written"] == []
     assert result["skipped"] and result["skipped"][0]["episode"] == "bad1"
+
+
+def test_interrupted_build_leaves_no_task_toml_sentinel(tmp_path, conn, monkeypatch):
+    # Attack (stage-7 survey): a build interrupted (Ctrl-C / crash) after task.toml but before the
+    # tests were written left a dir that the next run reused as complete. task.toml is written LAST,
+    # so if a later step fails no task.toml is left and the next run rebuilds instead of reusing a
+    # partial task.
+    import touchstone.survey.tasks as tasks_mod
+    _paint_episode(conn)
+    repo = _repo(tmp_path)
+
+    def boom(*a, **k):
+        raise RuntimeError("interrupted")
+
+    monkeypatch.setattr(tasks_mod, "_write_tests", boom)
+    provider = ScriptedSurveyProvider([TEXT])
+    with pytest.raises(RuntimeError):
+        write_tasks(repo, conn, MAP, _groups("paint1"), tool_events(conn), ENV, provider,
+                    Scrubber(), _settings())
+    task_dir = repo / "touchstone" / "tasks" / "recolour-1"
+    assert not (task_dir / "task.toml").exists()  # no sentinel -> the next run rebuilds
