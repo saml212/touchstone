@@ -181,7 +181,12 @@ def serve(
     port: int = typer.Option(8765, help="Bind port."),
 ) -> None:
     """Run the local interview + review server."""
+    import logging
+
     import uvicorn
+
+    # Touchstone's own INFO lines (review tool calls, regrades) must reach the server log.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     from ..server import create_app
 
