@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-25T13:09:31.425908+00:00",
+  "generated_at": "2026-09-25T14:01:36.078177+00:00",
   "targets": [
     {
       "name": "touchstone-example",
@@ -32,9 +32,9 @@
       "repo": "/Users/samuellarson/Pebble/Github/survey-targets/book-flight-llm",
       "run": "python scripts/record.py against a local flight-backend fake (requests, FLIGHT_API_BASE_URL env)",
       "services": {
-        "flight-booking-api": 0.0
+        "flight-booking-api": 0.7273
       },
-      "fidelity_min": 0.0,
+      "fidelity_min": 0.7273,
       "written": 1,
       "gated": 1,
       "baseline_pass": 1.0,
