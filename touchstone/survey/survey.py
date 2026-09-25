@@ -125,6 +125,11 @@ def _gate_and_baseline(repo, env_result, settings, force, skip_gate, skip_baseli
         return None, None
     _log("gate: running oracle and nop over the tasks")
     gate = run_gate(repo, env_result, settings, force)
+    if not (gate or {}).get("gated"):
+        # Nothing passed the gate, so there is nothing to baseline; skip it rather than run harbor
+        # over `-p .` (an empty/ungated dataset), which is not a valid target.
+        _log("baseline: skipped — no tasks passed the gate")
+        return gate, None
     _log("baseline: running the agent under test over the gated tasks")
     baseline = run_baseline(repo, env_result, settings, force, skip_baseline)
     return gate, baseline
