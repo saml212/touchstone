@@ -9,4 +9,5 @@ jobs:
       - run: uv python install 3.13
       - run: uv sync --group dev
       - run: uv run ruff check .
+      - run: uv run complexipy --max-complexity-allowed 8 touchstone
       - run: uv run pytest -q
