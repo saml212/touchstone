@@ -81,6 +81,44 @@ def test_added_row_without_identifying_token_emits_no_unscoped_count():
     assert not any("COUNT(*) FROM emails" in line for line in _calls(state))  # no table-total
 
 
+def test_changed_cell_on_unreferenced_row_is_dropped():
+    # A simulator's own id-sequence/counter row (WHERE name='email') is bumped by the sim, not named
+    # by the agent — 'email' is in no tool arg/result — so its changed cell is not a criterion.
+    effect = {
+        "initial": {"svc": {"counters": {"pk": "name", "rows": [{"name": "email", "value": 7}]}}},
+        "final": {"svc": {"counters": {"pk": "name", "rows": [{"name": "email", "value": 8}]}}},
+    }
+    calls = [ToolEvent("paint", {"widget_id": "w1", "color": "blue"}, {}, "e")]
+    state, _, _ = derive_criteria(effect, episode_services(MAP, calls), MAP, calls)
+    assert not any("counters" in line for line in _calls(state))
+
+
+def test_changed_cell_keyed_by_a_result_value_is_kept():
+    # The row key comes from a tool RESULT (not an arg), which still counts as referenced.
+    effect = {
+        "initial": {"svc": {"widgets": {"pk": "id", "rows": [{"id": "w9", "color": "red"}]}}},
+        "final": {"svc": {"widgets": {"pk": "id", "rows": [{"id": "w9", "color": "blue"}]}}},
+    }
+    calls = [ToolEvent("paint", {"color": "blue"}, {"id": "w9"}, "e")]  # id only in the result
+    state, _, _ = derive_criteria(effect, episode_services(MAP, calls), MAP, calls)
+    assert any("SELECT color FROM widgets WHERE id='w9'" in line for line in _calls(state))
+
+
+def test_sqlite_sequence_table_never_graded():
+    effect = {
+        "initial": {"svc": {"sqlite_sequence": {"pk": "name", "rows": [{"name": "w", "seq": 1}]}}},
+        "final": {"svc": {"sqlite_sequence": {"pk": "name", "rows": [{"name": "w", "seq": 2}]}}},
+    }
+    calls = [ToolEvent("paint", {"widget_id": "w", "seq": 2}, {}, "e")]
+    state, _, _ = derive_criteria(effect, episode_services(MAP, calls), MAP, calls)
+    assert not any("sqlite_sequence" in line for line in _calls(state))
+
+
+def test_sim_prompt_forbids_counter_tables():
+    from touchstone.survey.simulate import SIM_PROMPT
+    assert "AUTOINCREMENT" in SIM_PROMPT and "counter" in SIM_PROMPT.lower()
+
+
 def test_read_only_tool_never_required():
     # get is read-only + no state change -> never a tool_used criterion; only avoids mutating
     calls = [ToolEvent("get", {"widget_id": "w1"}, {}, "e")]

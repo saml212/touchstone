@@ -42,7 +42,9 @@ app.py requirements:
   the upstream wire shape, NOT the parsed result: if the tool returns response.json() unchanged the
   body equals "returned"; if it extracts nested fields (e.g. `data["current"]["temp_c"]`) the body
   must nest them so (a `current` object here), else the real tool raises KeyError on replay.
-- Back it with a SQLite file named state.db beside app.py.
+- Back it with a SQLite file named state.db beside app.py. Give each table an
+  `INTEGER PRIMARY KEY AUTOINCREMENT` id and let SQLite assign ids; NEVER keep your own counter,
+  sequence, or "next id" table — a bookkeeping table the tools never read pollutes the graded state.
 - Load seed.json into state.db on startup AND on `POST /__reset` (drop and recreate tables first).
 - `GET /__health` returns 200 with a JSON body.
 - Use only the standard library, fastapi, uvicorn, and pydantic.

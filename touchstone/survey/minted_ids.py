@@ -13,12 +13,12 @@ from __future__ import annotations
 import json
 
 
-def _scalar_leaves(obj) -> set:
+def scalar_leaves(obj) -> set:
     """Hashable str/int leaves of a nested JSON value — the id candidates (bools excluded)."""
     if isinstance(obj, dict):
-        return set().union(*(_scalar_leaves(v) for v in obj.values())) if obj else set()
+        return set().union(*(scalar_leaves(v) for v in obj.values())) if obj else set()
     if isinstance(obj, (list, tuple)):
-        return set().union(*(_scalar_leaves(v) for v in obj)) if obj else set()
+        return set().union(*(scalar_leaves(v) for v in obj)) if obj else set()
     if isinstance(obj, bool):
         return set()
     if isinstance(obj, str) and obj:
@@ -31,7 +31,7 @@ def _scalar_leaves(obj) -> set:
 def _later_arg_values(examples: list[dict], start: int) -> set:
     values: set = set()
     for other in examples[start:]:
-        values |= _scalar_leaves(other.get("arguments"))
+        values |= scalar_leaves(other.get("arguments"))
     return values
 
 
@@ -42,7 +42,7 @@ def minted_id_bindings(examples: list[dict]) -> list[dict]:
     bindings: list[dict] = []
     seen: set = set()
     for i, ex in enumerate(examples):
-        shared = _scalar_leaves(ex.get("returned")) & _later_arg_values(examples, i + 1)
+        shared = scalar_leaves(ex.get("returned")) & _later_arg_values(examples, i + 1)
         for value in sorted(shared - seen, key=str):
             seen.add(value)
             bindings.append({"created_by": ex.get("tool"), "arguments": ex.get("arguments"),

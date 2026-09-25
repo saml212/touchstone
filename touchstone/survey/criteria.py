@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 
 from . import descriptions, fidelity
+from .minted_ids import scalar_leaves
 from .recordings import ToolEvent
 from .simulate import crossing_services
 
@@ -61,6 +62,22 @@ def _arg_values(calls: list[ToolEvent]) -> set:
     return values
 
 
+def _referenced_values(calls: list[ToolEvent]) -> set:
+    """Every scalar value the episode's tool ARGUMENTS or RESULTS carried — the only values a state
+    criterion may key its WHERE on. A row the agent never named (a simulator's internal counter, an
+    id-sequence table) is not part of the task's observable effect, so a criterion keyed on it is
+    coupled to the seed rather than to what the agent did."""
+    vals: set = set()
+    for call in calls:
+        vals |= scalar_leaves(call.arguments)
+        vals |= scalar_leaves(call.output)
+    return vals
+
+
+# SQLite's own AUTOINCREMENT bookkeeping table — never a graded effect.
+_INTERNAL_TABLES = {"sqlite_sequence"}
+
+
 # ---- state diff -> sqlite criteria -----------------------------------------
 
 
@@ -91,13 +108,15 @@ def _cell_lines(table: str, pk: str, key, old: dict, row: dict, db_rel: str,
 
 
 def _changed_cells(table: str, before: dict, after: dict, db_rel: str,
-                   literals: set) -> list[tuple[str, str]]:
+                   literals: set, referenced: set) -> list[tuple[str, str]]:
     pk = after.get("pk", "rowid")
     before_rows, after_rows = _rows_by_pk(before), _rows_by_pk(after)
     lines = []
     for key, row in after_rows.items():
         old = before_rows.get(key)
-        if old is not None:
+        # Only grade a changed row the agent actually named (its key appears in a tool arg/result).
+        # A counter/sequence row the simulator bumps on its own (WHERE name='email') is not.
+        if old is not None and key in referenced:
             lines += _cell_lines(table, pk, key, old, row, db_rel, literals)
     return lines
 
@@ -138,15 +157,17 @@ def _added_rows(table: str, before: dict, after: dict, db_rel: str, arg_values: 
     return [(call, descriptions.count_rows(table, pairs, len(added)))]
 
 
-def _state_criteria(effect: dict, svc: str, arg_values: set,
-                    literals: set) -> list[tuple[str, str]]:
+def _state_criteria(effect: dict, svc: str, arg_values: set, literals: set,
+                    referenced: set) -> list[tuple[str, str]]:
     db_rel = f"simulators/{svc}/state.db"
     initial = effect["initial"].get(svc, {})
     final = effect["final"].get(svc, {})
     lines = []
     for table, after in final.items():
+        if table in _INTERNAL_TABLES:  # never grade SQLite's AUTOINCREMENT bookkeeping
+            continue
         before = initial.get(table, {})
-        lines += _changed_cells(table, before, after, db_rel, literals)
+        lines += _changed_cells(table, before, after, db_rel, literals, referenced)
         lines += _added_rows(table, before, after, db_rel, arg_values, literals)
     return lines
 
@@ -221,9 +242,10 @@ def derive_criteria(effect: dict, services: list[dict], map_data: dict, calls: l
     criterion's WHERE that the agent must know — so the task writer can make it knowable (state it
     in the instruction) or drop the criterion."""
     arg_values = _arg_values(calls)
+    referenced = _referenced_values(calls)
     literals: set = set()
     state: list[tuple[str, str]] = []
     for service in services:
-        state += _state_criteria(effect, service["name"], arg_values, literals)
+        state += _state_criteria(effect, service["name"], arg_values, literals, referenced)
     tool = _tool_criteria(map_data, calls, bool(state))
     return state, tool, sorted(literals)
