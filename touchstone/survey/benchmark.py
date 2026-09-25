@@ -52,10 +52,8 @@ def _gated_tasks(out: Path) -> list[Path]:
 
 
 def _counts(out: Path) -> dict:
-    tasks, review = _task_dirs(out / "tasks"), [d for d in (out / "needs-review").iterdir()
-                                                if (out / "needs-review").is_dir()
-                                                and (d / "task.toml").is_file()]
-    return {"written": len(tasks) + len(review), "gated": len(_gated_tasks(out))}
+    written = len(_task_dirs(out / "tasks")) + len(_task_dirs(out / "needs-review"))
+    return {"written": written, "gated": len(_gated_tasks(out))}
 
 
 def _rate_for(rates: dict, name: str) -> float | None:

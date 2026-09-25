@@ -72,3 +72,12 @@ def test_render_markdown_dashes_missing_values():
            "baseline_pass": None, "agreement": None}
     md = render_markdown([row], "2026-09-25T00:00:00+00:00")
     assert "| x | — | 0/0 | — | — |" in md
+
+
+def test_score_target_without_needs_review_dir(tmp_path):
+    # A target where every task gated leaves no needs-review/ dir; counting must not crash.
+    repo = _surveyed_target(tmp_path / "target")
+    import shutil
+    shutil.rmtree(repo / "touchstone" / "needs-review")
+    row = score_target("t", repo)
+    assert row["written"] == 2 and row["gated"] == 2
