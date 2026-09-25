@@ -72,7 +72,10 @@ function renderChips(review) {
     const n = key === "needs_review" ? (review && review.needs_review) || 0 : counts[key] || 0;
     return `<button class="chip" data-filter="${key}">${label} ${n}</button>`;
   });
-  $("chips").innerHTML = parts.join("");
+  const chips = $("chips");
+  chips.innerHTML = parts.join("");
+  const stale = (counts.stale) || 0;
+  chips.title = stale ? `${stale} trial(s) from renamed/removed tasks are hidden` : "";
   document.querySelectorAll(".chip").forEach((b) => {
     b.onclick = () => send(`Show me the ${b.dataset.filter.replace("_", " ")} trials.`);
   });
@@ -144,7 +147,9 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws/rooms/${ROOM_ID}`);
   socket = ws;
-  ws.onopen = () => { stopPolling(); if (!realtimeTalking) setVoiceState(""); };
+  // On (re)connect, re-render from authoritative state so a gap while disconnected can't leave
+  // the DOM stale; the server also pushes a full "state" event at the end of every turn.
+  ws.onopen = () => { stopPolling(); if (!realtimeTalking) setVoiceState(""); refresh(); };
   ws.onmessage = (ev) => {
     const { type, data } = JSON.parse(ev.data);
     if (type === "state") applyState(data);

@@ -1,11 +1,13 @@
 """Read the Harbor job directories and decide which trial the room walks through next.
 
-A trial is addressed as ``<job>/<trial_dir>`` so a regrade knows its job. `scan` reads every job
-under the jobs directory into `TrialRef`s and orders them the way the design asks: verifier unsure
-(reward strictly between 0 and 1) first, then models disagree (a task that passed in one job and
-failed in another), then never reviewed, then already reviewed. `read` returns one trial in plain
-words — the instruction, the trajectory as a readable transcript, and each criterion's description
-and score — for the agent to present. Needs-review tasks (gate failures) are read separately from
+A trial is addressed as ``<job>/<trial_dir>`` so a regrade knows its job. `scan` reads the
+review-worthy jobs into `TrialRef`s and orders them the way the design asks: verifier unsure
+(reward strictly between 0 and 1) first, then models disagree (a task that passed in one run and
+failed in another), then never reviewed, then already reviewed. Harbor's oracle/nop gate jobs are
+never review material, and only the latest job per (agent, model) is surfaced — older runs stay
+addressable by explicit job id through `read`. `read` returns one trial in plain words — the
+instruction, the trajectory as a readable transcript, and each criterion's description and score —
+for the agent to present. Needs-review tasks (gate failures) are read separately from
 ``needs-review/<task>/gate.json``; they have no trials.
 """
 
@@ -30,6 +32,11 @@ class TrialRef:
     rewards: dict
     category: str
     reviewed: bool
+    label: str = ""  # "<agent>/<model> · <job>" — which run this trial came from
+
+
+# Harbor's gate agents; their jobs prove a task is solvable/non-trivial, never review material.
+_GATE_AGENTS = ("oracle", "nop")
 
 
 def _job_dirs(jobs_dir: Path) -> list[Path]:
@@ -37,6 +44,38 @@ def _job_dirs(jobs_dir: Path) -> list[Path]:
         return []
     return sorted(d for d in jobs_dir.iterdir()
                   if d.is_dir() and (d / "config.json").is_file())
+
+
+def _agent_model(job_dir: Path) -> tuple[str | None, str | None]:
+    """The (agent, model) a job ran, from its first trial's result (fallback: config.json)."""
+    for trial_dir in _trial_dirs(job_dir):
+        result = _load_json(trial_dir / "result.json")
+        info = result.get("agent_info") or {}
+        cfg = (result.get("config") or {}).get("agent") or {}
+        model = (info.get("model_info") or {}).get("name") or cfg.get("model_name")
+        return info.get("name") or cfg.get("name"), model
+    agents = _load_json(job_dir / "config.json").get("agents") or []
+    return (agents[0].get("name"), agents[0].get("model_name")) if agents else (None, None)
+
+
+def _is_gate(agent: str | None) -> bool:
+    return bool(agent) and any(g in agent.lower() for g in _GATE_AGENTS)
+
+
+def _label(agent: str | None, model: str | None, job: str) -> str:
+    return f"{(agent or 'agent').split(':')[-1]}/{model or '?'} · {job}"
+
+
+def _review_jobs(jobs_dir: Path) -> list[tuple[Path, str]]:
+    """Review-worthy jobs: gate jobs dropped, only the latest job per (agent, model) kept (older
+    jobs stay addressable by explicit job id via `read`). Returns (job_dir, label)."""
+    latest: dict[tuple, Path] = {}
+    for job_dir in _job_dirs(jobs_dir):  # ascending by timestamped name -> last write wins
+        agent, model = _agent_model(job_dir)
+        if _is_gate(agent):
+            continue
+        latest[(agent, model)] = job_dir
+    return [(jd, _label(*_agent_model(jd), jd.name)) for jd in latest.values()]
 
 
 def _trial_dirs(job_dir: Path) -> list[Path]:
@@ -72,23 +111,42 @@ def _reviewed_keys(conn) -> set[tuple[str, str]]:
     return {(r.task, r.trial) for r in store.list_reviews(conn)}
 
 
-def scan(jobs_dir: Path, conn=None) -> list[TrialRef]:
-    """Every trial across every job, ordered unsure -> disagree -> unreviewed -> reviewed."""
-    job_dirs = _job_dirs(jobs_dir)
-    disagree = _disagreeing_tasks(job_dirs)
+def _task_exists(dataset_dir: Path | None, task: str) -> bool:
+    """A trial is stale when its task was regenerated/renamed away; never present those."""
+    return dataset_dir is None or (dataset_dir / "tasks" / task / "task.toml").is_file()
+
+
+def scan(jobs_dir: Path, conn=None, dataset_dir: Path | None = None) -> list[TrialRef]:
+    """Review trials across the latest non-gate job per (agent, model), ordered unsure -> disagree
+    -> unreviewed -> reviewed. Oracle/nop gate jobs, superseded runs, and trials whose task dir no
+    longer exists (stale) are excluded."""
+    review_jobs = _review_jobs(jobs_dir)
+    disagree = _disagreeing_tasks([jd for jd, _ in review_jobs])
     reviewed_keys = _reviewed_keys(conn) if conn is not None else set()
     refs: list[TrialRef] = []
-    for job_dir in job_dirs:
+    for job_dir, label in review_jobs:
         for trial_dir in _trial_dirs(job_dir):
             trial = jobs.Trial.read(trial_dir)
+            if not _task_exists(dataset_dir, trial.task_name):
+                continue
             trial_id = f"{job_dir.name}/{trial_dir.name}"
             reviewed = (trial.task_name, trial_id) in reviewed_keys
             category = _category(trial.reward, trial.task_name, disagree, reviewed)
             refs.append(TrialRef(task=trial.task_name, trial=trial_id, job=job_dir.name,
                                  reward=trial.reward, rewards=trial.rewards,
-                                 category=category, reviewed=reviewed))
+                                 category=category, reviewed=reviewed, label=label))
     refs.sort(key=lambda r: (_ORDER[r.category], r.task, r.trial))
     return refs
+
+
+def stale_count(jobs_dir: Path, dataset_dir: Path) -> int:
+    """Trials in the review jobs whose task dir no longer exists (shown in the chips tooltip)."""
+    n = 0
+    for job_dir, _ in _review_jobs(jobs_dir):
+        for trial_dir in _trial_dirs(job_dir):
+            if not _task_exists(dataset_dir, jobs.Trial.read(trial_dir).task_name):
+                n += 1
+    return n
 
 
 def filter_refs(refs: list[TrialRef], which: str | None) -> list[TrialRef]:

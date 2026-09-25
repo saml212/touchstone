@@ -188,6 +188,30 @@ def test_apply_always_hits_every_task_with_the_same_job(tmp_path, conn):
         assert doc["reward"][0]["weights"]["safety"] == 2.0
 
 
+def test_presentation_is_grounded_in_the_actual_scores(tmp_path, conn):
+    dataset = _dataset(tmp_path)
+    # a trial the verifier scored 50% with a failed correctness check and an empty trajectory
+    job = dataset / "jobs" / "weak"
+    d = job / "issue-a-refund-1__z"
+    _write(job / "config.json", {"agents": [{"name": "cust", "model_name": "gpt"}]})
+    _write(d / "result.json", {"task_name": "issue-a-refund-1"})
+    _write(d / "verifier" / "reward.json", {"reward": 0.5, "correctness": 0.0})
+    _write(d / "verifier" / "reward-details.json",
+           {"correctness": {"components": [{"detail": {"criteria": [
+               {"description": "refund recorded", "value": 0.0}]}}]}})
+    _write(d / "agent" / "trajectory.json", {"steps": []})  # agent did nothing
+    room = _room(conn)
+    provider = Seq([
+        _call("read_trial", {"task": "issue-a-refund-1", "trial": "weak/issue-a-refund-1__z"}),
+        Reply(content="Do you agree this one passed?"),  # no numbers -> agent must ground it
+    ])
+    agent = ReviewAgent(provider, conn, room, _settings(tmp_path))
+    say = agent.respond([{"role": "user", "speaker": "sam", "text": "next"}]).say
+    assert "50%" in say                      # the reward is stated verbatim
+    assert "failed" in say                   # the failing criterion is not glossed as a pass
+    assert "did nothing" in say              # empty trajectory is called out
+
+
 def test_unparseable_change_is_reported_not_crashed(tmp_path, conn):
     _dataset(tmp_path)
     room = _room(conn)

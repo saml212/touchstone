@@ -134,6 +134,29 @@ def test_websocket_sends_state_then_events_in_order(db):
         assert types[2] == "draft"
 
 
+def test_two_turns_each_push_full_state(db):
+    # A dropped or reordered delta must never leave the page stale: every turn ends with a full
+    # "state" event carrying the messages and the review block, so the room re-renders correctly.
+    app = _app(db)
+    client = TestClient(app)
+    room_id = client.post("/api/rooms", json={"task_id": _seed_task(db)}).json()["room"]["id"]
+    with client.websocket_connect(f"/ws/rooms/{room_id}") as ws:
+        assert ws.receive_json()["type"] == "state"  # sent on connect
+        states = []
+        for turn in range(2):
+            client.post(f"/api/rooms/{room_id}/messages", json={"speaker": "sam", "text": "hi"})
+            state = None
+            for _ in range(8):  # drain this turn's deltas until its closing state event
+                ev = ws.receive_json()
+                if ev["type"] == "state":
+                    state = ev["data"]
+                    break
+            assert state is not None, f"turn {turn} produced no state event"
+            assert "messages" in state and "review" in state
+            states.append(len(state["messages"]))
+    assert states[1] > states[0]  # the second turn's state reflects the new messages
+
+
 def test_websocket_on_missing_room_closes(db):
     from starlette.websockets import WebSocketDisconnect
 

@@ -221,7 +221,14 @@ async def _ingest(app, room_id: str, speaker: str, text: str) -> dict:
         hub.publish(room_id, Event("committed", {"applied": step["turn"]["commit"]}))
     if step["closed"]:
         hub.publish(room_id, Event("closed", {}))
-    hub.publish(room_id, Event("review", step["review"]))
+    # A full-state event closes every turn so the page re-renders the left panel, trust, and chips
+    # authoritatively — a dropped or reordered delta can never leave the DOM stale.
+    conn = store.connect(settings.db_path)
+    try:
+        state = _room_state(conn, settings, room_id)
+    finally:
+        conn.close()
+    hub.publish(room_id, Event("state", state))
     return {"user": user_view, **step}
 
 

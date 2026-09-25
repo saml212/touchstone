@@ -70,14 +70,17 @@ TOOLS = [
 
 _SYSTEM = (
     "You are Touchstone's review agent. A product person is checking their AI agent's benchmark "
-    "with you, by voice or text. Walk one trial at a time: call list_trials, then read_trial, then "
-    "in two or three plain sentences say what the user wanted, what the agent did, and what the "
-    "verifier scored — then ask whether they agree it passed. On agree, call record_review "
-    "(verdict 'agree'). On disagree, ask what should have counted, call propose_change and read it "
-    "draft back, and only after they confirm call apply_change (always=true if they say the rule "
-    "holds for every task like it); then say the new reward and anything else that moved. Speak in "
-    "plain product language. Never mention file names, tables, or JSON unless they ask. Reply with "
-    "your spoken message when you are not calling a tool."
+    "with you, by voice or text. Walk one trial at a time: call list_trials, then read_trial. When "
+    "you present a trial, FIRST state the facts verbatim from read_trial: the verifier reward as a "
+    "percentage, then each criterion with whether it passed or failed. ONLY THEN gloss what "
+    "the user wanted and what the agent did in plain words, and ask whether they agree it passed. "
+    "Never claim a pass or a fail the scores do not show; when the trajectory is empty, say the "
+    "agent did nothing. On agree, call record_review (verdict 'agree'); on disagree, record_review "
+    "(verdict 'disagree'), ask what should have counted, call propose_change and read it back, and "
+    "only after they confirm call apply_change (always=true if the rule holds for every task "
+    "like it); then say the new reward and anything else that moved. Speak in plain product "
+    "language. Never mention file names, tables, or JSON unless they ask. Reply with your spoken "
+    "message when you are not calling a tool."
 )
 
 
@@ -104,6 +107,7 @@ class ReviewAgent:
         self.dataset_dir = settings.review_dataset_dir
         self.jobs_dir = settings.review_jobs
         self.scratch = self._load_scratch()
+        self._presented: dict | None = None  # the trial read this turn, for factual grounding
 
     # ---- opening -----------------------------------------------------------
 
@@ -127,9 +131,20 @@ class ReviewAgent:
             return AgentTurn(say="Closing the room — thanks all.")
         if self.provider is None:
             return AgentTurn(say="Tell me when to start and I'll pull up the first trial.")
-        say = self._run_loop(history)
+        say = self._ground(self._run_loop(history))
         self._save_scratch()
         return AgentTurn(say=say, draft=self.draft(), commit=self.committed())
+
+    def _ground(self, say: str) -> str:
+        """Guarantee the reply states the verifier's actual scores when a trial was just presented,
+        so the narrative can never contradict the numbers on screen. If the model already stated the
+        reward figure we trust its wording; otherwise we prepend the facts."""
+        if not self._presented:
+            return say
+        token = _reward_pct(self._presented.get("reward"))
+        if token in say:
+            return say
+        return f"{_grounding_line(self._presented)}\n\n{say}"
 
     def _run_loop(self, history: list[dict]) -> str:
         messages = [{"role": "system", "content": _SYSTEM}, *_as_messages(history)]
@@ -165,13 +180,17 @@ class ReviewAgent:
         except (changes.ChangeError, OSError, ValueError, RuntimeError) as exc:
             return json.dumps({"error": str(exc)})
 
+    def _scan(self):
+        return trials.scan(self.jobs_dir, self.conn, self.dataset_dir)
+
     def _list_trials(self, args: dict) -> dict:
         which = args.get("filter")
         if which == "needs_review":
             return {"needs_review": trials.needs_review(self.dataset_dir)}
-        refs = trials.filter_refs(trials.scan(self.jobs_dir, self.conn), which)
+        refs = trials.filter_refs(self._scan(), which)
         return {"trials": [{"task": r.task, "trial": r.trial, "reward": r.reward,
-                            "category": r.category, "reviewed": r.reviewed} for r in refs[:20]]}
+                            "reward_pct": _reward_pct(r.reward), "category": r.category,
+                            "reviewed": r.reviewed, "run": r.label} for r in refs[:20]]}
 
     def _read_trial(self, args: dict) -> dict:
         task, trial = args.get("task", ""), args.get("trial", "")
@@ -180,6 +199,8 @@ class ReviewAgent:
             return {"error": f"no trial {trial} for {task}"}
         self.scratch.current = {"task": task, "trial": trial}
         detail["editable"] = _editable(self.dataset_dir / "tasks" / task)
+        detail["reward_pct"] = _reward_pct(detail.get("reward"))
+        self._presented = detail  # ground this turn's reply in these scores
         return detail
 
     def _record_review(self, args: dict) -> dict:
@@ -259,10 +280,11 @@ class ReviewAgent:
         return self.scratch.applied or []
 
     def review_state(self) -> dict:
-        refs = trials.scan(self.jobs_dir, self.conn)
-        current = self._current_detail()
-        return {"trust": self._trust(), "current": current,
-                "counts": trials.counts(refs),
+        refs = self._scan()
+        counts = trials.counts(refs)
+        counts["stale"] = trials.stale_count(self.jobs_dir, self.dataset_dir)
+        return {"trust": self._trust(), "current": self._current_detail(),
+                "counts": counts,
                 "proposed": {"change": self.draft(), "readback": self.scratch.readback}
                 if self.scratch.proposed is not None else None,
                 "needs_review": len(trials.needs_review(self.dataset_dir))}
@@ -275,6 +297,27 @@ class ReviewAgent:
 
 
 # ---- module helpers --------------------------------------------------------
+
+
+def _reward_pct(reward) -> str:
+    return "unknown" if reward is None else f"{round(reward * 100)}%"
+
+
+def _passed(score) -> bool:
+    return score is True or score == 1
+
+
+def _grounding_line(detail: dict) -> str:
+    """The verifier's actual result in one line: reward %, each criterion pass/fail, empty note."""
+    parts = [f"The verifier scored this {_reward_pct(detail.get('reward'))}."]
+    crits = detail.get("criteria") or []
+    if crits:
+        marks = "; ".join(f"{c.get('description', '?')} — "
+                          f"{'passed' if _passed(c.get('score')) else 'failed'}" for c in crits)
+        parts.append(f"Checks: {marks}.")
+    if not detail.get("trajectory"):
+        parts.append("The agent did nothing that was recorded.")
+    return " ".join(parts)
 
 
 def _wants_done(history: list[dict]) -> bool:
