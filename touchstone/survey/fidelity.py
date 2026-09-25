@@ -1,0 +1,202 @@
+"""Measure how faithfully a simulator reproduces the recorded calls.
+
+Start the simulator on a free port, seed it, replay every recorded call for the service through the
+customer's real tool functions (pointed at the simulator), and compare each returned value with the
+recorded one — after masking volatile fields (ids, tickets, timestamps, tokens) so a fresh id does
+not count as a mismatch. The simulator process is always killed. A simulator that never becomes
+healthy scores 0.0 with the traceback tail, so the survey can continue and flag it.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+import httpx
+
+from ..config import Settings
+from .recordings import ToolEvent
+from .scrub import Scrubber
+
+_VOLATILE_EXACT = {"id", "ticket", "timestamp", "ts", "token"}
+_ISO = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+_HEALTH_TIMEOUT = 20.0
+_REPLAY_TIMEOUT = 180.0
+
+
+class _SimError(RuntimeError):
+    """The simulator could not be started, seeded, or replayed against."""
+
+
+def _is_volatile(key: str) -> bool:
+    k = key.lower()
+    return (k in _VOLATILE_EXACT or k.endswith("_id")
+            or k.startswith("created") or k.startswith("updated"))
+
+
+def _mask(value, masked: set):
+    if isinstance(value, dict):
+        return {k: _mask_field(k, v, masked) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask(v, masked) for v in value]
+    if isinstance(value, str) and _ISO.search(value):
+        masked.add("<iso-timestamp>")
+        return "<ts>"
+    return value
+
+
+def _mask_field(key: str, value, masked: set):
+    if _is_volatile(key):
+        masked.add(key)
+        return "<masked>"
+    return _mask(value, masked)
+
+
+def _compare(expected, got) -> tuple[bool, set]:
+    masked: set = set()
+    return _mask(expected, masked) == _mask(got, masked), masked
+
+
+# ---- simulator process -----------------------------------------------------
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _tail(log_path: Path, n: int = 1500) -> str:
+    try:
+        return log_path.read_text(encoding="utf-8", errors="replace")[-n:]
+    except OSError:
+        return "(no simulator log)"
+
+
+def _start_sim(sim_dir: Path, port: int, log_path: Path):
+    log = log_path.open("w", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, "app.py", str(port)], cwd=str(sim_dir),
+                            stdout=log, stderr=subprocess.STDOUT, text=True)
+    return proc, log
+
+
+def _health_ok(base: str) -> bool:
+    try:
+        return httpx.get(f"{base}/__health", timeout=1.0).status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+def _await_health(proc, base: str, log_path: Path) -> None:
+    deadline = time.time() + _HEALTH_TIMEOUT
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise _SimError(f"simulator exited during startup:\n{_tail(log_path)}")
+        if _health_ok(base):
+            return
+        time.sleep(0.1)
+    raise _SimError(f"simulator never became healthy:\n{_tail(log_path)}")
+
+
+def _reset(base: str) -> None:
+    try:
+        httpx.post(f"{base}/__reset", timeout=5.0)
+    except httpx.HTTPError:
+        pass  # some simulators seed at startup; a missing /__reset is not fatal
+
+
+def _kill(proc, log) -> None:
+    if proc is not None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    if log is not None:
+        log.close()
+
+
+# ---- replay + score --------------------------------------------------------
+
+
+def _replay_cmd(repo: Path, spec_path: str, settings: Settings) -> list[str]:
+    if settings.survey_python:
+        return [settings.survey_python, "-m", "touchstone.survey.replay", spec_path]
+    return ["uv", "run", "--project", str(repo), "python", "-m",
+            "touchstone.survey.replay", spec_path]
+
+
+def _run_replay(repo: Path, calls: list[ToolEvent], base: str, ctx: dict,
+                settings: Settings) -> list[dict]:
+    spec = {"base_url_env": ctx["base_url_env"], "base_url": base, "tools": ctx["tools"],
+            "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
+    fd, spec_path = tempfile.mkstemp(suffix=".json", prefix="ts-replay-")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(spec, fh, default=str)
+    try:
+        proc = subprocess.run(_replay_cmd(repo, spec_path, settings), cwd=str(repo),
+                              capture_output=True, text=True, timeout=_REPLAY_TIMEOUT)
+    finally:
+        os.unlink(spec_path)
+    if proc.returncode != 0:
+        raise _SimError(f"replay failed:\n{(proc.stderr or proc.stdout)[-1500:]}")
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise _SimError(f"replay output was not JSON:\n{proc.stdout[-500:]}") from exc
+
+
+def _failure(call: ToolEvent, got, scrub: Scrubber) -> dict:
+    return {"tool": call.tool, "arguments": scrub.scrub(call.arguments),
+            "expected": scrub.scrub(call.output), "got": scrub.scrub(got)}
+
+
+def _score(calls: list[ToolEvent], got_list: list[dict], threshold: float,
+           scrub: Scrubber) -> dict:
+    failures: list[dict] = []
+    masked: set = set()
+    reproduced = 0
+    for call, got in zip(calls, got_list, strict=False):
+        ok, m = _compare(call.output, got.get("got"))
+        masked |= m
+        if ok:
+            reproduced += 1
+        elif len(failures) < 20:
+            failures.append(_failure(call, got.get("got"), scrub))
+    n = len(calls)
+    return {"calls": n, "reproduced": reproduced,
+            "score": round(reproduced / n, 4) if n else 1.0,
+            "threshold": threshold, "masked_keys": sorted(masked), "failures": failures}
+
+
+def _failed_result(calls: list[ToolEvent], threshold: float, detail: str) -> dict:
+    return {"calls": len(calls), "reproduced": 0, "score": 0.0, "threshold": threshold,
+            "masked_keys": [], "failures": [{"error": detail[-1500:]}]}
+
+
+def measure_service(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict,
+                    settings: Settings, scrub: Scrubber) -> dict:
+    """Fidelity of the simulator in `sim_dir` against `calls`. Always kills the process."""
+    threshold = settings.survey_fidelity_threshold
+    port = _free_port()
+    log_path = sim_dir / ".sim.log"
+    proc = log = None
+    try:
+        proc, log = _start_sim(sim_dir, port, log_path)
+        base = f"http://127.0.0.1:{port}"
+        _await_health(proc, base, log_path)
+        _reset(base)
+        got_list = _run_replay(repo, calls, base, ctx, settings)
+        return _score(calls, got_list, threshold, scrub)
+    except _SimError as exc:
+        return _failed_result(calls, threshold, str(exc))
+    finally:
+        _kill(proc, log)
