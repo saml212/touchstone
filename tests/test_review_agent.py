@@ -176,7 +176,8 @@ def test_apply_always_hits_every_task_with_the_same_job(tmp_path, conn):
     change = {"op": "edit", "file": "tests/reward.toml", "criterion": "safety", "weight": 2}
     provider = Seq([
         _call("read_trial", {"task": "issue-a-refund-1", "trial": "src/issue-a-refund-1__x"}),
-        _call("apply_change", {"task": "issue-a-refund-1", "change": change, "always": True}),
+        _call("propose_change", {"task": "issue-a-refund-1", "change": change}),
+        _call("apply_change", {"task": "issue-a-refund-1", "always": True}),
         Reply(content="Applied to every refund task."),
     ])
     agent = ReviewAgent(provider, conn, room, _settings(tmp_path),
@@ -186,6 +187,53 @@ def test_apply_always_hits_every_task_with_the_same_job(tmp_path, conn):
     for name in ("issue-a-refund-1", "issue-a-refund-2"):
         doc = tomllib.loads((dataset / "tasks" / name / "tests" / "reward.toml").read_text())
         assert doc["reward"][0]["weights"]["safety"] == 2.0
+
+
+def test_apply_change_uses_the_proposed_change_not_a_model_supplied_one(tmp_path, conn):
+    """The go-ahead applies the change that was read back, even if the model re-sends a different
+    (wrong) change to apply_change — the classic 'file path doesn't exist' apply failure."""
+    dataset = _dataset(tmp_path)
+    room = _room(conn)
+    rg = dataset / "jobs" / "src-rg"
+    _write(rg / "config.json", {})
+    _trial(rg, "issue-a-refund-1", 1.0)
+    _trial(rg, "issue-a-refund-2", 0.875)
+
+    proposed = {"op": "remove", "file": "tests/correctness/state.py", "criterion": 1}
+    provider = Seq([
+        _call("read_trial", {"task": "issue-a-refund-1", "trial": "src/issue-a-refund-1__x"}),
+        _call("propose_change", {"task": "issue-a-refund-1", "change": proposed}),
+        Reply(content="I'll drop that check — say yes to apply."),
+    ])
+    agent = ReviewAgent(provider, conn, room, _settings(tmp_path), regrader=lambda *a, **k: rg)
+    agent.respond([{"role": "user", "speaker": "sam", "text": "that check is wrong"}])
+
+    # The model now re-sends a DIFFERENT, non-existent change to apply_change; it must be ignored.
+    wrong = {"op": "remove", "file": "tests/correctness/nope.py", "criterion": 3}
+    provider2 = Seq([
+        _call("apply_change", {"task": "issue-a-refund-1", "change": wrong, "always": False}),
+        Reply(content="Done."),
+    ])
+    agent2 = ReviewAgent(provider2, conn, store.get_room(conn, room.id), _settings(tmp_path),
+                         regrader=lambda *a, **k: rg)
+    turn = agent2.respond([{"role": "user", "speaker": "sam", "text": "yes"}])
+    # The proposed removal was applied (state.py now has no criteria), not the wrong change.
+    state_py = dataset / "tasks" / "issue-a-refund-1" / "tests" / "correctness" / "state.py"
+    assert "sqlite_query_equals" not in state_py.read_text()
+    assert "Done" in turn.say
+    assert agent2.committed()
+
+
+def test_apply_change_without_a_proposal_says_so(tmp_path, conn):
+    _dataset(tmp_path)
+    room = _room(conn)
+    provider = Seq([
+        _call("apply_change", {"task": "issue-a-refund-1"}),
+        Reply(content="Nothing to apply."),
+    ])
+    agent = ReviewAgent(provider, conn, room, _settings(tmp_path), regrader=lambda *a, **k: None)
+    agent.respond([{"role": "user", "speaker": "sam", "text": "yes"}])
+    assert agent.committed() == []
 
 
 def test_presentation_is_grounded_in_the_actual_scores(tmp_path, conn):

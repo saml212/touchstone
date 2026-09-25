@@ -57,13 +57,13 @@ TOOLS = [
                        "required": ["task", "change"]}}},
     {"type": "function", "function": {
         "name": "apply_change",
-        "description": "Write a change (same shape as propose_change), regrade the trial's job, "
-                       "and report the new reward and any other trials that moved. always=true "
-                       "applies it to every task with the same job. Refuses a change that does "
-                       "not validate.",
+        "description": "Apply the change you just proposed and read back, regrade the trial's job, "
+                       "and report the new reward and any other trials that moved. Takes no change "
+                       "argument — it always writes the last proposed change, never a new one. "
+                       "always=true applies it to every task with the same job.",
         "parameters": {"type": "object", "properties": {
-            "task": {"type": "string"}, "change": {},
-            "always": {"type": "boolean"}}, "required": ["task", "change"]}}},
+            "task": {"type": "string"},
+            "always": {"type": "boolean"}}}}},
 ]
 
 SYSTEM = (

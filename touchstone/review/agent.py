@@ -10,6 +10,7 @@ the room state (a role="draft" scratch message + the reviews table) so the UI re
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 
 from .. import store
@@ -27,6 +28,8 @@ from .facts import (
 from .prompt import SYSTEM, TOOLS
 
 MAX_STEPS = 6
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -143,11 +146,17 @@ class ReviewAgent:
                    "record_review": self._record_review, "propose_change": self._propose_change,
                    "apply_change": self._apply_change}.get(name)
         if handler is None:
-            return json.dumps({"error": f"unknown tool {name}"})
-        try:
-            return json.dumps(handler(args), ensure_ascii=False, default=str)
-        except (changes.ChangeError, OSError, ValueError, RuntimeError) as exc:
-            return json.dumps({"error": str(exc)})
+            result = json.dumps({"error": f"unknown tool {name}"})
+        else:
+            try:
+                result = json.dumps(handler(args), ensure_ascii=False, default=str)
+            except (changes.ChangeError, OSError, ValueError, RuntimeError) as exc:
+                result = json.dumps({"error": str(exc)})
+        # Log every tool call so a failed apply is diagnosable from the server log. Review args
+        # carry tasks/criteria, never secrets; truncate so a long change can't flood the log.
+        _log.info("review tool %s args=%s -> %s", name,
+                  json.dumps(args, default=str)[:800], result[:800])
+        return result
 
     def _scan(self):
         return trials.scan(self.jobs_dir, self.conn, self.dataset_dir)
@@ -187,7 +196,15 @@ class ReviewAgent:
         return {"readback": self.scratch.readback}
 
     def _apply_change(self, args: dict) -> dict:
-        task, change = args.get("task", ""), args.get("change")
+        # Apply ONLY the proposal that was read back (self.scratch.proposed) — never a change the
+        # model re-sends in args. A model that echoes a different `change` here (a wrong file or
+        # index) would otherwise fail to apply after a valid read-back; the go-ahead applies what
+        # the human just heard, nothing else.
+        change = self.scratch.proposed
+        if change is None:
+            return {"error": "no change has been proposed yet — call propose_change and read it "
+                             "back first, then apply."}
+        task = args.get("task") or (self.scratch.current or {}).get("task", "")
         targets = _shared_tasks(self.dataset_dir, task) if args.get("always") else [task]
         for name in targets:  # refuse an unvalidated/malformed change before writing any file
             changes.validate(self.dataset_dir / "tasks" / name, change)
