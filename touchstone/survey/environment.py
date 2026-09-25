@@ -15,6 +15,7 @@ One image serves every task (`task.toml` points at it via `[environment].docker_
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import re
 import shutil
 import subprocess
@@ -134,8 +135,20 @@ def _resolve_deps(repo: Path) -> tuple[list[str] | None, str]:
     return keep, "ok"
 
 
+def _touchstone_deps() -> list[str]:
+    """touchstone's own runtime deps, so `import touchstone` resolves inside the image (it is
+    vendored on PYTHONPATH, not pip-installed, so its declared deps are not pulled otherwise)."""
+    try:
+        reqs = importlib.metadata.requires("touchstone-bench")
+    except importlib.metadata.PackageNotFoundError:
+        reqs = None
+    if not reqs:  # running from source without installed metadata: read this repo's pyproject
+        reqs = _pyproject_deps(Path(touchstone.__file__).resolve().parent.parent) or []
+    return [r for r in reqs if ";" not in r]  # drop extras / environment markers
+
+
 def _requirements_text(deps: list[str]) -> str:
-    merged = list(dict.fromkeys([*deps, *_SIM_RUNTIME]))
+    merged = list(dict.fromkeys([*deps, *_SIM_RUNTIME, *_touchstone_deps()]))
     return "\n".join(merged) + "\n"
 
 

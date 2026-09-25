@@ -1,5 +1,6 @@
 """Snapshot the customer repo into a Harbor environment image directory."""
 
+import re
 import subprocess
 
 from touchstone.survey.environment import build_environment
@@ -69,6 +70,12 @@ def test_environment_snapshot_and_deps(tmp_path):
     assert "httpx>=0.27" in reqs and "openai>=1.40" in reqs
     assert "git+ssh" not in reqs
     assert "fastapi" in reqs and "uvicorn" in reqs
+    # touchstone's own runtime deps must be present (it is vendored, not pip-installed)
+    from touchstone.survey.environment import _touchstone_deps
+    pkgs = {re.split(r"[<>=!~ ]", d, maxsplit=1)[0] for d in _touchstone_deps()}
+    assert {"typer", "jsonschema", "simpleeval", "websockets"} <= pkgs
+    for pkg in pkgs:
+        assert pkg in reqs
 
     assert (env / "Dockerfile").read_text().startswith("FROM python:3.12-slim")
     assert result["deps_ok"] is True

@@ -7,6 +7,8 @@ a module may build its HTTP client at import time. Output is a JSON list on stdo
 
 Spec: {"base_url_env": str|null, "base_url": str, "tools": {name: "module:function"},
        "calls": [{"tool": name, "arguments": <obj|value>}]}
+`base_urls` ({env: url}) may point several services at their simulators at once; it is applied before
+the single `base_url_env`/`base_url` pair (both are optional).
 """
 
 from __future__ import annotations
@@ -15,6 +17,15 @@ import importlib
 import json
 import os
 import sys
+
+
+def _apply_base_urls(spec: dict) -> None:
+    for env, url in (spec.get("base_urls") or {}).items():
+        if env:
+            os.environ[env] = url
+    env = spec.get("base_url_env")
+    if env:
+        os.environ[env] = spec["base_url"]
 
 
 def _load(import_path: str):
