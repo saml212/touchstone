@@ -35,7 +35,7 @@ class ChangeError(ValueError):
 # ---- rewardkit criteria .py files ------------------------------------------
 
 
-def _parse_criteria(path: Path) -> list[str]:
+def parse_criteria(path: Path) -> list[str]:
     """The ``rk.<fn>(...)`` call sources in a rewardkit criteria file, or refuse a hand edit."""
     source = path.read_text(encoding="utf-8")
     try:
@@ -87,7 +87,7 @@ def _index(criterion, count: int) -> int:
 
 
 def _apply_py(path: Path, op: str, criterion, params: dict | None) -> None:
-    calls = _parse_criteria(path)
+    calls = parse_criteria(path)
     if op == "add":
         calls.append(_render_call(params or {}))
     elif op == "edit":
