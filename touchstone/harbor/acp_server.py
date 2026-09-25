@@ -131,7 +131,9 @@ class TouchstoneACPAgent:
 
     async def new_session(self, cwd, mcp_servers=None, **kwargs):
         from acp.schema import NewSessionResponse
-        self.session = build_session()
+        # build_session starts the simulators (a bounded but blocking health poll) and builds the
+        # provider; run it off the event loop so the ACP handshake stays responsive.
+        self.session = await asyncio.to_thread(build_session)
         return NewSessionResponse(session_id="touchstone")
 
     async def prompt(self, session_id, prompt, **kwargs):

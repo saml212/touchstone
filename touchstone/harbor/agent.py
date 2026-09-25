@@ -48,6 +48,9 @@ PACKAGED_OUTPUT = "/app/output.json"
 # The agent dir is uploaded here — NOT /app/agent, which would shadow a customer module named
 # `agent` once /app is on the path. run.sh runs its sibling entry.py by location.
 AGENT_SANDBOX = "/app/.touchstone_agent"
+# The survey's environment image puts the touchstone package here (PYTHONPATH=/app/_touchstone).
+# It is baked at survey time, so it predates the ACP server; acp_install overlays the running one.
+TOUCHSTONE_SANDBOX = "/app/_touchstone/touchstone"
 
 
 @dataclass
@@ -144,6 +147,11 @@ class TouchstoneAgent(*_BASES):
             "uv pip install --system --quiet agent-client-protocol httpx 2>/dev/null || "
             "pip install --quiet agent-client-protocol httpx")
         await environment.upload_dir(_host_agent_dir(), AGENT_SANDBOX)
+        # Overlay the running touchstone over the image's survey-time copy, which predates the ACP
+        # server module, so `python -m touchstone.harbor.acp_server` resolves in the sandbox.
+        import touchstone
+        await environment.upload_dir(str(Path(touchstone.__file__).resolve().parent),
+                                     TOUCHSTONE_SANDBOX)
 
     def acp_env(self) -> dict:
         var = keys.provider_key_var(self.model_name)
