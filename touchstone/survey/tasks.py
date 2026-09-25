@@ -17,6 +17,7 @@ from pathlib import Path
 from .. import store
 from ..harbor import rewardkit
 from ..harbor.atif import to_atif
+from ..messages import text_of
 from . import descriptions
 from .criteria import (
     capture_effect,
@@ -72,6 +73,40 @@ def _scrub_calls(calls: list[ToolEvent], scrub: Scrubber) -> list[ToolEvent]:
                       output=scrub.scrub(c.output), episode=c.episode) for c in calls]
 
 
+def _user_texts(span) -> list[str]:
+    return [text_of(msg) for msg in (span.input or {}).get("messages", [])
+            if msg.get("role") == "user" and text_of(msg)]
+
+
+def _user_turns(conn, ep_id: str, scrub: Scrubber) -> list[str]:
+    """Every distinct user turn in the episode, in order, scrubbed — what the simulated user knows
+    and can tell the agent. Deduped by raw text so an accumulating message history counts each turn
+    once. Nothing here is invented: the turns are exactly what the recorded user said."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for span in store.list_spans(conn, ep_id):
+        if span.kind != "model":
+            continue
+        for raw in _user_texts(span):
+            if raw not in seen:
+                seen.add(raw)
+                out.append(scrub.text(raw))
+    return out
+
+
+def _persona_with_facts(persona: str, user_turns: list[str], multi_turn: bool) -> str:
+    """Append the "facts you know" list to a multi-turn task's persona, so the simulated user can
+    answer the agent's questions from the real request without volunteering everything at once. A
+    single-turn task keeps its persona byte-for-byte (no simulated user runs it)."""
+    base = persona.strip() + "\n"
+    if not multi_turn or not user_turns:
+        return base
+    bullets = "\n".join(f"- {t}" for t in user_turns)
+    return (base + "\n## What you know (share these as the assistant asks)\n\n"
+            "These are the details from your real request. Reveal them when the assistant asks for "
+            "them; don't dump them all at once.\n\n" + bullets + "\n")
+
+
 def _answer_text(conn, ep_id: str, scrub: Scrubber) -> str:
     text = ""
     for span in store.list_spans(conn, ep_id):
@@ -102,7 +137,8 @@ def _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub,
     answer = _answer_text(conn, ep_id, scrub)
     atomic_write(task_dir / "instruction.md",
                  _canary(task_dir.name) + text["instruction"].strip() + "\n")
-    atomic_write(task_dir / "persona.md", text["persona"].strip() + "\n")
+    atomic_write(task_dir / "persona.md",
+                 _persona_with_facts(text["persona"], ctx["user_turns"], ctx["turns"] > 1))
     # Every task's environment is the one shared image, layered as a trivial FROM: Harbor requires
     # an environment/ dir to discover the task, and the build is a cache hit on the base. The
     # verifier runs in a separate env built from tests/Dockerfile (the tests baked in), so a review
@@ -119,8 +155,8 @@ def _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub,
     # task.toml LAST: `write_tasks` reuses a task iff its task.toml exists, so writing it after all
     # other files makes its atomic appearance a completeness sentinel — an interrupted build (Ctrl-C
     # between files) leaves no task.toml, so the next run rebuilds instead of reusing a partial dir.
-    _write_task_toml(task_dir,
-                    _task_toml(task_dir.name, dataset, group, ep_id, calls, ctx["services"]))
+    _write_task_toml(task_dir, _task_toml(task_dir.name, dataset, group, ep_id, calls,
+                                          ctx["services"], ctx["turns"]))
 
 
 # ---- orchestration ---------------------------------------------------------
@@ -158,9 +194,10 @@ def _build_task(task_dir, name, dataset, group, ep_id, conn, map_data, env_resul
         episode=_episode_context(calls, _answer_text(conn, ep_id, scrub))))
     state, tool = _apply_authored(state, tool, text.get("criteria"))
     state = _knowable_state(state, literals, text)
+    user_turns = _user_turns(conn, ep_id, scrub)
     ctx = {"image_tag": env_result["image_tag"], "tools": tools, "services": services,
            "ports": env_result["ports"], "base_url_envs": env_result["base_url_envs"],
-           "state": state, "tool": tool}
+           "state": state, "tool": tool, "turns": len(user_turns), "user_turns": user_turns}
     _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub, ctx)
     return {"written": name}
 

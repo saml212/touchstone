@@ -300,6 +300,50 @@ def test_task_solution_replays_recorded_calls(tmp_path, conn):
     assert traj["steps"]
 
 
+def _paint_episode_multiturn(conn, ep_id="paint-mt"):
+    """A conversational paint episode: the user answers across two turns (asks, then names the
+    colour), so the task is multi-turn."""
+    ep = store.insert_episode(conn, store.Episode(id=ep_id, name=ep_id, outcome_label="resolved",
+                                                  outcome_score=1.0))
+    store.insert_span(conn, _model_span(ep.id, user="please repaint widget w1", tool="get_widget",
+                                        args=json.dumps({"widget_id": "w1"}), call_cid="c1"))
+    store.insert_span(conn, _model_span(ep.id, user="make it blue", result_cid="c1",
+                                        result=json.dumps({"id": "w1", "color": "red"}),
+                                        tool="paint",
+                                        args=json.dumps({"widget_id": "w1", "color": "blue"}),
+                                        call_cid="c2"))
+    store.insert_span(conn, _model_span(
+        ep.id, result_cid="c2",
+        result=json.dumps({"ok": True, "id": "w1", "color": "blue"}),
+        tool="add_note", args=json.dumps({"widget_id": "w1", "text": "painted"}), call_cid="c3"))
+    store.insert_span(conn, _model_span(ep.id, result_cid="c3", result=json.dumps({"id": 1}),
+                                        content="Your widget is now blue."))
+    return ep
+
+
+def test_multiturn_task_records_turn_count_and_facts(tmp_path, conn):
+    import tomllib
+    _paint_episode_multiturn(conn)
+    text = json.dumps({"instruction": "Please recolour my widget w1.", "persona": "Person 1."})
+    repo, _ = _run(tmp_path, conn, _groups("paint-mt"), responses=[text])
+    task = repo / "touchstone" / "tasks" / "recolour-1"
+    ts = tomllib.loads((task / "task.toml").read_text())["metadata"]["touchstone"]
+    assert ts["turns"] == 2 and ts["multi_turn"] is True
+    persona = (task / "persona.md").read_text()
+    assert "What you know" in persona
+    assert "please repaint widget w1" in persona and "make it blue" in persona
+
+
+def test_single_turn_task_persona_has_no_facts_block(tmp_path, conn):
+    import tomllib
+    _paint_episode(conn)
+    repo, _ = _run(tmp_path, conn, _groups("paint1"))
+    task = repo / "touchstone" / "tasks" / "recolour-1"
+    ts = tomllib.loads((task / "task.toml").read_text())["metadata"]["touchstone"]
+    assert ts["turns"] == 1 and ts["multi_turn"] is False
+    assert "What you know" not in (task / "persona.md").read_text()
+
+
 def test_task_toml_provenance(tmp_path, conn):
     import tomllib
     _paint_episode(conn)

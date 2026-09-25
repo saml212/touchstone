@@ -118,7 +118,7 @@ def _verifier_artifacts(services: list[dict]) -> list[str]:
 
 
 def _task_toml(name: str, dataset: str, group: dict, ep_id: str, calls: list[ToolEvent],
-              services: list[dict]) -> dict:
+              services: list[dict], turns: int = 1) -> dict:
     # [task] (a registry package ref) is intentionally omitted: it is optional for local tasks and
     # its name must be exactly org/name, which a per-task slug is not. Provenance lives in metadata.
     # environment_mode = "separate" grades in a fresh env against the collected artifacts, so
@@ -131,6 +131,7 @@ def _task_toml(name: str, dataset: str, group: dict, ep_id: str, calls: list[Too
         "schema_version": "1.3",
         "metadata": {"touchstone": {
             "dataset": dataset, "episodes": [ep_id], "job": group["label"], "tools": tools,
+            "turns": turns, "multi_turn": turns > 1,
             "created_at": datetime.now(UTC).isoformat(), "version": _touchstone_version()}},
         "artifacts": _verifier_artifacts(services),
         "environment": {"network_mode": "public", "build_timeout_sec": 600.0},
