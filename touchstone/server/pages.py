@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ..harbor import jobs as harbor_jobs
 from ..review import trials as trials_mod
-from ..review.agent import (
+from ..review.facts import (
     _baseline_counts,
     _job_labels,
     _join,

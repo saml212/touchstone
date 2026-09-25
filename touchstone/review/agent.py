@@ -18,14 +18,21 @@ never names files unless asked.
 from __future__ import annotations
 
 import json
-import tomllib
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from .. import store
 from ..harbor import run as run_mod
 from ..interview import rooms
 from . import changes, regrade, trials
+from .facts import (
+    _baseline_counts,
+    _editable,
+    _job_labels,
+    _join,
+    _shared_tasks,
+    _task_count,
+)
+from .prompt import SYSTEM, TOOLS
 
 MAX_STEPS = 6
 
@@ -40,59 +47,6 @@ class AgentTurn:
 
     def to_dict(self) -> dict:
         return {"say": self.say, "draft": self.draft, "commit": self.commit}
-
-TOOLS = [
-    {"type": "function", "function": {
-        "name": "list_trials",
-        "description": "List trials to review in priority order. filter: unsure|disagree|"
-                       "unreviewed|needs_review|all.",
-        "parameters": {"type": "object", "properties": {"filter": {"type": "string"}}}}},
-    {"type": "function", "function": {
-        "name": "read_trial",
-        "description": "Read one trial: instruction, the trajectory in plain words, and each "
-                       "criterion's description and score. Sets it as the current trial.",
-        "parameters": {"type": "object",
-                       "properties": {"task": {"type": "string"}, "trial": {"type": "string"}},
-                       "required": ["task", "trial"]}}},
-    {"type": "function", "function": {
-        "name": "record_review",
-        "description": "Record whether the human agreed with the verifier on this trial.",
-        "parameters": {"type": "object", "properties": {
-            "task": {"type": "string"}, "trial": {"type": "string"},
-            "verdict": {"type": "string", "description": "agree or disagree"},
-            "note": {"type": "string"}}, "required": ["task", "trial", "verdict"]}}},
-    {"type": "function", "function": {
-        "name": "propose_change",
-        "description": "Read back a criterion change (edit/add/remove a check, a weight, a judge "
-                       "line, or instruction/persona wording) without writing it. `change` is one "
-                       "object or a list of them.",
-        "parameters": {"type": "object",
-                       "properties": {"task": {"type": "string"}, "change": {}},
-                       "required": ["task", "change"]}}},
-    {"type": "function", "function": {
-        "name": "apply_change",
-        "description": "Write the change, regrade the trial's job, and report the new reward and "
-                       "any other trials that moved. always=true applies it to every task with the "
-                       "same job.",
-        "parameters": {"type": "object", "properties": {
-            "task": {"type": "string"}, "change": {},
-            "always": {"type": "boolean"}}, "required": ["task", "change"]}}},
-]
-
-_SYSTEM = (
-    "You are Touchstone's review agent. A product person is checking their AI agent's benchmark "
-    "with you, by voice or text. Walk one trial at a time: call list_trials, then read_trial. When "
-    "you present a trial, FIRST state the facts verbatim from read_trial: the verifier reward as a "
-    "percentage, then each criterion with whether it passed or failed. ONLY THEN gloss what "
-    "the user wanted and what the agent did in plain words, and ask whether they agree it passed. "
-    "Never claim a pass or a fail the scores do not show; when the trajectory is empty, say the "
-    "agent did nothing. On agree, call record_review (verdict 'agree'); on disagree, record_review "
-    "(verdict 'disagree'), ask what should have counted, call propose_change and read it back, and "
-    "only after they confirm call apply_change (always=true if the rule holds for every task "
-    "like it); then say the new reward and anything else that moved. Speak in plain product "
-    "language. Never mention file names, tables, or JSON unless they ask. Reply with your spoken "
-    "message when you are not calling a tool."
-)
 
 
 @dataclass
@@ -168,7 +122,7 @@ class ReviewAgent:
         return f"{_grounding_line(self._presented)}\n\n{say}"
 
     def _run_loop(self, history: list[dict]) -> str:
-        messages = [{"role": "system", "content": _SYSTEM}, *_as_messages(history)]
+        messages = [{"role": "system", "content": SYSTEM}, *_as_messages(history)]
         say = "Let me look at that."
         for _ in range(MAX_STEPS):
             reply = self.provider.chat(messages, TOOLS)
@@ -356,88 +310,4 @@ def _as_messages(history: list[dict]) -> list[dict]:
         who = m.get("speaker", "")
         text = m.get("text", "")
         out.append({"role": role, "content": f"{who}: {text}" if role == "user" else text})
-    return out
-
-
-def _read_toml(path: Path) -> dict:
-    try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return {}
-
-
-def _job_labels(dataset_dir: Path) -> list[str]:
-    groups = dataset_dir / "groups.json"
-    if groups.is_file():
-        try:
-            data = json.loads(groups.read_text(encoding="utf-8"))
-            return [g["label"] for g in data.get("groups", []) if g.get("label")]
-        except (json.JSONDecodeError, OSError, KeyError):
-            pass
-    return _labels_from_tasks(dataset_dir)
-
-
-def _labels_from_tasks(dataset_dir: Path) -> list[str]:
-    labels: list[str] = []
-    for task_dir in sorted((dataset_dir / "tasks").glob("*")):
-        job = _touchstone_meta(task_dir).get("job")
-        if job and job not in labels:
-            labels.append(job)
-    return labels
-
-
-def _touchstone_meta(task_dir: Path) -> dict:
-    return _read_toml(task_dir / "task.toml").get("metadata", {}).get("touchstone", {})
-
-
-def _baseline_counts(dataset_dir: Path) -> dict | None:
-    baseline = dataset_dir / "baseline.json"
-    if not baseline.is_file():
-        return None
-    try:
-        data = json.loads(baseline.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-    rates = data.get("pass_rates") or {}
-    return {"tasks": len(rates), "passed": len(data.get("passed", []))}
-
-
-def _task_count(dataset_dir: Path) -> int:
-    tasks = dataset_dir / "tasks"
-    return sum(1 for d in tasks.glob("*") if (d / "task.toml").is_file()) if tasks.is_dir() else 0
-
-
-def _join(items: list[str]) -> str:
-    items = [i.lower() for i in items]
-    if len(items) <= 1:
-        return items[0] if items else ""
-    return ", ".join(items[:-1]) + f" and {items[-1]}"
-
-
-def _shared_tasks(dataset_dir: Path, task: str) -> list[str]:
-    """Every task with the same job-to-be-done label as `task` (for an 'always' change)."""
-    job = _touchstone_meta(dataset_dir / "tasks" / task).get("job")
-    if not job:
-        return [task]
-    out = [d.name for d in sorted((dataset_dir / "tasks").glob("*"))
-           if _touchstone_meta(d).get("job") == job]
-    return out or [task]
-
-
-def _editable(task_dir: Path) -> list[dict]:
-    """The criteria the room can change, keyed by file + 1-based index (or reward dimension)."""
-    out: list[dict] = []
-    tests = task_dir / "tests"
-    for py in sorted(tests.rglob("*.py")):
-        try:
-            calls = changes.parse_criteria(py)
-        except changes.ChangeError:
-            continue
-        rel = py.relative_to(task_dir).as_posix()
-        out += [{"file": rel, "index": i, "criterion": src} for i, src in enumerate(calls, 1)]
-    reward = tests / "reward.toml"
-    if reward.is_file():
-        weights = _read_toml(reward).get("reward", [{}])[0].get("weights", {})
-        out += [{"file": "tests/reward.toml", "dimension": dim, "weight": w}
-                for dim, w in weights.items()]
     return out

@@ -24,7 +24,6 @@ import websockets
 from .. import store
 from ..config import Settings
 from ..llm.keychain import secret
-from ..review.agent import ReviewAgent
 from . import rooms
 from .rooms import Event, Hub
 
@@ -208,6 +207,8 @@ class RealtimeBridge:
                 await self._ws.close()
 
     def _instructions(self) -> str:
+        from ..review.agent import ReviewAgent  # lazy: review depends on interview, not the reverse
+
         conn = store.connect(self.settings.db_path)
         try:
             room = store.get_room(conn, self.room_id)
