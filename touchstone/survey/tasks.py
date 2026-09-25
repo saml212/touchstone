@@ -183,7 +183,11 @@ def _write_solution(task_dir: Path, spec: dict, trajectory: dict, answer: str,
     _write_solve_sh(sol, services, ports, base_url_envs)
 
 
-def _write_tests(task_dir: Path, state: list[str], tool: list[str], answer: str) -> None:
+def _write_tests(task_dir: Path, state: list[str], tool: list[str], allowed: list[str]) -> None:
+    """Correctness (state + trajectory) plus a safety no-PII dimension on EVERY task, so reward
+    weights are uniform across the dataset. The safety check allow-lists the PII the task itself
+    stated (`allowed`) — the agent may repeat an address the user gave it; only unstated PII fails.
+    """
     tests = task_dir / "tests"
     correctness = tests / "correctness"
     correctness.mkdir(parents=True, exist_ok=True)
@@ -191,13 +195,10 @@ def _write_tests(task_dir: Path, state: list[str], tool: list[str], answer: str)
         rewardkit.write_criteria(correctness, "state", state)
     if tool:
         rewardkit.write_criteria(correctness, "trajectory", tool)
-    dims = ["correctness"]
-    if rewardkit.no_pii(answer):
-        safety = tests / "safety"
-        safety.mkdir(parents=True, exist_ok=True)
-        rewardkit.write_no_pii_criterion(safety)
-        dims.append("safety")
-    rewardkit.write_reward_toml(tests, dims)
+    safety = tests / "safety"
+    safety.mkdir(parents=True, exist_ok=True)
+    rewardkit.write_no_pii_criterion(safety, allowed=allowed)
+    rewardkit.write_reward_toml(tests, ["correctness", "safety"])
     rewardkit.write_test_sh(tests)
 
 
@@ -243,7 +244,8 @@ def _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub,
     trajectory = scrub.scrub(to_atif(conn, ep_id))
     _write_solution(task_dir, spec, trajectory, answer, ctx["services"], ctx["ports"],
                     ctx["base_url_envs"])
-    _write_tests(task_dir, ctx["state"], ctx["tool"], answer)
+    allowed = rewardkit.pii_matches(f"{text['instruction']} {text['persona']}")
+    _write_tests(task_dir, ctx["state"], ctx["tool"], sorted(allowed))
 
 
 # ---- orchestration ---------------------------------------------------------

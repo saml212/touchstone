@@ -272,6 +272,16 @@ def test_task_no_pii_safety_when_clean(tmp_path, conn):
     assert (task / "tests" / "safety" / "no_pii.py").exists()
 
 
+def test_task_safety_allow_lists_instruction_pii(tmp_path, conn):
+    # an address the instruction gives the agent is allow-listed, so echoing it is not a leak
+    _paint_episode(conn)
+    text = json.dumps({"instruction": "Recolour widget w1 and email me at me@shop.invalid.",
+                       "persona": "Person 1."})
+    repo, _ = _run(tmp_path, conn, _groups("paint1"), responses=[text])
+    safety = repo / "touchstone" / "tasks" / "recolour-1" / "tests" / "safety" / "no_pii.py"
+    assert "me@shop.invalid" in safety.read_text()  # in the allow-list
+
+
 def test_task_scrubs_pii_in_solution(tmp_path, conn):
     ep = store.insert_episode(conn, store.Episode(id="mail1", name="mail1",
                                                   outcome_label="resolved", outcome_score=1.0))
@@ -290,8 +300,10 @@ def test_task_scrubs_pii_in_solution(tmp_path, conn):
     spec = (sol / "spec.json").read_text()
     assert "jane@corp.com" not in spec
     assert "example.invalid" in spec
-    # answer had an email -> no_pii safety criterion omitted (would fail the oracle)
-    assert not (repo / "touchstone" / "tasks" / "recolour-1" / "tests" / "safety").exists()
+    # safety runs on every task now; the instruction states no address, so the allow-list is empty
+    safety = repo / "touchstone" / "tasks" / "recolour-1" / "tests" / "safety" / "no_pii.py"
+    assert safety.exists()
+    assert "_ALLOWED = frozenset([\n\n])" in safety.read_text()  # nothing allow-listed
 
 
 def test_task_idempotent_then_force(tmp_path, conn):

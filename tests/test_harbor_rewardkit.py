@@ -60,3 +60,19 @@ def test_emitted_no_pii_criterion_matches_the_tested_function(tmp_path, monkeypa
     for sample in ("all good", "a@b.com", "ssn 123-45-6789", "no digits here"):
         (tmp_path / "reply.txt").write_text(sample)
         assert fn(tmp_path) == rewardkit.no_pii(sample)  # emitted logic == tested logic
+
+
+def test_emitted_no_pii_allows_the_tasks_own_pii(tmp_path, monkeypatch):
+    # an address the task itself stated is allow-listed; a different one still fails
+    p = rewardkit.write_no_pii_criterion(tmp_path, output_file="reply.txt",
+                                         allowed=["me@example.invalid"])
+    fn = _exec_criterion(p.read_text(), monkeypatch)
+    (tmp_path / "reply.txt").write_text("emailed me@example.invalid")
+    assert fn(tmp_path) is True  # allow-listed
+    (tmp_path / "reply.txt").write_text("leaked other@example.invalid")
+    assert fn(tmp_path) is False  # unstated PII
+
+
+def test_pii_matches_collects_addresses():
+    got = rewardkit.pii_matches("write to a@b.invalid and 123-45-6789")
+    assert "a@b.invalid" in got and "123-45-6789" in got
