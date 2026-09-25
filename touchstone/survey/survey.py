@@ -120,7 +120,8 @@ def _package_agent(repo, conn, map_data, env_result, prov, out, settings, force)
     return build_package(repo, conn, map_data, env_result, prov, out, settings, force)
 
 
-def _gate_and_baseline(repo, env_result, settings, force, skip_gate, skip_baseline):
+def _gate_and_baseline(repo, env_result, settings, force, skip_gate, skip_baseline,
+                       rebaseline=False):
     if env_result is None or skip_gate:
         return None, None
     _log("gate: running oracle and nop over the tasks")
@@ -131,7 +132,7 @@ def _gate_and_baseline(repo, env_result, settings, force, skip_gate, skip_baseli
         _log("baseline: skipped — no tasks passed the gate")
         return gate, None
     _log("baseline: running the agent under test over the gated tasks")
-    baseline = run_baseline(repo, env_result, settings, force, skip_baseline)
+    baseline = run_baseline(repo, env_result, settings, force or rebaseline, skip_baseline)
     return gate, baseline
 
 
@@ -150,7 +151,8 @@ def _dataset_name(repo: Path, settings: Settings) -> str:
 
 def run_survey(repo: str | Path, force: bool = False, provider: str | None = None,
                model: str | None = None, settings: Settings | None = None,
-               skip_gate: bool = False, skip_baseline: bool = False) -> str:
+               skip_gate: bool = False, skip_baseline: bool = False,
+               rebaseline: bool = False) -> str:
     settings = settings or load_settings()
     repo = Path(repo).expanduser().resolve()
     out = repo / "touchstone"
@@ -167,7 +169,7 @@ def run_survey(repo: str | Path, force: bool = False, provider: str | None = Non
             repo, conn, map_data, out, events, scrub, prov, settings, force, invoke)
         package = _package_agent(repo, conn, map_data, env_result, prov, out, settings, force)
         gate, baseline = _gate_and_baseline(
-            repo, env_result, settings, force, skip_gate, skip_baseline)
+            repo, env_result, settings, force, skip_gate, skip_baseline, rebaseline)
         Dataset(name=_dataset_name(repo, settings)).write(out)
         _log("report: writing report.md")
         atomic_write(out / "report.md",

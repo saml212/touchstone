@@ -9,7 +9,8 @@ runner = CliRunner()
 def test_survey_command_echoes_summary(monkeypatch):
     seen = {}
 
-    def fake(repo, force=False, provider=None, model=None, skip_gate=False, skip_baseline=False):
+    def fake(repo, force=False, provider=None, model=None, skip_gate=False, skip_baseline=False,
+             rebaseline=False):
         seen.update(repo=repo, force=force, provider=provider, model=model, skip_gate=skip_gate,
                     skip_baseline=skip_baseline)
         return "Mapped 4 tools, 1 service."
