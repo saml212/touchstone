@@ -9,6 +9,18 @@ required keys.
 from __future__ import annotations
 
 import ast
+import re
+
+# Auth-shaped env var names (KEY/TOKEN/SECRET/PASSWORD). A tool often needs one to construct its
+# client, and it fails when unset — but the value is irrelevant to a simulator (which ignores auth),
+# so replay sets a harmless placeholder. Restricted to auth suffixes so a numeric/URL env is never
+# clobbered. Matches direct reads and custom wrappers (`_require_env("FLIGHT_API_KEY")`) alike.
+_AUTH_ENV = re.compile(r"\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD))\b")
+
+
+def auth_env_names(source: str) -> set[str]:
+    """Auth-shaped environment variable names named anywhere in `source`."""
+    return set(_AUTH_ENV.findall(source))
 
 
 def _const_str(node) -> str | None:

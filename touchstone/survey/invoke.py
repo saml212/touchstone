@@ -46,7 +46,8 @@ invoke.py must:
   them at a simulator. Return whatever the tool returns.
 - raise KeyError (or ValueError) if `name` is unknown. Do NOT swallow tool errors or read argv or
   stdin. The repo root is already on sys.path, so importing the customer's modules works.
-Return only the contents of invoke.py.'''
+API-key/token env vars may hold a placeholder (the simulator ignores auth); construct the client
+anyway and never require a real secret. Return only the contents of invoke.py.'''
 
 
 def _map_digest(map_data: dict) -> str:

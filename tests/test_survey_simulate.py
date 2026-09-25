@@ -319,3 +319,31 @@ def test_routes_include_base_path_only_for_constant_base_url_service():
     assert "GET /v1/current.json" in _routes_text(const)  # shim keeps the /v1 base path
     assert "GET /orders/{id}" in _routes_text(env)  # env override replaces the whole base
     assert "/v1" not in _routes_text(env)
+
+
+def test_auth_env_names_finds_key_token_secret():
+    from touchstone.survey.tool_reads import auth_env_names
+    src = ('_require_env("FLIGHT_API_KEY")\nos.getenv("OPENAI_API_KEY")\nx = "STRIPE_SECRET_KEY"\n'
+           'print("GITHUB_TOKEN", "DB_PASSWORD")\ny = os.environ["BASE_URL"]')
+    names = auth_env_names(src)
+    assert names == {"FLIGHT_API_KEY", "OPENAI_API_KEY", "STRIPE_SECRET_KEY", "GITHUB_TOKEN",
+                     "DB_PASSWORD"}
+    assert "BASE_URL" not in names  # not auth-shaped, never clobbered
+
+
+def test_replay_sets_auth_env_placeholder_from_repo(tmp_path, monkeypatch):
+    # A tool that must read an API key to build its client works under replay even with no real key:
+    # replay sets a placeholder for the auth-shaped env it finds in the repo.
+    import os
+
+    from touchstone.survey import replay as replay_mod
+    (tmp_path / "svc.py").write_text(
+        'import os\n\n\ndef ping(x):\n    return {"key": os.environ["SVC_API_KEY"], "x": x}\n',
+        encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delenv("SVC_API_KEY", raising=False)
+    out = replay_mod.replay({"tools": {"ping": "svc:ping"}, "calls": [{"tool": "ping",
+                                                                       "arguments": {"x": 1}}]})
+    assert out[0]["got"] == {"key": "touchstone-placeholder", "x": 1}
+    assert os.environ.get("SVC_API_KEY") == "touchstone-placeholder"

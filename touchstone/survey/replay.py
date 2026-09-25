@@ -28,6 +28,9 @@ import importlib.util
 import json
 import os
 import sys
+from pathlib import Path
+
+_SKIP_DIRS = {".venv", ".git", "__pycache__", "touchstone", ".touchstone", "node_modules"}
 
 
 def _apply_base_urls(spec: dict) -> None:
@@ -48,6 +51,24 @@ def _apply_simulators(spec: dict) -> None:
     from .netshim import install_from_env
 
     install_from_env()
+
+
+def _apply_auth_env() -> None:
+    """Set a harmless placeholder for every auth-shaped env var named in the repo (cwd), so a tool
+    that must construct a client from an API key does not fail when the real secret is absent — the
+    simulator ignores auth. Never overrides a value the caller already set."""
+    from .tool_reads import auth_env_names
+
+    names: set = set()
+    for path in Path(".").rglob("*.py"):
+        if any(part in _SKIP_DIRS for part in path.parts):
+            continue
+        try:
+            names |= auth_env_names(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    for name in names:
+        os.environ.setdefault(name, "touchstone-placeholder")
 
 
 def _load(import_path: str):
@@ -89,6 +110,7 @@ def _call(name: str, arguments, tools: dict, invoke):
 def replay(spec: dict) -> list[dict]:
     _apply_base_urls(spec)
     _apply_simulators(spec)
+    _apply_auth_env()
     tools = spec["tools"]
     invoke = _load_invoke(spec.get("invoke"))
     return [{"tool": call["tool"],
@@ -121,10 +143,12 @@ def main() -> None:
     argv = sys.argv[1:]
     if argv and argv[0] == "--one":
         install_from_env()  # honour TOUCHSTONE_SIMULATORS the caller set for a constant-host tool
+        _apply_auth_env()
         json.dump(replay_one(argv[1], argv[2] if len(argv) > 2 else ""), sys.stdout, default=str)
         return
     if argv and argv[0] == "--invoke-one":
         install_from_env()
+        _apply_auth_env()
         json.dump(invoke_one(argv[1], argv[2], argv[3] if len(argv) > 3 else ""),
                   sys.stdout, default=str)
         return
