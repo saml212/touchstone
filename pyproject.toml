@@ -34,7 +34,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
-    "complexipy>=1.0",  # cognitive-complexity gate: every function in touchstone/ must be <= 8
+    "complexipy==5.5.0",  # cognitive-complexity gate (<= 8/function); pinned — 8.x rescored higher
     "openai>=1.40",  # real-SDK live smoke test (tests/test_live_smoke.py, TOUCHSTONE_LIVE=1)
 ]
 
