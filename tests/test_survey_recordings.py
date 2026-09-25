@@ -51,3 +51,24 @@ def test_non_json_arguments_kept_raw(conn):
     events = tool_events(conn)
     assert events[0].arguments == "just a string"
     assert events[0].output is None  # no result recorded
+
+
+def test_id_less_tool_result_pairs_by_name(conn):
+    # The deprecated OpenAI function-calling API returns the result as role="function" with a name
+    # but no id, and does not re-send the assistant call in the follow-up messages. After capture
+    # canonicalizes it (function -> tool), the result is an id-less tool message: it must still pair
+    # to its call by tool name, not be dropped (which left the tool's output null before this fix).
+    ep = store.insert_episode(conn, store.Episode(name="ep-fn"))
+    store.insert_span(conn, _model_span(
+        ep.id, [{"role": "user", "content": "weather in Paris?"}],
+        [{"id": "c1", "name": "get_today_weather", "arguments": '{"location": "Paris"}'}],
+    ))
+    store.insert_span(conn, _model_span(
+        ep.id,
+        [{"role": "user", "content": "weather in Paris?"},
+         {"role": "tool", "name": "get_today_weather", "content": '{"temperature": 12}'}],
+        [], content="It is 12C.",
+    ))
+    events = tool_events(conn)
+    assert [e.tool for e in events] == ["get_today_weather"]
+    assert events[0].output == {"temperature": 12}
