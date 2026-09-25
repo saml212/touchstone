@@ -38,7 +38,7 @@ def _next_step() -> str:
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context) -> None:
-    """Touchstone — prove a cheaper model is good enough before you switch."""
+    """Touchstone — turn your running agent into a benchmark, review it, train on it."""
     if ctx.invoked_subcommand is not None:
         return
     typer.echo("Touchstone — the loop:")
@@ -180,7 +180,7 @@ def serve(
     host: str = typer.Option("127.0.0.1", help="Bind host."),
     port: int = typer.Option(8765, help="Bind port."),
 ) -> None:
-    """Run the local interview + review server."""
+    """Run the local UI: overview, tasks, trials, review room, train."""
     import logging
 
     import uvicorn
