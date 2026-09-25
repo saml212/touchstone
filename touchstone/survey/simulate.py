@@ -169,9 +169,9 @@ _LOOPBACK = "127.0.0.1"
 
 def _force_loopback(app_source: str) -> str:
     """A generated simulator must bind loopback only: during fidelity/capture it runs on the host as
-    a plain subprocess, so a model-emitted `host="0.0.0.0"` would expose the seeded service on every
-    interface. Rewrite any bind-all address to 127.0.0.1 — the literal 0.0.0.0 and a quoted "::"
-    have no other use in this generated FastAPI app (a `[::2]` slice is unquoted, so it survives)."""
+    a plain subprocess, so a model-emitted `host="0.0.0.0"` would expose the seeded service on the
+    LAN. Rewrite any bind-all address to 127.0.0.1 — the literal 0.0.0.0 and a quoted "::" have no
+    other use in this generated FastAPI app (a `[::2]` slice is unquoted, so it survives)."""
     src = app_source.replace("0.0.0.0", _LOOPBACK)
     return re.sub(r"""(host\s*=\s*)(['"])::\2""", rf"\1\g<2>{_LOOPBACK}\2", src)
 
