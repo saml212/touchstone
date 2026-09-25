@@ -37,15 +37,29 @@ def test_sql_literal_quotes_and_numbers():
 def test_derive_state_criteria_changed_cell_and_added_row():
     calls = [ToolEvent("paint", {"widget_id": "w1", "color": "blue"}, {}, "e")]
     services = episode_services(MAP, calls)
-    state, tool = derive_criteria(_effect_change(), services, MAP, calls)
+    state, tool, _ = derive_criteria(_effect_change(), services, MAP, calls)
     assert any("SELECT color FROM widgets WHERE id='w1'" in s and "'blue'" in s for s in state)
     assert any("COUNT(*) FROM notes WHERE widget_id='w1'" in s for s in state)
+
+
+def test_derive_returns_required_where_literals():
+    # the changed-cell WHERE key (w1) and the added-row identifying value (email) must be reported
+    effect = {
+        "initial": {"svc": {"widgets": {"pk": "id", "rows": [{"id": "w1", "color": "red"}]},
+                            "emails": {"pk": "id", "rows": []}}},
+        "final": {"svc": {"widgets": {"pk": "id", "rows": [{"id": "w1", "color": "blue"}]},
+                          "emails": {"pk": "id", "rows": [{"id": 1, "to_addr": "p1@ex.invalid"}]}}},
+    }
+    calls = [ToolEvent("paint", {"widget_id": "w1", "color": "blue", "to": "p1@ex.invalid"},
+                       {}, "e")]
+    _, _, literals = derive_criteria(effect, episode_services(MAP, calls), MAP, calls)
+    assert "w1" in literals and "p1@ex.invalid" in literals
 
 
 def test_read_only_tool_never_required():
     # get is read-only + no state change -> never a tool_used criterion; only avoids mutating
     calls = [ToolEvent("get", {"widget_id": "w1"}, {}, "e")]
-    _, tool = derive_criteria({"initial": {}, "final": {}}, [], MAP, calls)
+    _, tool, _ = derive_criteria({"initial": {}, "final": {}}, [], MAP, calls)
     assert not any("trajectory_tool_used" in line for line in tool)
     assert "rk.trajectory_tool_not_used('paint')" in tool
     assert "rk.trajectory_tool_not_used('wipe')" in tool
@@ -54,7 +68,7 @@ def test_read_only_tool_never_required():
 def test_mutating_tool_covered_by_state_not_required():
     # paint mutates and its effect IS in the diff -> state covers it, no tool_used(paint)
     calls = [ToolEvent("paint", {"widget_id": "w1", "color": "blue"}, {}, "e")]
-    state, tool = derive_criteria(_effect_change(), episode_services(MAP, calls), MAP, calls)
+    state, tool, _ = derive_criteria(_effect_change(), episode_services(MAP, calls), MAP, calls)
     assert state  # a state criterion exists
     assert not any("trajectory_tool_used('paint')" in line for line in tool)
     assert "rk.trajectory_tool_not_used('wipe')" in tool
@@ -63,7 +77,7 @@ def test_mutating_tool_covered_by_state_not_required():
 def test_mutating_tool_without_state_effect_is_required():
     # a mutating tool whose effect leaves no diff -> require it in the trajectory (only evidence)
     calls = [ToolEvent("paint", {"widget_id": "w1"}, {}, "e")]
-    _, tool = derive_criteria({"initial": {}, "final": {}}, [], MAP, calls)
+    _, tool, _ = derive_criteria({"initial": {}, "final": {}}, [], MAP, calls)
     assert "rk.trajectory_tool_used('paint')" in tool
 
 
@@ -76,7 +90,7 @@ def test_identifying_where_rejects_free_text():
     }
     calls = [ToolEvent("paint", {"to": "p1@example.invalid", "subject": "Refund for Order B1"},
                        {}, "e")]
-    state, _ = derive_criteria(effect, episode_services(MAP, calls), MAP, calls)
+    state, _, _ = derive_criteria(effect, episode_services(MAP, calls), MAP, calls)
     joined = "\n".join(state)
     assert "to_addr='p1@example.invalid'" in joined
     assert "subject=" not in joined
@@ -88,7 +102,7 @@ def test_avoid_excludes_non_tool_harness_helpers():
          "services": [{"name": "svc", "calls": [
              {"method": "GET", "path_template": "/w/{id}", "from_tool": "get"},
              {"method": "POST", "path_template": "/seed", "from_tool": "seed_helper"}]}]}
-    _, tool = derive_criteria({"initial": {}, "final": {}}, [], m,
+    _, tool, _ = derive_criteria({"initial": {}, "final": {}}, [], m,
                               [ToolEvent("get", {}, {}, "e")])
     assert not any("seed_helper" in line for line in tool)
 
@@ -114,6 +128,6 @@ def test_plain_string_tool_result_is_handled():
     assert reproduced(calls, [{"tool": "get", "got": "all good"}]) is True
     assert reproduced(calls, [{"tool": "get", "got": "different"}]) is False
     # no state change -> no sqlite criteria; read-only get is never required (never an exception)
-    state, tool = derive_criteria({"initial": {}, "final": {}}, [], MAP, calls)
+    state, tool, _ = derive_criteria({"initial": {}, "final": {}}, [], MAP, calls)
     assert state == []
     assert not any("trajectory_tool_used('get')" in line for line in tool)

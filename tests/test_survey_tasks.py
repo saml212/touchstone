@@ -127,7 +127,7 @@ MAP = {
 ENV = {"image_tag": "touchstone-env-x:abc123", "ports": {"widget": 8000},
        "base_url_envs": {"widget": "WIDGET_URL"}}
 
-TEXT = json.dumps({"instruction": "Please recolour my widget and log it.",
+TEXT = json.dumps({"instruction": "Please recolour my widget w1 and log it.",
                    "persona": "A shop owner named Person 1 who wants a widget repainted."})
 
 
@@ -209,6 +209,19 @@ def test_task_state_and_trajectory_criteria(tmp_path, conn):
 
     assert (task / "tests" / "test.sh").exists()
     assert (task / "tests" / "reward.toml").exists()
+
+
+def test_required_literals_passed_to_prompt_and_unknowable_criterion_dropped(tmp_path, conn):
+    # the instruction omits w1 -> the WHERE literal is unknowable -> its state criteria are dropped
+    _paint_episode(conn)
+    provider = ScriptedSurveyProvider([json.dumps(
+        {"instruction": "Please recolour my widget and log it.", "persona": "Person 1."})])
+    repo = _repo(tmp_path)
+    write_tasks(repo, conn, MAP, _groups("paint1"), tool_events(conn), ENV, provider,
+                Scrubber(), _settings())
+    assert "w1" in provider.calls[0]  # the literal is passed to the instruction prompt as a fact
+    state = repo / "touchstone" / "tasks" / "recolour-1" / "tests" / "correctness" / "state.py"
+    assert not state.exists()  # every state criterion needed w1, which the instruction never states
 
 
 def test_task_instruction_canary_and_persona(tmp_path, conn):

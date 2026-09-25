@@ -55,6 +55,10 @@ never the steps or tool names>",
 
 Do not invent facts beyond the conversation. Do not mention tools, APIs, or databases.
 
+The instruction MUST include these exact values verbatim — they are things the user would naturally
+say (an order number, an email address, an amount) and the test cannot pass unless the agent is told
+them: {facts}
+
 ## Conversation (scrubbed)
 {episode}
 Return only the JSON object."""
@@ -245,6 +249,19 @@ def _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub,
 # ---- orchestration ---------------------------------------------------------
 
 
+def _facts_line(literals: list[str]) -> str:
+    return ", ".join(literals) if literals else "(none)"
+
+
+def _knowable_state(state: list[str], literals: list[str], text: dict) -> list[str]:
+    """Keep only state criteria whose required literal is actually knowable — present in the
+    instruction or persona. A literal the writer failed to state (so the agent could never produce
+    it) has its criterion dropped rather than made impossible; the gate still needs oracle==1."""
+    blob = (text.get("instruction", "") + " " + text.get("persona", "")).lower()
+    absent = [lit for lit in literals if lit.lower() not in blob]
+    return [line for line in state if not any(a in line for a in absent)]
+
+
 def _build_task(task_dir, name, dataset, group, ep_id, conn, map_data, env_result,
                 provider, repo, scrub, settings, calls) -> dict:
     services = episode_services(map_data, calls)
@@ -256,9 +273,11 @@ def _build_task(task_dir, name, dataset, group, ep_id, conn, map_data, env_resul
     if not reproduced(calls, effect["replayed"]):
         return {"skipped": {"episode": ep_id, "task": name,
                             "reason": "simulator did not reproduce the recorded calls"}}
-    state, tool = derive_criteria(effect, services, map_data, calls)
+    state, tool, literals = derive_criteria(effect, services, map_data, calls)
     text = _obtain_text(provider, repo, TEXT_PROMPT.format(
+        facts=_facts_line(literals),
         episode=_episode_context(calls, _answer_text(conn, ep_id, scrub))))
+    state = _knowable_state(state, literals, text)
     ctx = {"image_tag": env_result["image_tag"], "tools": tools, "services": services,
            "ports": env_result["ports"], "base_url_envs": env_result["base_url_envs"],
            "state": state, "tool": tool}

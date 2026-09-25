@@ -77,23 +77,26 @@ def _rows_by_pk(dump: dict) -> dict:
     return {row.get(pk): row for row in dump.get("rows", [])}
 
 
-def _cell_lines(table: str, pk: str, key, old: dict, row: dict, db_rel: str) -> list[str]:
+def _cell_lines(table: str, pk: str, key, old: dict, row: dict, db_rel: str,
+                literals: set) -> list[str]:
     out = []
     for col, val in row.items():
         if col != pk and not _VOLATILE.search(col) and old.get(col) != val:
             query = f"SELECT {col} FROM {table} WHERE {pk}={_sql_literal(key)}"
             out.append(f"rk.sqlite_query_equals({db_rel!r}, {query!r}, {val!r})")
+    if out:
+        literals.add(str(key))  # the WHERE key the agent must target
     return out
 
 
-def _changed_cells(table: str, before: dict, after: dict, db_rel: str) -> list[str]:
+def _changed_cells(table: str, before: dict, after: dict, db_rel: str, literals: set) -> list[str]:
     pk = after.get("pk", "rowid")
     before_rows, after_rows = _rows_by_pk(before), _rows_by_pk(after)
     lines = []
     for key, row in after_rows.items():
         old = before_rows.get(key)
         if old is not None:
-            lines += _cell_lines(table, pk, key, old, row, db_rel)
+            lines += _cell_lines(table, pk, key, old, row, db_rel, literals)
     return lines
 
 
@@ -107,37 +110,37 @@ def _token_value(val) -> bool:
     return isinstance(val, str) and len(val) <= _MAX_IDENT_LEN and not any(c.isspace() for c in val)
 
 
-def _identifying_where(row: dict, pk: str, arg_values: set) -> str:
-    parts = []
-    for col, val in row.items():
-        if col != pk and val in arg_values and _token_value(val):
-            parts.append(f"{col}={_sql_literal(val)}")
-    return " AND ".join(parts)
+def _identifying_pairs(row: dict, pk: str, arg_values: set) -> list[tuple]:
+    return [(col, val) for col, val in row.items()
+            if col != pk and val in arg_values and _token_value(val)]
 
 
-def _added_rows(table: str, before: dict, after: dict, db_rel: str, arg_values: set) -> list[str]:
+def _added_rows(table: str, before: dict, after: dict, db_rel: str, arg_values: set,
+                literals: set) -> list[str]:
     pk = after.get("pk", "rowid")
     before_keys = set(_rows_by_pk(before))
     added = [row for key, row in _rows_by_pk(after).items() if key not in before_keys]
     if not added:
         return []
-    where = _identifying_where(added[0], pk, arg_values)
-    if where:
+    pairs = _identifying_pairs(added[0], pk, arg_values)
+    if pairs:
+        literals.update(str(val) for _, val in pairs)  # values the agent must supply
+        where = " AND ".join(f"{col}={_sql_literal(val)}" for col, val in pairs)
         query = f"SELECT COUNT(*) FROM {table} WHERE {where}"
         return [f"rk.sqlite_query_equals({db_rel!r}, {query!r}, {len(added)})"]
     total = len(after.get("rows", []))
     return [f"rk.sqlite_query_equals({db_rel!r}, {f'SELECT COUNT(*) FROM {table}'!r}, {total})"]
 
 
-def _state_criteria(effect: dict, svc: str, arg_values: set) -> list[str]:
+def _state_criteria(effect: dict, svc: str, arg_values: set, literals: set) -> list[str]:
     db_rel = f"simulators/{svc}/state.db"
     initial = effect["initial"].get(svc, {})
     final = effect["final"].get(svc, {})
     lines = []
     for table, after in final.items():
         before = initial.get(table, {})
-        lines += _changed_cells(table, before, after, db_rel)
-        lines += _added_rows(table, before, after, db_rel, arg_values)
+        lines += _changed_cells(table, before, after, db_rel, literals)
+        lines += _added_rows(table, before, after, db_rel, arg_values, literals)
     return lines
 
 
@@ -194,11 +197,14 @@ def reproduced(calls: list[ToolEvent], replayed: list[dict]) -> bool:
 
 
 def derive_criteria(effect: dict, services: list[dict], map_data: dict,
-                    calls: list[ToolEvent]) -> tuple[list[str], list[str]]:
-    """Return (state criteria lines, trajectory criteria lines) for the replayed episode."""
+                    calls: list[ToolEvent]) -> tuple[list[str], list[str], list[str]]:
+    """Return (state lines, trajectory lines, required literals) for the replayed episode. Every
+    literal is a value used in a state criterion's WHERE that the agent must know — so the task
+    writer can make it knowable (state it in the instruction) or drop the criterion."""
     arg_values = _arg_values(calls)
+    literals: set = set()
     state: list[str] = []
     for service in services:
-        state += _state_criteria(effect, service["name"], arg_values)
+        state += _state_criteria(effect, service["name"], arg_values, literals)
     tool = _tool_criteria(map_data, calls, bool(state))
-    return state, tool
+    return state, tool, sorted(literals)
