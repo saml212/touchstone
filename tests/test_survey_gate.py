@@ -107,6 +107,36 @@ def test_gate_force_reruns_gated(tmp_path, monkeypatch):
     assert calls == ["build"]  # force triggered a real (mocked) build + run
 
 
+def test_call_captures_output_on_failure():
+    import pytest
+
+    from touchstone.harbor import run as run_mod
+    with pytest.raises(RuntimeError) as exc:
+        run_mod._call(["sh", "-c", "echo hello-stdout; echo boom-stderr >&2; exit 3"])
+    msg = str(exc.value)
+    assert "exit 3" in msg
+    assert "hello-stdout" in msg and "boom-stderr" in msg
+
+
+def test_gate_failure_reason_reaches_gate_json_and_report(tmp_path, monkeypatch):
+    from touchstone.survey.report import needs_review_section
+    out = tmp_path / "touchstone"
+    _task(out, "good")
+    monkeypatch.setattr(gate.run_mod, "build_image", lambda *a, **k: None)
+
+    def _fail(*a, **k):
+        raise RuntimeError("command failed (exit 1): harbor run\nValueError: no tasks\nline2")
+
+    monkeypatch.setattr(gate.run_mod, "run", _fail)
+    result = gate.run_gate(tmp_path, _env(), settings=None)
+    stored = json.loads((out / "needs-review" / "good" / "gate.json").read_text())
+    assert "no tasks" in stored["reason"]
+    # the report shows only the first line of the reason
+    md = needs_review_section(result)
+    assert "command failed (exit 1)" in md
+    assert "line2" not in md
+
+
 def test_build_image_local(monkeypatch, tmp_path):
     from touchstone.config import Settings
     from touchstone.harbor import run as run_mod

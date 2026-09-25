@@ -220,12 +220,13 @@ def _write_tests(task_dir: Path, state: list[str], tool: list[str], answer: str)
 
 
 def _task_toml(name: str, dataset: str, group: dict, ep_id: str, calls: list[ToolEvent]) -> dict:
+    # [task] (a registry package ref) is intentionally omitted: it is optional for local tasks and
+    # its name must be exactly org/name, which a per-task slug is not. Provenance lives in metadata.
     tools = sorted({c.tool for c in calls if c.tool})
     return {
         "schema_version": "1.3",
-        "task": {"name": f"{dataset}/{name}", "authors": [{"name": "Touchstone"}]},
         "metadata": {"touchstone": {
-            "episodes": [ep_id], "job": group["label"], "tools": tools,
+            "dataset": dataset, "episodes": [ep_id], "job": group["label"], "tools": tools,
             "created_at": datetime.now(UTC).isoformat(), "version": _touchstone_version()}},
         "environment": {"build_timeout_sec": 600.0},
         "agent": {"timeout_sec": 300.0},

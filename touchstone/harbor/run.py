@@ -39,8 +39,16 @@ def _has_docker() -> bool:
 
 
 def _call(cmd: list[str]) -> None:
+    """Run `cmd`, echo its combined output, and on failure raise a RuntimeError whose message is the
+    last lines of that output, so a gate failure records what Harbor said, not just an exit code."""
     print("$ " + " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    output = (proc.stdout or "") + (proc.stderr or "")
+    if output:
+        print(output, end="" if output.endswith("\n") else "\n")
+    if proc.returncode != 0:
+        tail = "\n".join(output.splitlines()[-30:])
+        raise RuntimeError(f"command failed (exit {proc.returncode}): {' '.join(cmd)}\n{tail}")
 
 
 def _job_dirs(jobs_dir: Path) -> set[str]:

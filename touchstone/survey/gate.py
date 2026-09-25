@@ -94,7 +94,7 @@ def _apply_gate(pending: list[str], out: Path, oracle: dict, nop: dict) -> dict:
 
 
 def _fail_all(pending: list[str], out: Path, exc: Exception) -> dict:
-    reason = f"{type(exc).__name__}: {exc}"[:300]
+    reason = str(exc)[:2000]
     needs_review = []
     for name in pending:
         info = {"failed_side": "harbor", "reason": reason}
@@ -132,6 +132,6 @@ def run_gate(repo: Path, env_result: dict, settings, force: bool = False) -> dic
         run_mod.build_image(out / "environment", env_result["image_tag"], settings)
         oracle = _rates(run_mod.run(out, "oracle", settings=settings))
         nop = _rates(run_mod.run(out, "nop", settings=settings))
-    except (subprocess.SubprocessError, OSError) as exc:
+    except (subprocess.SubprocessError, OSError, RuntimeError) as exc:
         return _fail_all(pending, out, exc)
     return _apply_gate(pending, out, oracle, nop)

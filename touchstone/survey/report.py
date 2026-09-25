@@ -102,9 +102,15 @@ def needs_review_section(gate: dict | None) -> str:
     reviews = gate.get("needs_review", [])
     if not reviews:
         return "## Needs review\n\nNone."
-    rows = [[r["name"], r.get("failed_side", "?"),
-             r.get("reason") or f"oracle={r.get('oracle')} nop={r.get('nop')}"] for r in reviews]
+    rows = [[r["name"], r.get("failed_side", "?"), _review_detail(r)] for r in reviews]
     return "## Needs review\n\n" + _table(["task", "failed", "detail"], rows)
+
+
+def _review_detail(review: dict) -> str:
+    reason = review.get("reason")
+    if reason:
+        return reason.splitlines()[0]  # first line; full text is in gate.json
+    return f"oracle={review.get('oracle')} nop={review.get('nop')}"
 
 
 def no_job_section(groups: dict | None) -> str:
