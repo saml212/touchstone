@@ -62,3 +62,22 @@ def test_summary_gate_skipped_clause():
     stats = {"tasks": 1, "conversations": 3, "gate_skipped": True}
     line = summary(MAP, FIDELITY, stats)
     assert line.endswith("Built 1 task from 3 conversations (gate skipped).")
+
+
+def test_summary_baseline_sentence_is_the_design_line():
+    stats = {"tasks": 7, "conversations": 12, "gated": 7, "needs_review": 0}
+    baseline = {"pass_rates": {f"t{i}": (1.0 if i < 5 else 0.0) for i in range(7)},
+                "passed": [f"t{i}" for i in range(5)], "failed": ["t5", "t6"],
+                "model": "openai/gpt-4o-mini", "mode": "packaged"}
+    line = summary(MAP, FIDELITY, stats, baseline)
+    assert line == ("Built 7 tasks from 12 conversations. Your current setup passes 5. "
+                    "2 failures — walk through them? (touchstone review)")
+
+
+def test_report_baseline_section_and_error():
+    baseline = {"pass_rates": {"a-1": 1.0, "a-2": 0.0}, "passed": ["a-1"], "failed": ["a-2"],
+                "model": "openai/gpt-4o-mini", "mode": "packaged"}
+    md = render_report(MAP, FIDELITY, baseline=baseline)
+    assert "## Baseline" in md and "gpt-4o-mini" in md and "a-1" in md and "100%" in md
+    from touchstone.survey.report import baseline_section
+    assert "Failed:" in baseline_section({"error": "boom\nmore"})

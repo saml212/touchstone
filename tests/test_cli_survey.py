@@ -9,17 +9,18 @@ runner = CliRunner()
 def test_survey_command_echoes_summary(monkeypatch):
     seen = {}
 
-    def fake(repo, force=False, provider=None, model=None, skip_gate=False):
-        seen.update(repo=repo, force=force, provider=provider, model=model, skip_gate=skip_gate)
+    def fake(repo, force=False, provider=None, model=None, skip_gate=False, skip_baseline=False):
+        seen.update(repo=repo, force=force, provider=provider, model=model, skip_gate=skip_gate,
+                    skip_baseline=skip_baseline)
         return "Mapped 4 tools, 1 service."
 
     monkeypatch.setattr(survey_mod, "run_survey", fake)
     result = runner.invoke(app, ["survey", "/some/repo", "--force", "--provider", "codex-cli",
-                                 "--skip-gate"])
+                                 "--skip-gate", "--skip-baseline"])
     assert result.exit_code == 0
     assert "Mapped 4 tools, 1 service." in result.stdout
     assert seen == {"repo": "/some/repo", "force": True, "provider": "codex-cli", "model": None,
-                    "skip_gate": True}
+                    "skip_gate": True, "skip_baseline": True}
 
 
 def test_survey_command_reports_failure(monkeypatch):

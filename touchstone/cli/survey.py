@@ -16,13 +16,15 @@ def survey(
     model: str = typer.Option(None, "--model", help="Override [survey] model."),
     skip_gate: bool = typer.Option(False, "--skip-gate",
                                    help="Write tasks without running the oracle/nop gate."),
+    skip_baseline: bool = typer.Option(False, "--skip-baseline",
+                                       help="Skip running the agent under test for the baseline."),
 ) -> None:
     """Read a repo's recordings and code and build its touchstone/ survey outputs."""
     from ..survey.survey import run_survey
 
     try:
         line = run_survey(repo, force=force, provider=provider or None, model=model or None,
-                          skip_gate=skip_gate)
+                          skip_gate=skip_gate, skip_baseline=skip_baseline)
     except (ValueError, FileNotFoundError) as exc:
         _fail(f"survey failed: {exc}")
     typer.echo(line)

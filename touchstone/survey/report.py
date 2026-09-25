@@ -123,6 +123,16 @@ def agent_section(package: dict | None) -> str:
     return "## Agent under test\n\n" + "\n".join(lines)
 
 
+def baseline_section(baseline: dict | None) -> str:
+    if not baseline:
+        return "## Baseline\n\n_not run_"
+    if baseline.get("error"):
+        return "## Baseline\n\nFailed: " + baseline["error"].splitlines()[0]
+    head = f"Model {baseline.get('model')} ({baseline.get('mode')} agent):"
+    rows = [[name, f"{rate * 100:.0f}%"] for name, rate in sorted(baseline["pass_rates"].items())]
+    return f"## Baseline\n\n{head}\n\n" + _table(["task", "reward"], rows)
+
+
 def no_job_section(groups: dict | None) -> str:
     no_job = (groups or {}).get("no_job", [])
     if not no_job:
@@ -132,7 +142,7 @@ def no_job_section(groups: dict | None) -> str:
 
 def render_report(map_data: dict, fidelity: dict, tasks: dict | None = None,
                   gate: dict | None = None, groups: dict | None = None,
-                  package: dict | None = None) -> str:
+                  package: dict | None = None, baseline: dict | None = None) -> str:
     sections = [
         "# Survey report",
         map_section(map_data),
@@ -141,6 +151,7 @@ def render_report(map_data: dict, fidelity: dict, tasks: dict | None = None,
         agent_section(package),
         tasks_section(tasks, gate),
         needs_review_section(gate),
+        baseline_section(baseline),
         no_job_section(groups),
         flags_section(map_data, fidelity),
     ]
@@ -164,7 +175,20 @@ def _task_clause(stats: dict) -> str:
     return head + f" ({stats.get('gated', 0)} gated, {stats.get('needs_review', 0)} needs review)."
 
 
-def summary(map_data: dict, fidelity: dict, stats: dict | None = None) -> str:
+def _baseline_sentence(stats: dict, baseline: dict) -> str:
+    """The first-five-minutes sentence: tasks built, conversations, what the setup passes today."""
+    rates = baseline["pass_rates"]
+    n, k = len(rates), len(baseline["passed"])
+    m = stats.get("conversations", 0)
+    return (f"Built {_plural(n, 'task')} from {_plural(m, 'conversation')}. "
+            f"Your current setup passes {k}. {_plural(n - k, 'failure')} — "
+            f"walk through them? (touchstone review)")
+
+
+def summary(map_data: dict, fidelity: dict, stats: dict | None = None,
+            baseline: dict | None = None) -> str:
+    if stats and baseline and "pass_rates" in baseline:
+        return _baseline_sentence(stats, baseline)
     tools = len(map_data.get("tools", []))
     services = len(crossing_services(map_data))
     head = f"Mapped {_plural(tools, 'tool')}, {_plural(services, 'service')}."

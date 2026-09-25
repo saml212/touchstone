@@ -89,13 +89,14 @@ def _package_agent(repo, conn, map_data, env_result, prov, out, settings, force)
     return build_package(repo, conn, map_data, env_result, prov, out, settings, force)
 
 
-def _gate_and_baseline(repo, env_result, settings, force, skip_gate):
+def _gate_and_baseline(repo, env_result, settings, force, skip_gate, skip_baseline):
     if env_result is None or skip_gate:
-        return None
+        return None, None
     _log("gate: running oracle and nop over the tasks")
     gate = run_gate(repo, env_result, settings, force)
-    run_baseline(repo, env_result, settings, force)
-    return gate
+    _log("baseline: running the agent under test over the gated tasks")
+    baseline = run_baseline(repo, env_result, settings, force, skip_baseline)
+    return gate, baseline
 
 
 def _stats(conn, tasks, gate, skip_gate) -> dict:
@@ -113,7 +114,7 @@ def _dataset_name(repo: Path, settings: Settings) -> str:
 
 def run_survey(repo: str | Path, force: bool = False, provider: str | None = None,
                model: str | None = None, settings: Settings | None = None,
-               skip_gate: bool = False) -> str:
+               skip_gate: bool = False, skip_baseline: bool = False) -> str:
     settings = settings or load_settings()
     repo = Path(repo).expanduser().resolve()
     out = repo / "touchstone"
@@ -127,12 +128,13 @@ def run_survey(repo: str | Path, force: bool = False, provider: str | None = Non
         groups, env_result, tasks = _build_tasks(
             repo, conn, map_data, out, events, scrub, prov, settings, force)
         package = _package_agent(repo, conn, map_data, env_result, prov, out, settings, force)
-        gate = _gate_and_baseline(repo, env_result, settings, force, skip_gate)
+        gate, baseline = _gate_and_baseline(
+            repo, env_result, settings, force, skip_gate, skip_baseline)
         Dataset(name=_dataset_name(repo, settings)).write(out)
         _log("report: writing report.md")
         atomic_write(out / "report.md",
-                     render_report(map_data, fidelity_data, tasks, gate, groups, package))
-        return summary(map_data, fidelity_data, _stats(conn, tasks, gate, skip_gate))
+                     render_report(map_data, fidelity_data, tasks, gate, groups, package, baseline))
+        return summary(map_data, fidelity_data, _stats(conn, tasks, gate, skip_gate), baseline)
     finally:
         if conn is not None:
             conn.close()
