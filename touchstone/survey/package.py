@@ -175,13 +175,29 @@ def _map_digest(map_data: dict) -> str:
     return json.dumps(keep, indent=2)[:6000]
 
 
+_CODE_START = ("import ", "from ", "#!", '"""', "'''", "#", "def ", "@", "__", "async ")
+
+
+def _first_code_line(lines: list[str]) -> int:
+    """Index of the first line that looks like Python, so a chatty provider preamble is dropped."""
+    for i, line in enumerate(lines):
+        if line.strip().startswith(_CODE_START):
+            return i
+    return 0
+
+
 def _strip_fence(text: str) -> str:
-    lines = text.strip().splitlines()
-    if lines and lines[0].startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].startswith("```"):
-        lines = lines[:-1]
-    return "\n".join(lines) + "\n"
+    """Pull the Python out of a provider reply: the first ``` fenced block if present, else the
+    body after any prose preamble. Providers sometimes narrate before the code or fence it."""
+    text = text.strip()
+    if "```" in text:
+        body = text.split("```", 2)[1]
+        lines = body.splitlines()
+        if lines and lines[0].strip().lower() in ("python", "py"):
+            lines = lines[1:]
+        return "\n".join(lines).strip() + "\n"
+    lines = text.splitlines()
+    return "\n".join(lines[_first_code_line(lines):]).strip() + "\n"
 
 
 def _generate_entry(provider: SurveyProvider, repo: Path, prompt: str, error: str | None) -> str:
