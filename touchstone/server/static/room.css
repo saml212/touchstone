@@ -9,6 +9,7 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  overflow: hidden;            /* the columns scroll, never the page — the dock stays in view */
   font-size: 15px;
 }
 .review-body :focus-visible { outline: 2px solid var(--brick); outline-offset: 2px; }
@@ -169,8 +170,15 @@
 }
 .captions .turn.reviewer .who { color: var(--brick); }
 .captions .cap { white-space: pre-wrap; color: var(--ink); }
+/* ---- bottom bar: the notice sits with the dock so a mic-blocked user always sees the type
+   field without scrolling (it is pinned as the last row of the fixed-height column). ---- */
+.bottombar {
+  flex: none;
+  border-top: 1px solid var(--hair);
+  background: var(--cream);
+}
 .notice {
-  margin: 0 24px 12px;
+  margin: 12px 24px 0;
   padding: 8px 12px;
   font-size: 13px;
   color: var(--brick);
@@ -178,13 +186,12 @@
   border-radius: 6px;
 }
 
-/* ---- bottom dock: one mic, a state word, a type field, next ---- */
+/* ---- dock: one mic, a state word, a type field, next ---- */
 .dock {
   display: flex;
   align-items: center;
   gap: 14px;
   padding: 14px 24px;
-  border-top: 1px solid var(--hair);
 }
 .mic {
   position: relative;
@@ -252,10 +259,11 @@
 .startBtn { font-size: 17px; padding: 12px 40px; border-radius: 6px; }
 .startHint { margin: 0; font-size: 12px; color: var(--muted); }
 
-/* ---- two columns hold to ~820px, then one column at phone width ---- */
+/* ---- two columns hold to ~820px, then one stacked column at phone width. The page height stays
+   100vh (never auto) so the bottom bar keeps the type field in view; the two rows scroll on their
+   own. ---- */
 @media (max-width: 820px) {
-  .review-body { height: auto; min-height: 100vh; }
-  #room { grid-template-columns: 1fr; }
+  #room { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
   #conversation { border-left: none; border-top: 1px solid var(--hair); }
   #trial { padding: 24px; }
   .topbar { flex-wrap: wrap; gap: 8px 16px; }
@@ -264,4 +272,10 @@
   .captions .turn { max-width: none; }
   .dock { flex-wrap: wrap; }
   .dock .composer { order: 3; flex-basis: 100%; }
+}
+
+/* Below ~700px tall there isn't room for two stacked rows plus the bar: give the trial the space
+   and let the conversation collapse to a short scroller, but keep the bar (and type field) visible. */
+@media (max-width: 820px) and (max-height: 699px) {
+  #room { grid-template-rows: minmax(0, 1fr) minmax(80px, 0.5fr); }
 }

@@ -39,22 +39,24 @@
 
     <section id="conversation">
       <div id="messages" class="captions" role="log" aria-live="polite" aria-label="Conversation"></div>
-      <div id="notice" class="notice hidden" role="status"></div>
     </section>
   </main>
 
-  <div class="dock" id="dock">
-    <button id="talk" class="mic" aria-label="Microphone" aria-pressed="false">
-      <span class="ring" aria-hidden="true"></span>
-      <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" />
-        <path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-      </svg>
-    </button>
-    <span id="voiceState" class="voiceState">mic off</span>
-    <input id="text" class="composer" type="text" autocomplete="off"
-           placeholder="Or type — agree, or say what should have counted. Enter to send." />
-    <button id="next" class="ghost next" title="Next trial">next trial ›</button>
+  <div class="bottombar" id="bottombar">
+    <div id="notice" class="notice hidden" role="status"></div>
+    <div class="dock" id="dock">
+      <button id="talk" class="mic" aria-label="Microphone" aria-pressed="false">
+        <span class="ring" aria-hidden="true"></span>
+        <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" />
+          <path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+        </svg>
+      </button>
+      <span id="voiceState" class="voiceState">mic off</span>
+      <input id="text" class="composer" type="text" autocomplete="off"
+             placeholder="Or type — agree, or say what should have counted. Enter to send." />
+      <button id="next" class="ghost next" title="Next trial">next trial ›</button>
+    </div>
   </div>
 
   <div id="startOverlay" class="overlay">

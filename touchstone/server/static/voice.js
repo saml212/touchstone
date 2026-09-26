@@ -67,7 +67,7 @@ async function openRealtimeMic() {
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
-    notice("Microphone not available — check your browser's mic permission.");
+    notice("Microphone blocked — allow it for this site, or type below.");
     return false;
   }
   captureCtx = new AudioContext({ sampleRate: 24000 });
@@ -120,7 +120,7 @@ async function toggleLocalTalk() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch {
-    notice("Microphone not available — check your browser's mic permission.");
+    notice("Microphone blocked — allow it for this site, or type below.");
     return;
   }
   recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });

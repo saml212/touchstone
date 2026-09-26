@@ -79,6 +79,24 @@ def test_static_shell_and_app_js(db):
     assert js.status_code == 200 and "javascript" in js.headers["content-type"]
 
 
+def test_room_mic_blocked_notice_sits_in_the_pinned_bottom_bar():
+    # The stranger's mic-blocked type fallback was below the fold. The notice moved into the
+    # bottom bar with the dock, and the page never switches to height:auto (which pushed the bar
+    # off-screen), so the type field stays visible without scrolling.
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parent.parent / "touchstone" / "server" / "static"
+    voice = (static / "voice.js").read_text(encoding="utf-8")
+    assert "Microphone blocked — allow it for this site, or type below." in voice
+    assert "Microphone not available" not in voice
+    html = (static / "room.html").read_text(encoding="utf-8")
+    bar = html.split('class="bottombar"', 1)[1]
+    assert bar.index('id="notice"') < bar.index('class="dock"')  # notice beside/above the dock
+    assert '<div id="notice"' not in html.split('id="conversation"', 1)[1].split("</section>", 1)[0]
+    css = (static / "room.css").read_text(encoding="utf-8")
+    assert "height: auto" not in css  # the page stays 100vh so the dock is never pushed off-screen
+
+
 def test_no_api_route_500s_on_an_empty_project(db):
     # `touchstone init` then `serve` with zero episodes: every read route must answer
     # (200 with empty data, or a clean 404/422), never a 500.
