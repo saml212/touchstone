@@ -166,6 +166,7 @@ function connect() {
     else if (type === "closed") { $("closed").classList.remove("hidden"); }
     else if (type === "audio") { playPCM(base64ToInt16(data.b64)); }
     else if (type === "message") { messagesState = messagesState.concat(data); renderMessages(messagesState); }
+    else if (type === "status") { if (!micOn) setVoiceState(data && data.state ? data.state : "thinking"); }
     else if (type === "fallback") { mode = "local"; refreshTalkButton(); setVoiceState("local voice"); }
   };
   ws.onclose = () => {

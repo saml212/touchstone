@@ -219,8 +219,14 @@ async def _ingest(app, room_id: str, speaker: str, text: str) -> dict:
         conn.close()
     hub.publish(room_id, Event("message", user_view))
 
+    loop = asyncio.get_running_loop()
+
+    def on_status(state: str | None) -> None:
+        # Called from the agent thread while a regrade runs; hop to the loop to touch the hub.
+        loop.call_soon_threadsafe(hub.publish, room_id, Event("status", {"state": state}))
+
     step = await asyncio.to_thread(
-        _agent_step, settings, app.state.provider_factory, room_id, history
+        _agent_step, settings, app.state.provider_factory, room_id, history, on_status
     )
 
     hub.publish(room_id, Event("message", step["agent"]))
@@ -240,11 +246,12 @@ async def _ingest(app, room_id: str, speaker: str, text: str) -> dict:
     return {"user": user_view, **step}
 
 
-def _agent_step(settings: Settings, provider_factory, room_id: str, history: list[dict]) -> dict:
+def _agent_step(settings: Settings, provider_factory, room_id: str, history: list[dict],
+                on_status=None) -> dict:
     conn = store.connect(settings.db_path)
     try:
         room = store.get_room(conn, room_id)
-        agent = ReviewAgent(provider_factory(), conn, room, settings)
+        agent = ReviewAgent(provider_factory(), conn, room, settings, on_status=on_status)
         turn = _safe_respond(agent, conn, room_id, history)
         agent_msg = rooms.post(conn, room_id, "agent", "assistant", turn.say)
         closed = store.get_room(conn, room_id).closed_at is not None

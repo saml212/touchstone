@@ -51,12 +51,13 @@ class AgentTurn:
 
 class ReviewAgent:
     def __init__(self, provider, conn, room: store.Room, settings, *,
-                 regrader=run_mod.regrade) -> None:
+                 regrader=run_mod.regrade, on_status=None) -> None:
         self.provider = provider
         self.conn = conn
         self.room = room
         self.settings = settings
         self.regrader = regrader
+        self.on_status = on_status  # called with a state word while a regrade runs, then None
         self.dataset_dir = settings.review_dataset_dir
         self.jobs_dir = settings.review_jobs
         self.scratch = self._load_scratch()
@@ -257,8 +258,17 @@ class ReviewAgent:
         job = (current.get("trial") or "").split("/", 1)[0]
         if not job:
             return {"deltas": [], "note": "no current trial to regrade"}
-        return regrade.regrade_job(self.dataset_dir, self.jobs_dir, job, self.settings,
-                                   runner=self.regrader)
+        host = self.settings.harbor_host or "local"
+        self._emit_status(f"regrading on {host}")  # a regrade is a ~30s remote job, not "thinking"
+        try:
+            return regrade.regrade_job(self.dataset_dir, self.jobs_dir, job, self.settings,
+                                       runner=self.regrader)
+        finally:
+            self._emit_status(None)
+
+    def _emit_status(self, state: str | None) -> None:
+        if self.on_status is not None:
+            self.on_status(state)
 
     def _note_applied(self, change, targets: list[str], result: dict) -> None:
         self.scratch.applied = (self.scratch.applied or []) + [

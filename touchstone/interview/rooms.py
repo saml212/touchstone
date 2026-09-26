@@ -34,7 +34,7 @@ def close(conn, room_id) -> None:
 
 @dataclass
 class Event:
-    type: str  # "message" | "draft" | "committed" | "closed"
+    type: str  # "message" | "draft" | "committed" | "closed" | "status"
     data: dict
 
 

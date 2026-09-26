@@ -205,6 +205,33 @@ def test_disagree_proposes_then_applies_and_regrades(tmp_path, conn):
     assert committed and committed[0]["deltas"][0]["task"] == "issue-a-refund-1"
 
 
+def test_regrade_emits_status_word_around_the_remote_job(tmp_path, conn):
+    # While the ~30s regrade runs, the room shows "regrading on <host>", not a 30s "thinking".
+    dataset = _dataset(tmp_path)
+    room = _room(conn)
+    rg = dataset / "jobs" / "src-rg"
+    _write(rg / "config.json", {})
+    _trial(rg, "issue-a-refund-1", 1.0)
+    change = {"op": "edit", "file": "tests/correctness/state.py", "criterion": 1,
+              "params": {"fn": "sqlite_query_equals",
+                         "args": ["s/state.db", "SELECT refunded", 200.0]}}
+    agent = ReviewAgent(Seq([
+        _call("read_trial", {"task": "issue-a-refund-1", "trial": "src/issue-a-refund-1__x"}),
+        _call("propose_change", {"task": "issue-a-refund-1", "change": change}),
+        Reply(content="say yes to apply."),
+    ]), conn, room, _settings(tmp_path), regrader=lambda *a, **k: rg)
+    agent.respond([{"role": "user", "speaker": "sam", "text": "that's wrong"}])
+
+    seen: list = []
+    agent2 = ReviewAgent(Seq([
+        _call("apply_change", {"task": "issue-a-refund-1", "change": change, "always": False}),
+        Reply(content="done."),
+    ]), conn, store.get_room(conn, room.id), _settings(tmp_path),
+        regrader=lambda *a, **k: rg, on_status=seen.append)
+    agent2.respond([{"role": "user", "speaker": "sam", "text": "yes"}])
+    assert seen == ["regrading on local", None]  # raised while regrading, then cleared
+
+
 def test_apply_always_hits_every_task_with_the_same_job(tmp_path, conn):
     dataset = _dataset(tmp_path)
     room = _room(conn)
