@@ -27,8 +27,9 @@ def _job(jobs_dir, name, config=None):
     return d
 
 
-def test_train_end_to_end_writes_files_and_sentence(tmp_path):
+def test_train_end_to_end_writes_files_and_sentence(tmp_path, seed_task):
     jobs = tmp_path / "touchstone" / "jobs"
+    seed_task(tmp_path / "touchstone")
     teacher = _job(jobs, "teacher",
                    {"agents": [{"name": "replica", "model_name": "openai/gpt-4o-mini"}]})
     _trial(teacher, "t1", "ds/refund", 1.0, traj={"schema_version": "ATIF-v1.8"})
@@ -47,8 +48,9 @@ def test_train_end_to_end_writes_files_and_sentence(tmp_path):
     assert json.loads((out / "manifest.json").read_text())["counts"]["distill"] == 1
 
 
-def test_train_default_out_is_dataset_train(tmp_path):
+def test_train_default_out_is_dataset_train(tmp_path, seed_task):
     jobs = tmp_path / "touchstone" / "jobs"
+    seed_task(tmp_path / "touchstone")
     student = _job(jobs, "student", {"agents": [{"name": "replica"}]})
     _trial(student, "s1", "ds/refund", 1.0)
     result = runner.invoke(app, ["train", "--jobs-dir", str(jobs), "--student", str(student)])
@@ -57,8 +59,9 @@ def test_train_default_out_is_dataset_train(tmp_path):
     assert (tmp_path / "touchstone" / "train" / "manifest.json").exists()
 
 
-def test_train_pools_comma_separated_student_dirs_into_rl_band(tmp_path):
+def test_train_pools_comma_separated_student_dirs_into_rl_band(tmp_path, seed_task):
     jobs = tmp_path / "touchstone" / "jobs"
+    seed_task(tmp_path / "touchstone")
     j1 = _job(jobs, "run1", {"agents": [{"name": "replica"}]})
     _trial(j1, "a", "ds/refund", 1.0)   # pass in run1
     j2 = _job(jobs, "run2", {"agents": [{"name": "replica"}]})
@@ -73,8 +76,9 @@ def test_train_pools_comma_separated_student_dirs_into_rl_band(tmp_path):
     assert counts["rl"] == 1
 
 
-def test_train_defaults_student_to_newest_non_teacher(tmp_path):
+def test_train_defaults_student_to_newest_non_teacher(tmp_path, seed_task):
     jobs = tmp_path / "touchstone" / "jobs"
+    seed_task(tmp_path / "touchstone")
     teacher = _job(jobs, "teacher")
     _trial(teacher, "t1", "ds/refund", 1.0, traj={"a": 1})
     student = _job(jobs, "student")
@@ -89,18 +93,20 @@ def test_train_defaults_student_to_newest_non_teacher(tmp_path):
     assert json.loads((out / "manifest.json").read_text())["counts"]["distill"] == 1
 
 
-def test_train_fails_when_no_student_available(tmp_path):
+def test_train_fails_when_no_student_available(tmp_path, seed_task):
     jobs = tmp_path / "touchstone" / "jobs"
+    seed_task(tmp_path / "touchstone")
     jobs.mkdir(parents=True)
     result = runner.invoke(app, ["train", "--jobs-dir", str(jobs), "--out", str(tmp_path / "o")])
     assert result.exit_code != 0
     assert "no student job dir" in result.output
 
 
-def test_train_student_spec_runs_harbor_with_attempts(tmp_path, monkeypatch):
+def test_train_student_spec_runs_harbor_with_attempts(tmp_path, monkeypatch, seed_task):
     import touchstone.harbor.run as run_mod
 
     jobs = tmp_path / "touchstone" / "jobs"
+    seed_task(tmp_path / "touchstone")
     teacher = _job(jobs, "teacher", {"agents": [{"name": "replica"}]})
     _trial(teacher, "t1", "ds/refund", 1.0, traj={"a": 1})
     ran = _job(jobs, "ran", {"agents": [{"name": "replica", "model_name": "openai/gpt-4o-mini"}]})

@@ -22,12 +22,14 @@ def _job(jobs_dir, name):
     return d
 
 
-def test_jobs_reports_no_dirs_when_empty(tmp_path):
+def test_jobs_reports_no_dirs_when_empty(tmp_path, seed_task):
+    seed_task(tmp_path)
     result = runner.invoke(app, ["jobs", "--jobs-dir", str(tmp_path / "jobs")])
     assert result.exit_code == 0 and "no job directories" in result.output
 
 
-def test_jobs_lists_pass_rate_per_task(tmp_path):
+def test_jobs_lists_pass_rate_per_task(tmp_path, seed_task):
+    seed_task(tmp_path)
     jobs = tmp_path / "jobs"
     j = _job(jobs, "2026-01-01__00-00-00")
     _trial(j, "t1__a", "ds/t1", 1.0)
@@ -38,9 +40,10 @@ def test_jobs_lists_pass_rate_per_task(tmp_path):
     assert "ds/t2" in result.output and "0.0%" in result.output
 
 
-def test_bench_runs_and_prints_scoreboard(tmp_path, monkeypatch):
+def test_bench_runs_and_prints_scoreboard(tmp_path, monkeypatch, seed_task):
     import touchstone.harbor.run as run_mod
 
+    seed_task(tmp_path)
     jobs = tmp_path / "jobs"
     job_dir = _job(jobs, "2026-01-01__00-00-00")
     _trial(job_dir, "t1__a", "ds/t1", 1.0)
@@ -53,9 +56,10 @@ def test_bench_runs_and_prints_scoreboard(tmp_path, monkeypatch):
     assert "ds/t1" in result.output and "100.0%" in result.output and "overall" in result.output
 
 
-def test_bench_against_prints_comparison(tmp_path, monkeypatch):
+def test_bench_against_prints_comparison(tmp_path, monkeypatch, seed_task):
     import touchstone.harbor.run as run_mod
 
+    seed_task(tmp_path)
     jobs = tmp_path / "jobs"
     new = _job(jobs, "new")
     _trial(new, "t1__a", "ds/t1", 1.0)
@@ -65,10 +69,33 @@ def test_bench_against_prints_comparison(tmp_path, monkeypatch):
     _trial(old, "t2__a", "ds/t2", 0.0)
     monkeypatch.setattr(run_mod, "run", lambda *a, **k: new)
 
-    result = runner.invoke(app, ["bench", "-m", "m", "--against", str(old)])
+    result = runner.invoke(app, ["bench", "-m", "m", "--against", str(old), "--dataset",
+                                 str(tmp_path)])
     assert result.exit_code == 0, result.output
     assert "vs --against:" in result.output
     assert "pass in both: 1" in result.output and "only this run: 1" in result.output
+
+
+def test_bench_prints_one_line_when_tasks_dir_is_empty(tmp_path, monkeypatch):
+    # The survey parked everything; bench must say so, never Harbor's "Either datasets or tasks
+    # must be provided" traceback.
+    import touchstone.harbor.run as run_mod
+
+    ds = tmp_path / "touchstone"
+    (ds / "tasks").mkdir(parents=True)  # present but empty
+    review = ds / "needs-review" / "issue-a-refund-1"
+    review.mkdir(parents=True)
+    (review / "gate.json").write_text(json.dumps({"failed_side": "oracle", "oracle": 0.5}))
+
+    def _boom(*_a, **_k):
+        raise AssertionError("Harbor must not be invoked when there are no tasks")
+
+    monkeypatch.setattr(run_mod, "run", _boom)
+    result = runner.invoke(app, ["bench", "-m", "openai/gpt-4o-mini", "--dataset", str(ds)])
+    assert result.exit_code == 1
+    assert "No tasks in" in result.output and "parked 1 in" in result.output
+    assert "touchstone survey --force" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_bench_rejects_unknown_agent(tmp_path):
@@ -77,9 +104,10 @@ def test_bench_rejects_unknown_agent(tmp_path):
     assert "packaged" in result.output or "replica" in result.output
 
 
-def test_bench_passes_mode_to_the_agent_kwargs(tmp_path, monkeypatch):
+def test_bench_passes_mode_to_the_agent_kwargs(tmp_path, monkeypatch, seed_task):
     import touchstone.harbor.run as run_mod
 
+    seed_task(tmp_path)
     jobs = tmp_path / "jobs"
     job_dir = _job(jobs, "j")
     _trial(job_dir, "t1__a", "ds/t1", 1.0)
@@ -91,7 +119,8 @@ def test_bench_passes_mode_to_the_agent_kwargs(tmp_path, monkeypatch):
         return job_dir
 
     monkeypatch.setattr(run_mod, "run", fake_run)
-    result = runner.invoke(app, ["bench", "-m", "m", "--agent", "packaged"])
+    result = runner.invoke(app, ["bench", "-m", "m", "--agent", "packaged", "--dataset",
+                                 str(tmp_path)])
     assert result.exit_code == 0, result.output
     assert seen["agent"] == "touchstone.harbor.agent:TouchstoneAgent"
     assert seen["extra_args"] == ["--ak", "mode=packaged"]
@@ -114,7 +143,7 @@ def test_bench_adds_simulated_user_flags_for_a_multi_turn_dataset(tmp_path, monk
     assert "openai/gpt-4o-mini" in extra  # user model defaults to the agent-under-test's model
 
 
-def test_bench_prints_one_line_when_docker_daemon_is_down(tmp_path, monkeypatch):
+def test_bench_prints_one_line_when_docker_daemon_is_down(tmp_path, monkeypatch, seed_task):
     # The stranger's blocker: bench dumped a raw traceback. It must print one sentence + exit 1.
     import touchstone.harbor.run as run_mod
 
@@ -126,13 +155,14 @@ def test_bench_prints_one_line_when_docker_daemon_is_down(tmp_path, monkeypatch)
     monkeypatch.delenv("TOUCHSTONE_DEBUG", raising=False)
     monkeypatch.setattr(run_mod, "run", _no_daemon)
     monkeypatch.chdir(tmp_path)
+    seed_task(tmp_path / "touchstone")
     result = runner.invoke(app, ["bench", "-m", "openai/gpt-4o-mini"])
     assert result.exit_code == 1
     assert "Docker daemon not running on local" in result.output
     assert "Traceback" not in result.output and "run.py" not in result.output
 
 
-def test_bench_debug_flag_lets_the_traceback_through(tmp_path, monkeypatch):
+def test_bench_debug_flag_lets_the_traceback_through(tmp_path, monkeypatch, seed_task):
     import touchstone.harbor.run as run_mod
 
     def _no_daemon(*_a, **_k):
@@ -141,6 +171,7 @@ def test_bench_debug_flag_lets_the_traceback_through(tmp_path, monkeypatch):
     monkeypatch.delenv("TOUCHSTONE_DEBUG", raising=False)
     monkeypatch.setattr(run_mod, "run", _no_daemon)
     monkeypatch.chdir(tmp_path)
+    seed_task(tmp_path / "touchstone")
     result = runner.invoke(app, ["--debug", "bench", "-m", "openai/gpt-4o-mini"])
     assert result.exit_code != 0
     assert isinstance(result.exception, run_mod.DockerDaemonError)

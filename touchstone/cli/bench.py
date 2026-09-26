@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 
 from . import app
-from ._common import _daemon_guard
+from ._common import _daemon_guard, _require_tasks
 
 AGENT_PATH = "touchstone.harbor.agent:TouchstoneAgent"
 _MODES = ("packaged", "replica")
@@ -50,6 +50,7 @@ def bench(
 
     if agent not in _MODES:
         raise typer.BadParameter("agent must be 'packaged' or 'replica'")
+    _require_tasks(dataset)
     settings = load_settings()
     extra = ["--ak", f"mode={agent}"]
     if run_mod.dataset_is_multi_turn(dataset):  # conversational tasks need Harbor's simulated user
@@ -74,6 +75,7 @@ def jobs(
     """List job directories, each with its pass rate per task."""
     from ..harbor import jobs as jobs_mod
 
+    _require_tasks(str(Path(jobs_dir).parent))
     root = Path(jobs_dir)
     dirs = sorted(d for d in root.iterdir() if d.is_dir()) if root.is_dir() else []
     if not dirs:

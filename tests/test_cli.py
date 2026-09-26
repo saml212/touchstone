@@ -239,9 +239,10 @@ def _stub_review_server(monkeypatch, *, up):
     return calls, opened
 
 
-def test_review_opens_a_room_with_an_opening(tmp_path, monkeypatch):
+def test_review_opens_a_room_with_an_opening(tmp_path, monkeypatch, seed_task):
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init"])
+    seed_task(tmp_path / "touchstone")
     _stub_review_server(monkeypatch, up=True)  # server already up: no start, no block
     result = runner.invoke(app, ["review", "--no-open"])
     assert result.exit_code == 0
@@ -256,9 +257,10 @@ def test_review_opens_a_room_with_an_opening(tmp_path, monkeypatch):
         conn.close()
 
 
-def test_review_starts_server_when_down(tmp_path, monkeypatch):
+def test_review_starts_server_when_down(tmp_path, monkeypatch, seed_task):
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init"])
+    seed_task(tmp_path / "touchstone")
     calls, opened = _stub_review_server(monkeypatch, up=False)
     result = runner.invoke(app, ["review", "--port", "8799"])
     assert result.exit_code == 0
@@ -267,9 +269,19 @@ def test_review_starts_server_when_down(tmp_path, monkeypatch):
     assert "Talk in your browser" in result.stdout
 
 
-def test_review_reuses_running_server(tmp_path, monkeypatch):
+def test_review_stops_clean_when_no_tasks(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init"])
+    (tmp_path / "touchstone" / "tasks").mkdir(parents=True)  # empty
+    result = runner.invoke(app, ["review", "--no-open"])
+    assert result.exit_code == 1
+    assert "No tasks in" in result.output and "touchstone survey --force" in result.output
+
+
+def test_review_reuses_running_server(tmp_path, monkeypatch, seed_task):
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init"])
+    seed_task(tmp_path / "touchstone")
     calls, opened = _stub_review_server(monkeypatch, up=True)
     result = runner.invoke(app, ["review", "--port", "8765"])
     assert result.exit_code == 0

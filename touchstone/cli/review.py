@@ -8,7 +8,7 @@ import os
 import typer
 
 from . import app
-from ._common import _build_server, _db
+from ._common import _build_server, _db, _require_tasks
 
 
 @app.command()
@@ -20,6 +20,7 @@ def review(
     no_open: bool = typer.Option(False, "--no-open", help="Do not open a browser."),
 ) -> None:
     """Open a review room and talk to it in the browser. Starts the server itself if it isn't up."""
+    _require_tasks(dataset)
     os.environ["TOUCHSTONE_REVIEW_DATASET"] = dataset
     if jobs_dir:
         os.environ["TOUCHSTONE_REVIEW_JOBS_DIR"] = jobs_dir

@@ -17,7 +17,7 @@ from pathlib import Path
 import typer
 
 from . import app
-from ._common import _daemon_guard, _fail
+from ._common import _daemon_guard, _fail, _require_tasks
 
 AGENT_PATH = "touchstone.harbor.agent:TouchstoneAgent"
 
@@ -78,6 +78,7 @@ def train(
     from ..train.write import write_datasets
 
     jobs_path = Path(jobs_dir)
+    _require_tasks(str(jobs_path.parent))
     with _daemon_guard():  # a teacher/student spec runs Harbor, which needs a Docker daemon
         teacher_dirs = _resolve(teacher, jobs_path, attempts, n_concurrent) if teacher else []
         student_dirs = _student_dirs(student, jobs_path, teacher_dirs, attempts, n_concurrent)

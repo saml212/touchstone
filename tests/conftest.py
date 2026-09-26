@@ -18,6 +18,20 @@ def root(tmp_path):
 
 
 @pytest.fixture
+def seed_task():
+    """Write a minimal task under <dataset>/tasks so the CLI empty-tasks guard passes."""
+    from pathlib import Path
+
+    def make(dataset_root, name="t1"):
+        d = Path(dataset_root) / "tasks" / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "task.toml").write_text("[task]\nname = 'd/t1'\n", encoding="utf-8")
+        return d
+
+    return make
+
+
+@pytest.fixture
 def conn(db):
     c = store.connect(db)
     yield c
