@@ -85,9 +85,10 @@ def _require_target(settings: Settings) -> str:
         "or set [harbor] host in touchstone.toml.")
 
 
-def _call(cmd: list[str], env: dict | None = None, stdin_data: str | None = None) -> None:
-    """Run `cmd`, echo output, raise on failure. `stdin_data` feeds stdin (never argv) — how an
-    API key reaches the remote shell; `env` replaces the child environment when given."""
+def _exec(cmd: list[str], env: dict | None = None,
+          stdin_data: str | None = None) -> tuple[int, str]:
+    """Run `cmd`, echo its combined output, and return (returncode, output). `stdin_data` feeds
+    stdin (never argv) — how an API key reaches the remote shell; `env` replaces the child env."""
     print("$ " + " ".join(cmd))
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, env=env, input=stdin_data)
@@ -98,9 +99,30 @@ def _call(cmd: list[str], env: dict | None = None, stdin_data: str | None = None
     output = (proc.stdout or "") + (proc.stderr or "")
     if output:
         print(output, end="" if output.endswith("\n") else "\n")
-    if proc.returncode != 0:
+    return proc.returncode, output
+
+
+def _call(cmd: list[str], env: dict | None = None, stdin_data: str | None = None) -> None:
+    """Run `cmd`, echo output, raise on failure."""
+    rc, output = _exec(cmd, env, stdin_data)
+    if rc != 0:
         tail = "\n".join(output.splitlines()[-30:])
-        raise RuntimeError(f"command failed (exit {proc.returncode}): {' '.join(cmd)}\n{tail}")
+        raise RuntimeError(f"command failed (exit {rc}): {' '.join(cmd)}\n{tail}")
+
+
+def _build_call(cmd: list[str], where: str, env: dict | None = None) -> None:
+    """Run a docker build, retrying once — a shared Docker host under another job's build can fail
+    transiently (seen on the mini; a manual rebuild then succeeded). On the second failure raise
+    with the last 8 lines of build output so the reason is in the message, not just an exit code."""
+    rc, output = 0, ""
+    for attempt in (1, 2):
+        rc, output = _exec(cmd, env)
+        if rc == 0:
+            return
+        if attempt == 1:
+            print(f"docker build failed on {where} (exit {rc}); retrying once")
+    tail = "\n".join(output.splitlines()[-8:])
+    raise RuntimeError(f"docker build failed on {where} (exit {rc}):\n{tail}")
 
 
 def _job_dirs(jobs_dir: Path) -> set[str]:
@@ -212,7 +234,8 @@ def _build_remote(context_dir: Path, tag: str, settings: Settings) -> None:
     host, remote_root = settings.harbor_host, settings.harbor_remote_root
     remote_ctx = f"{remote_root}/env-build/{tag.replace(':', '-')}"
     _call(_rsync_cmd(["-az", "--delete", f"{context_dir}/", f"{host}:{remote_ctx}/"]))
-    _call(_ssh_cmd(host, f"{_REMOTE_PATH}; cd {remote_ctx} && docker build -t {tag} ."))
+    _build_call(_ssh_cmd(host, f"{_REMOTE_PATH}; cd {remote_ctx} && docker build -t {tag} ."),
+                f"host {host}")
 
 
 def build_image(context_dir: str | Path, tag: str, settings: Settings | None = None) -> None:
@@ -222,7 +245,7 @@ def build_image(context_dir: str | Path, tag: str, settings: Settings | None = N
     if _require_target(settings) == "remote":
         _build_remote(context_dir, tag, settings)
     else:
-        _call(["docker", "build", "-t", tag, str(context_dir)])
+        _build_call(["docker", "build", "-t", tag, str(context_dir)], "local")
 
 
 def _regrade_cmd(job_dir: str, tasks_path: str, out: str) -> list[str]:

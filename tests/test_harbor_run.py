@@ -315,3 +315,27 @@ def test_require_target_names_the_host_when_its_daemon_is_down(monkeypatch):
     with pytest.raises(run_mod.DockerDaemonError) as exc:
         run_mod._require_target(Settings(harbor_host="mini"))
     assert "on host mini" in str(exc.value)
+
+
+def test_build_image_retries_once_then_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: True)
+    calls = []
+
+    def fake_exec(cmd, env=None, stdin_data=None):
+        calls.append(cmd)
+        return (0, "") if len(calls) == 2 else (1, "boom")
+
+    monkeypatch.setattr(run_mod, "_exec", fake_exec)
+    run_mod.build_image(tmp_path, "img:tag", Settings())
+    assert len(calls) == 2  # failed once (transient), retried, then succeeded
+
+
+def test_build_image_surfaces_last_8_lines_after_two_failures(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: True)
+    output = "\n".join(f"line{i}" for i in range(20))
+    monkeypatch.setattr(run_mod, "_exec", lambda *a, **k: (1, output))
+    with pytest.raises(RuntimeError) as exc:
+        run_mod.build_image(tmp_path, "img:tag", Settings())
+    msg = str(exc.value)
+    assert "docker build failed on local" in msg
+    assert "line19" in msg and "line12" in msg and "line11" not in msg  # last 8 lines only

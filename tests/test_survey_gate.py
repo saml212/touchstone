@@ -153,7 +153,7 @@ def test_build_image_local(monkeypatch, tmp_path):
     from touchstone.harbor import run as run_mod
     seen = []
     monkeypatch.setattr(run_mod, "_has_docker", lambda: True)
-    monkeypatch.setattr(run_mod, "_call", lambda cmd: seen.append(cmd))
+    monkeypatch.setattr(run_mod, "_exec", lambda cmd, *a, **k: (seen.append(cmd), (0, ""))[1])
     run_mod.build_image(tmp_path, "img:1", Settings(harbor_host=""))
     assert seen == [["docker", "build", "-t", "img:1", str(tmp_path)]]
 
@@ -164,7 +164,7 @@ def test_build_image_remote(monkeypatch, tmp_path):
     seen = []
     monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
     monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (True, "27"))
-    monkeypatch.setattr(run_mod, "_call", lambda cmd: seen.append(cmd))
+    monkeypatch.setattr(run_mod, "_exec", lambda cmd, *a, **k: (seen.append(cmd), (0, ""))[1])
     run_mod.build_image(tmp_path, "img:1", Settings(harbor_host="h", harbor_remote_root="/r"))
     assert any(c[0] == "rsync" for c in seen)
     assert any(c[0] == "ssh" and "docker build -t img:1" in c[-1] for c in seen)
