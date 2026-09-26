@@ -30,6 +30,7 @@ class Dataset:
     version: str = "1.0.0"
     description: str = ""
     keywords: list[str] = field(default_factory=list)
+    survey_id: str = ""  # a short id minted per survey; scopes the remote build/jobs dir
     root: Path | None = None
 
     @classmethod
@@ -37,9 +38,10 @@ class Dataset:
         root = Path(root)
         data = tomllib.loads((root / MANIFEST).read_text(encoding="utf-8"))
         info = data.get("dataset", {})
+        survey_id = data.get("metadata", {}).get("touchstone", {}).get("survey_id", "")
         return cls(name=info.get("name", root.name), version=info.get("version", "1.0.0"),
                    description=info.get("description", ""),
-                   keywords=list(info.get("keywords", [])), root=root)
+                   keywords=list(info.get("keywords", [])), survey_id=survey_id, root=root)
 
     def write(self, root: str | Path) -> Path:
         root = Path(root)
@@ -66,4 +68,6 @@ class Dataset:
         doc = {"schema_version": "1.0", "tasks": [],
                "dataset": {"name": self.name, "version": self.version,
                            "description": self.description, "keywords": sorted(self.keywords)}}
+        if self.survey_id:  # scopes this survey's remote directory so a re-survey never bleeds jobs
+            doc["metadata"] = {"touchstone": {"survey_id": self.survey_id}}
         return tomli_w.dumps(doc)

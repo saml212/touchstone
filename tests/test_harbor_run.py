@@ -339,3 +339,47 @@ def test_build_image_surfaces_last_8_lines_after_two_failures(tmp_path, monkeypa
     msg = str(exc.value)
     assert "docker build failed on local" in msg
     assert "line19" in msg and "line12" in msg and "line11" not in msg  # last 8 lines only
+
+
+def test_remote_dataset_path_uses_the_survey_id(tmp_path):
+    ds = tmp_path / "touchstone"
+    ds.mkdir()
+    (ds / "dataset.toml").write_text('[metadata.touchstone]\nsurvey_id = "ab12cd34ef"\n')
+    assert remote.remote_dataset_path("/r", ds) == "/r/datasets/touchstone-ab12cd34ef"
+
+
+def test_remote_dataset_path_falls_back_to_a_path_digest(tmp_path):
+    ds = tmp_path / "touchstone"
+    ds.mkdir()  # no dataset.toml -> path digest suffix
+    path = remote.remote_dataset_path("/r", ds)
+    assert path.startswith("/r/datasets/touchstone-") and len(path.rsplit("-", 1)[-1]) == 8
+
+
+def test_remote_syncs_back_only_this_runs_output_dir(tmp_path, monkeypatch):
+    # No bleed on a shared host: harbor writes into a per-run dir and the return sync pulls only it,
+    # never the whole remote jobs tree (the stranger's mix of others' 85.7%/100%/0% runs).
+    calls = _record_calls(monkeypatch)
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (True, "27"))
+    ds = _dataset(tmp_path)
+    (ds / "dataset.toml").write_text('[metadata.touchstone]\nsurvey_id = "s1"\n')
+    settings = Settings(harbor_host="mini", harbor_remote_root="/remote")
+    run_mod.run(ds, "oracle", jobs_dir=tmp_path / "jobs", settings=settings)
+
+    ssh = next(c for c in calls if c[0] == "ssh")
+    assert "-o /remote/datasets/touchstone-s1/runs/" in ssh[-1]  # harbor output is run-scoped
+    pull = calls[-1]
+    src = pull[-2]  # rsync source is the penultimate arg
+    assert src.startswith("mini:/remote/datasets/touchstone-s1/runs/") and src.endswith("/")
+    assert "/jobs/" not in src  # never the shared jobs tree
+
+
+def test_remote_push_excludes_prior_run_outputs(tmp_path, monkeypatch):
+    calls = _record_calls(monkeypatch)
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (True, "27"))
+    ds = _dataset(tmp_path)
+    settings = Settings(harbor_host="mini", harbor_remote_root="/remote")
+    run_mod.run(ds, "oracle", jobs_dir=tmp_path / "jobs", settings=settings)
+    push = calls[0]
+    assert "--delete" in push and "jobs" in push and "runs" in push  # both protected from --delete

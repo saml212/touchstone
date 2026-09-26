@@ -10,13 +10,35 @@ its own and each file stays within the size budget.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata as metadata
 import shutil
+import tomllib
 from pathlib import Path
 
 import touchstone
 
 _DIST = "touchstone-bench"  # the distribution that ships the touchstone package
+
+
+def survey_id(sync_root: Path) -> str:
+    """The `[metadata.touchstone] survey_id` in the manifest, or '' when absent/malformed."""
+    manifest = sync_root / "dataset.toml"
+    if not manifest.is_file():
+        return ""
+    try:
+        doc = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return ""
+    return doc.get("metadata", {}).get("touchstone", {}).get("survey_id", "")
+
+
+def remote_dataset_path(remote_root: str, sync_root: Path) -> str:
+    """A per-survey remote path: keyed by the dataset's survey_id so a re-survey (fresh id) gets a
+    fresh remote dir and never reuses an old one's jobs. Falls back to a path digest (two customers'
+    `touchstone/` roots still never collide) when the manifest carries no survey_id yet."""
+    digest = hashlib.sha1(str(sync_root.resolve()).encode()).hexdigest()[:8]
+    return f"{remote_root}/datasets/{sync_root.name}-{survey_id(sync_root) or digest}"
 
 
 def _src_paths() -> tuple[Path, Path]:

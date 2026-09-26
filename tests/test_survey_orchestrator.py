@@ -175,3 +175,14 @@ def test_survey_flags_unmapped_tool(tmp_path, monkeypatch):
     report = (repo / "touchstone" / "report.md").read_text()
     assert "ghost" in report
     assert "Built 0 tasks" in line
+
+
+def test_survey_id_is_stable_across_idempotent_reruns_and_reminted_on_force(tmp_path):
+    from touchstone.harbor.dataset import Dataset
+
+    out = tmp_path / "touchstone"
+    out.mkdir()
+    Dataset(name="acme/x", survey_id="first").write(out)
+    assert survey_mod._survey_id(out, force=False) == "first"  # kept across idempotent re-runs
+    reminted = survey_mod._survey_id(out, force=True)
+    assert reminted != "first" and reminted  # a real re-survey gets a fresh id

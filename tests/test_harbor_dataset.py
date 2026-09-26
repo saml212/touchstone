@@ -30,6 +30,19 @@ def test_read_roundtrips(tmp_path):
     assert ds.name == "acme/support" and ds.version == "2.0.0" and ds.keywords == ["x"]
 
 
+def test_survey_id_roundtrips_via_metadata_table(tmp_path):
+    Dataset(name="acme/support", survey_id="abc123").write(tmp_path)
+    manifest = tomllib.loads((tmp_path / "dataset.toml").read_text())
+    assert manifest["metadata"]["touchstone"]["survey_id"] == "abc123"
+    assert Dataset.read(tmp_path).survey_id == "abc123"
+
+
+def test_no_metadata_table_written_without_a_survey_id(tmp_path):
+    Dataset(name="acme/support").write(tmp_path)
+    manifest = tomllib.loads((tmp_path / "dataset.toml").read_text())
+    assert "metadata" not in manifest and Dataset.read(tmp_path).survey_id == ""
+
+
 def test_task_dirs_lists_only_task_dirs_sorted(tmp_path):
     ds = Dataset(name="acme/support")
     ds.write(tmp_path)

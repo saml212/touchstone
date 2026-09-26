@@ -225,6 +225,18 @@ def _dataset_name(repo: Path, settings: Settings) -> str:
     return settings.survey_dataset_name or f"{repo.name}/{repo.name}"
 
 
+def _survey_id(out: Path, force: bool) -> str:
+    """A short id minted per survey; it scopes the remote build/jobs dir so a re-survey never
+    reuses an old dir's jobs. Kept stable across idempotent re-runs, reminted on --force."""
+    from ..ids import new_id
+
+    if not force and (out / "dataset.toml").is_file():
+        existing = Dataset.read(out).survey_id
+        if existing:
+            return existing
+    return new_id()[-10:].lower()
+
+
 def run_survey(repo: str | Path, force: bool = False, provider: str | None = None,
                model: str | None = None, settings: Settings | None = None,
                skip_gate: bool = False, skip_baseline: bool = False,
@@ -247,7 +259,7 @@ def run_survey(repo: str | Path, force: bool = False, provider: str | None = Non
         package = _package_agent(repo, conn, map_data, env_result, prov, out, settings, force)
         gate, baseline = _gate_and_baseline(
             repo, env_result, settings, force, skip_gate, skip_baseline, rebaseline)
-        Dataset(name=_dataset_name(repo, settings)).write(out)
+        Dataset(name=_dataset_name(repo, settings), survey_id=_survey_id(out, force)).write(out)
         _log("report: writing report.md")
         atomic_write(out / "report.md",
                      render_report(map_data, fidelity_data, tasks, gate, groups, package, baseline))

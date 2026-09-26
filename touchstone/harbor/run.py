@@ -6,7 +6,6 @@ dataset to the host, runs Harbor over SSH (`harbor run -p <root>/tasks`), and rs
 
 from __future__ import annotations
 
-import hashlib
 import os
 import shutil
 import subprocess
@@ -15,6 +14,7 @@ import tomllib
 from pathlib import Path
 
 from ..config import Settings, load_settings
+from ..ids import new_id
 from ..llm.keychain import secret
 from . import keys, remote
 
@@ -187,12 +187,6 @@ def _run_local(path: Path, agent: str, model: str | None, jobs_dir: Path, n_conc
     return _newest_job(jobs_dir, before)
 
 
-def _remote_dataset_path(remote_root: str, sync_root: Path) -> str:
-    """A per-checkout remote path so two customers' `touchstone/` roots never collide."""
-    digest = hashlib.sha1(str(sync_root.resolve()).encode()).hexdigest()[:8]
-    return f"{remote_root}/datasets/{sync_root.name}-{digest}"
-
-
 def _remote_key_prefix(keys_: list[tuple[str, str]] | None) -> tuple[str, str | None]:
     """Read each key from stdin (one line per key, in order) into its env var; no value on argv."""
     if not keys_:
@@ -207,10 +201,11 @@ def _run_remote(path: Path, agent: str, model: str | None, jobs_dir: Path, n_con
     host, remote_root = settings.harbor_host, settings.harbor_remote_root
     sync_root = path.parent if path.name == "tasks" else path
     rel_run = _run_path(path).relative_to(sync_root).as_posix() or "."
-    remote_path = _remote_dataset_path(remote_root, sync_root)
+    remote_path = remote.remote_dataset_path(remote_root, sync_root)
+    run_out = f"{remote_path}/runs/{new_id()}"  # this run's own output dir; nothing else lands here
 
-    # --exclude jobs so a --delete push never wipes job dirs the host still holds.
-    _call(_rsync_cmd(["-az", "--delete", "--exclude", "jobs",
+    # --exclude jobs/runs so a --delete push never wipes job dirs or prior run outputs.
+    _call(_rsync_cmd(["-az", "--delete", "--exclude", "jobs", "--exclude", "runs",
                       f"{sync_root}/", f"{host}:{remote_path}/"]))
     with_path = None
     if _is_custom_agent(agent):  # ship touchstone so harbor can import the custom agent
@@ -218,15 +213,15 @@ def _run_remote(path: Path, agent: str, model: str | None, jobs_dir: Path, n_con
         _sync_src(host, with_path)
     # -o must be ABSOLUTE: a verifier's `docker compose cp` resolves a relative path wrong.
     remote_cmd = " ".join(
-        _harbor_cmd(rel_run, agent, model, f"{remote_path}/jobs", n_concurrent,
-                    extra_args, with_path))
+        _harbor_cmd(rel_run, agent, model, run_out, n_concurrent, extra_args, with_path))
     prefix, stdin_data = _remote_key_prefix(keys_)
     _call(_ssh_cmd(host, f"{prefix}{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"),
           stdin_data=stdin_data)
 
     jobs_dir.mkdir(parents=True, exist_ok=True)
     before = _job_dirs(jobs_dir)
-    _call(_rsync_cmd(["-az", f"{host}:{remote_path}/jobs/", f"{jobs_dir}/"]))
+    # Pull back ONLY this run's output dir — never the other jobs a shared host holds.
+    _call(_rsync_cmd(["-az", f"{host}:{run_out}/", f"{jobs_dir}/"]))
     return _newest_job(jobs_dir, before)
 
 
@@ -246,49 +241,6 @@ def build_image(context_dir: str | Path, tag: str, settings: Settings | None = N
         _build_remote(context_dir, tag, settings)
     else:
         _build_call(["docker", "build", "-t", tag, str(context_dir)], "local")
-
-
-def _regrade_cmd(job_dir: str, tasks_path: str, out: str) -> list[str]:
-    return ["harbor", "job", "regrade", job_dir, "-p", tasks_path, "-o", out]
-
-
-def _regrade_local(job_dir: Path, tasks_path: Path) -> Path:
-    """Regrade `job_dir` against the updated tasks; the new job lands beside the source."""
-    out = job_dir.parent
-    before = _job_dirs(out)
-    _call(_regrade_cmd(str(job_dir.resolve()), str(_run_path(tasks_path).resolve()),
-                       str(out.resolve())))
-    return _newest_job(out, before)
-
-
-def _regrade_remote(job_dir: Path, tasks_path: Path, settings: Settings) -> Path:
-    host = settings.harbor_host
-    sync_root = job_dir.parent.parent  # the dataset root holding tasks/ and jobs/
-    rel_tasks = _run_path(tasks_path).relative_to(sync_root).as_posix()
-    remote_path = _remote_dataset_path(settings.harbor_remote_root, sync_root)
-    # Push the updated tasks (never the whole jobs tree), then just the one source job dir.
-    _call(_rsync_cmd(["-az", "--delete", "--exclude", "jobs",
-                      f"{sync_root}/", f"{host}:{remote_path}/"]))
-    _call(_rsync_cmd(["-az", f"{job_dir}/", f"{host}:{remote_path}/jobs/{job_dir.name}/"]))
-    # Absolute -o for the same compose-cp reason as _run_remote.
-    remote_cmd = " ".join(
-        _regrade_cmd(f"{remote_path}/jobs/{job_dir.name}", rel_tasks, f"{remote_path}/jobs"))
-    _call(_ssh_cmd(host, f"{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"))
-    out = job_dir.parent
-    before = _job_dirs(out)
-    _call(_rsync_cmd(["-az", f"{host}:{remote_path}/jobs/", f"{out}/"]))
-    return _newest_job(out, before)
-
-
-def regrade(job_dir: str | Path, tasks_path: str | Path, *,
-            settings: Settings | None = None) -> Path:
-    """Run `harbor job regrade` over `job_dir` and return the new job dir. From recorded
-    artifacts (no agent, no key); runs on the SSH host when there is no local Docker."""
-    job_dir, tasks_path = Path(job_dir), Path(tasks_path)
-    settings = settings or load_settings()
-    if _require_target(settings) == "remote":
-        return _regrade_remote(job_dir, tasks_path, settings)
-    return _regrade_local(job_dir, tasks_path)
 
 
 def _tasks_dir(path: Path) -> Path:
@@ -341,3 +293,8 @@ def run(path: str | Path, agent: str, *, model: str | None = None,
     if _require_target(settings) == "remote":
         return _run_remote(path, agent, model, jobs_dir, n_concurrent, extra_args, settings, keys_)
     return _run_local(path, agent, model, jobs_dir, n_concurrent, extra_args, keys_)
+
+
+# Re-export `regrade` so `run_mod.regrade` stays the public entry point; its implementation lives in
+# regrade_run to keep this file small. Imported at the bottom so run's helpers are defined first.
+from .regrade_run import regrade  # noqa: E402,F401
