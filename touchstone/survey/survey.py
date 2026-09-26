@@ -125,29 +125,38 @@ def _invoke_step(repo, map_data, prov, events, out, scrub, settings, fidelity_da
     return invoke
 
 
-def _remeasure(repo, prov, map_data, events, out, scrub, settings, invoke, fidelity_data) -> None:
+def _remeasure_service(service, repo, prov, map_data, events, out, scrub, settings, invoke,
+                       threshold):
     from . import db_seed, db_service
 
+    name = service["name"]
+    is_db = db_service.is_db(service)
+    if is_db:
+        db_seed.prime_scrubber(repo, service, scrub)  # scrub recordings like the source
+    tools = service_tools(map_data, service)
+    ctx = _replay_ctx(service, tools)
+    calls = service_calls(map_data, events, name)
+    _log(f"invoke: re-measuring {name} through invoke.py")
+    result = fidelity.measure_service(
+        out / "simulators" / name, repo, calls, ctx, settings, scrub, invoke)
+    if not is_db:
+        return result
+    if result["score"] < threshold:
+        _log(f"invoke: regenerating db simulator {name} with failure examples")
+        result = db_sim.regenerate(repo, prov, service, tools, events, out / "simulators",
+                                   scrub, settings, invoke, result, calls)
+    result["source"] = db_sim.seed_source(out / "simulators" / name)  # keep the seed label
+    return result
+
+
+def _remeasure(repo, prov, map_data, events, out, scrub, settings, invoke, fidelity_data) -> None:
     threshold = settings.survey_fidelity_threshold
     for service in crossing_services(map_data):
         name = service["name"]
         if fidelity_data.get(name, {}).get("score", 1.0) >= threshold:
             continue
-        if db_service.is_db(service):
-            db_seed.prime_scrubber(repo, service, scrub)  # scrub recordings like the source
-        tools = service_tools(map_data, service)
-        ctx = _replay_ctx(service, tools)
-        calls = service_calls(map_data, events, name)
-        _log(f"invoke: re-measuring {name} through invoke.py")
-        result = fidelity.measure_service(
-            out / "simulators" / name, repo, calls, ctx, settings, scrub, invoke)
-        if db_service.is_db(service):
-            if result["score"] < threshold:
-                _log(f"invoke: regenerating db simulator {name} with failure examples")
-                result = db_sim.regenerate(repo, prov, service, tools, events, out / "simulators",
-                                           scrub, settings, invoke, result, calls)
-            result["source"] = db_sim.seed_source(out / "simulators" / name)  # keep the seed label
-        fidelity_data[name] = result
+        fidelity_data[name] = _remeasure_service(
+            service, repo, prov, map_data, events, out, scrub, settings, invoke, threshold)
 
 
 def _build_tasks(repo, conn, map_data, out, events, scrub, prov, settings, force, invoke):

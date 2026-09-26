@@ -115,6 +115,14 @@ def _split_passing(passing: list[str]) -> tuple[set[str], set[str]]:
     return set(ordered) - hold, hold
 
 
+def _destination(rate: float, name: str, teacher: set[str], to_distill: set[str]) -> str:
+    if rate >= PASS:
+        return "distill" if name in to_distill else "hold_out"
+    if rate > 0:
+        return "rl"
+    return "distill" if name in teacher else "stuck"
+
+
 def route(teacher_jobs: list[Job], student_jobs: list[Job], *,
           threshold: float = 1.0) -> dict[str, str]:
     """Per student task, its destination: distill, rl, hold_out, or stuck. Sorted by task name.
@@ -125,15 +133,5 @@ def route(teacher_jobs: list[Job], student_jobs: list[Job], *,
     tasks = _tasks(student_jobs)
     passing = [name for name, trials in tasks.items() if _pass_rate(trials) >= PASS]
     to_distill, _ = _split_passing(passing)
-    routing: dict[str, str] = {}
-    for name, trials in tasks.items():
-        rate = _pass_rate(trials)
-        if rate >= 1:
-            routing[name] = "distill" if name in to_distill else "hold_out"
-        elif rate > 0:
-            routing[name] = "rl"
-        elif name in teacher:
-            routing[name] = "distill"
-        else:
-            routing[name] = "stuck"
-    return routing
+    return {name: _destination(_pass_rate(trials), name, teacher, to_distill)
+            for name, trials in tasks.items()}

@@ -154,16 +154,26 @@ def seed_recorded(sim_dir: Path, calls, scrub, collection: str) -> bool:
     return True
 
 
+def _doc_id(doc: dict):
+    return next((doc[key] for key in _ID_KEYS if doc.get(key) is not None), None)
+
+
+def _arg_id(args: dict, output):
+    leaves = scalar_leaves(output)
+    for key, val in args.items():
+        if key not in _ID_KEYS and not key.endswith("_id"):
+            continue
+        if isinstance(val, str | int) and val in leaves:
+            return val
+    return None
+
+
 def _recorded_id(call):
     doc = call.output if isinstance(call.output, dict) else {}
-    for key in _ID_KEYS:
-        if doc.get(key) is not None:
-            return doc[key]
     args = call.arguments if isinstance(call.arguments, dict) else {}
-    for key, val in args.items():
-        if key in _ID_KEYS or key.endswith("_id"):
-            if isinstance(val, str | int) and val in scalar_leaves(call.output):
-                return val
+    for candidate in (_doc_id(doc), _arg_id(args, call.output)):
+        if candidate is not None:
+            return candidate
     return next((v for v in args.values() if isinstance(v, str | int)), None)
 
 
