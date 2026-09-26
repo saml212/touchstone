@@ -40,6 +40,27 @@ def test_jobs_lists_pass_rate_per_task(tmp_path, seed_task):
     assert "ds/t2" in result.output and "0.0%" in result.output
 
 
+def test_jobs_reports_agent_did_not_run_when_no_trajectory(tmp_path, seed_task):
+    # The live tau-bench failure: the verifier wrote a 0 but the agent never ran (no trajectory).
+    # `jobs` must say so, not print a false 0.0%.
+    seed_task(tmp_path)
+    jobs = tmp_path / "jobs"
+    j = _job(jobs, "2026-01-01__00-00-00")
+    d = j / "t1__a"
+    (d / "verifier").mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps({"task_name": "ds/t1",
+                                               "agent_info": {"name": "touchstone"}}))
+    (d / "verifier" / "reward.txt").write_text("0.0\n")
+    (d / "artifacts").mkdir()
+    (d / "artifacts" / "manifest.json").write_text(json.dumps(
+        [{"source": "/logs/agent/trajectory.json", "destination": "agent/trajectory.json",
+          "type": "file", "status": "failed"}]))
+    result = runner.invoke(app, ["jobs", "--jobs-dir", str(jobs)])
+    assert result.exit_code == 0
+    assert "agent did not run (no trajectory)" in result.output
+    assert "0.0%" not in result.output
+
+
 def test_bench_runs_and_prints_scoreboard(tmp_path, monkeypatch, seed_task):
     import touchstone.harbor.run as run_mod
 

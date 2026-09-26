@@ -1,10 +1,17 @@
 import json
 
-from touchstone.harbor.jobs import Job, compare, pass_rates
+from touchstone.harbor.jobs import (
+    NO_TRAJECTORY,
+    Job,
+    compare,
+    pass_rates,
+    ran_tasks,
+    task_outcomes,
+)
 
 
 def _trial(job_dir, name, task_name, *, reward=None, rewards=None, exc=None, traj=False,
-           agent="oracle", model=None):
+           agent="oracle", model=None, manifest=None):
     d = job_dir / name
     (d / "verifier").mkdir(parents=True)
     result = {"task_name": task_name, "agent_info": {"name": agent,
@@ -19,7 +26,19 @@ def _trial(job_dir, name, task_name, *, reward=None, rewards=None, exc=None, tra
     if traj:
         (d / "agent").mkdir()
         (d / "agent" / "trajectory.json").write_text("{}")
+    if manifest is not None:
+        (d / "artifacts").mkdir()
+        (d / "artifacts" / "manifest.json").write_text(json.dumps(manifest))
     return d
+
+
+# A Harbor artifacts manifest whose agent-trajectory collection failed (the agent never ran).
+_FAILED_TRAJ = [{"source": "/logs/agent/trajectory.json", "destination": "agent/trajectory.json",
+                 "type": "file", "status": "failed"},
+                {"source": "/app/output.json", "destination": "output.json",
+                 "type": "file", "status": "failed"}]
+_OK_TRAJ = [{"source": "/logs/agent/trajectory.json", "destination": "agent/trajectory.json",
+             "type": "file", "status": "ok"}]
 
 
 def _job(tmp_path, name="job"):
@@ -61,6 +80,43 @@ def test_pass_rates_average_per_task(tmp_path):
     _trial(jd, "t1__b", "ds/t1", reward=0.0)
     _trial(jd, "t2__a", "ds/t2", reward=1.0)
     assert pass_rates(Job.read(jd)) == {"ds/t1": 0.5, "ds/t2": 1.0}
+
+
+def test_no_trajectory_manifest_failed_is_an_error_not_a_zero(tmp_path):
+    jd = _job(tmp_path)
+    # A real agent-under-test trial: the verifier wrote a 0, but Harbor's manifest says the
+    # trajectory was never collected. That 0 is false — it must read as an error, not a reward.
+    _trial(jd, "t1__aaa", "ds/t1", reward=0.0, agent="touchstone", model="m",
+           manifest=_FAILED_TRAJ)
+    t = Job.read(jd).trials[0]
+    assert t.reward is None and t.passed is False and t.error == NO_TRAJECTORY
+
+
+def test_ok_manifest_and_trajectory_keep_the_reward(tmp_path):
+    jd = _job(tmp_path)
+    _trial(jd, "t1__aaa", "ds/t1", reward=0.0, agent="touchstone", model="m", traj=True,
+           manifest=_OK_TRAJ)
+    t = Job.read(jd).trials[0]
+    assert t.reward == 0.0 and t.error is None
+
+
+def test_gate_agent_missing_trajectory_keeps_its_reward(tmp_path):
+    # oracle/nop never write a trajectory; a failed manifest entry must not zero out gate grading.
+    jd = _job(tmp_path)
+    _trial(jd, "t1__aaa", "ds/t1", reward=1.0, agent="oracle", manifest=_FAILED_TRAJ)
+    t = Job.read(jd).trials[0]
+    assert t.reward == 1.0 and t.error is None
+
+
+def test_task_outcomes_shows_error_when_agent_never_ran(tmp_path):
+    jd = _job(tmp_path)
+    _trial(jd, "t1__a", "ds/t1", reward=1.0, agent="touchstone", model="m", traj=True,
+           manifest=_OK_TRAJ)
+    _trial(jd, "t2__a", "ds/t2", reward=0.0, agent="touchstone", model="m", manifest=_FAILED_TRAJ)
+    job = Job.read(jd)
+    outcomes = task_outcomes(job)
+    assert outcomes["ds/t1"] == 1.0 and outcomes["ds/t2"] == NO_TRAJECTORY
+    assert ran_tasks(job) == {"ds/t1"}
 
 
 def test_compare_splits_tasks_both_only_neither(tmp_path):

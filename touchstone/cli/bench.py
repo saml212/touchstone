@@ -14,15 +14,17 @@ AGENT_PATH = "touchstone.harbor.agent:TouchstoneAgent"
 _MODES = ("packaged", "replica")
 
 
-def _print_rates(rates: dict[str, float]) -> None:
+def _print_rates(rates: dict[str, float | str]) -> None:
     if not rates:
         typer.echo("(no trials)")
         return
     width = max(len(t) for t in rates)
     for task, rate in rates.items():
-        typer.echo(f"  {task.ljust(width)}  {rate * 100:5.1f}%")
-    mean = sum(rates.values()) / len(rates)
-    typer.echo(f"  {'overall'.ljust(width)}  {mean * 100:5.1f}%")
+        cell = f"{rate * 100:5.1f}%" if isinstance(rate, (int, float)) else rate
+        typer.echo(f"  {task.ljust(width)}  {cell}")
+    numeric = [v for v in rates.values() if isinstance(v, (int, float))]
+    if numeric:
+        typer.echo(f"  {'overall'.ljust(width)}  {sum(numeric) / len(numeric) * 100:5.1f}%")
 
 
 def _print_compare(comparison: dict[str, list[str]]) -> None:
@@ -62,7 +64,7 @@ def bench(
                               n_concurrent=n_concurrent, extra_args=extra, settings=settings)
     job = jobs_mod.Job.read(job_dir)
     typer.echo(f"\n{job_dir}")
-    _print_rates(jobs_mod.pass_rates(job))
+    _print_rates(jobs_mod.task_outcomes(job))
     if against:
         _print_compare(jobs_mod.compare(job, jobs_mod.Job.read(against)))
 
@@ -83,4 +85,4 @@ def jobs(
         return
     for d in dirs:
         typer.echo(f"\n{d.name}")
-        _print_rates(jobs_mod.pass_rates(jobs_mod.Job.read(d)))
+        _print_rates(jobs_mod.task_outcomes(jobs_mod.Job.read(d)))
