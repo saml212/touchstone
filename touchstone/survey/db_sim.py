@@ -211,8 +211,7 @@ def _schema_json_blocks(repo: Path) -> list[str]:
 
 
 def _schema_source(repo: Path) -> str:
-    """Files that describe the database shape: CREATE TABLE / ORM models / migrations, and small
-    JSON data files a document store loads. Capped like a service source block."""
+    """Files describing the db shape (CREATE TABLE / models / migrations) + small JSON data."""
     from .simulate import _MAX_SOURCE
 
     blocks = _schema_py_blocks(repo) + _schema_json_blocks(repo)
@@ -244,9 +243,11 @@ def _restore(sim_dir: Path, snapshot: dict) -> None:
 
 
 def _failure_hint(result: dict) -> str:
-    failures = result.get("failures", [])[:5]
-    return ("## Your previous db simulator failed these examples; fix the seed/schema so the tools "
-            "return the expected values:\n" + json.dumps(failures, indent=2, ensure_ascii=False))
+    # Show every failing example with its expected value (the exact docs the seed is missing/wrong).
+    failures = result.get("failures", [])[:40]
+    return ("## Your previous db simulator failed these. Put EACH expected document/row into the "
+            "seed with EXACTLY these id and field values (add missing, correct wrong):\n"
+            + json.dumps(failures, indent=2, ensure_ascii=False))
 
 
 def _generate(provider, repo: Path, service: dict, tool_source: str, examples, hint=""):
@@ -265,8 +266,7 @@ def _generate_or_unsupported(provider, repo, service, sim_dir, tool_source, exam
 
 def generate_db_simulator(repo, provider, service: dict, tools: list[dict], events, sim_root: Path,
                           scrub, settings, force: bool = False) -> dict:
-    """Write simulators/<name>/ for a db service and return its fidelity result. Only one generation
-    happens here; the low-score regeneration is deferred to `regenerate` (run post-invoke)."""
+    """Write simulators/<name>/ for a db service; low-score regen is deferred to regenerate()."""
     from . import fidelity
     from .simulate import _examples, _replay_ctx, _tool_source
 

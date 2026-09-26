@@ -173,7 +173,7 @@ def _score(calls: list[ToolEvent], got_list: list[dict], threshold: float,
         masked |= m
         if ok:
             reproduced += 1
-        elif len(failures) < 20:
+        elif len(failures) < 40:  # keep enough failures that a db regeneration hint sees them all
             failures.append(_failure(call, got.get("got"), scrub))
     n = len(calls)
     return {"calls": n, "reproduced": reproduced,
