@@ -75,6 +75,46 @@ def _project_pin() -> str | None:
     return None
 
 
+def _version_key(v: str) -> tuple:
+    """A comparable tuple from a dotted version, digits only ('0.1.10' -> (0, 1, 10))."""
+    out = []
+    for part in v.split("."):
+        digits = "".join(c for c in part if c.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
+def _uv_tool_version() -> str | None:
+    """The newest touchstone-bench installed as a uv tool on this machine, or None. Best effort: a
+    1 s timeout, and uv missing / no tool / a parse failure all read as None (skip silently)."""
+    import shutil
+    import subprocess
+
+    if not shutil.which("uv"):
+        return None
+    try:
+        proc = subprocess.run(["uv", "tool", "list"], capture_output=True, text=True, timeout=1)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    versions = []
+    for line in proc.stdout.splitlines() if proc.returncode == 0 else []:
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] in _DIST_NAMES and parts[1].startswith("v"):
+            versions.append(parts[1][1:])
+    return max(versions, key=_version_key) if versions else None
+
+
+def _tool_skew_note() -> None:
+    """One line when the touchstone-bench you're running (from a project venv) is older than the
+    newest installed as a uv tool — the stranger's `uv run touchstone` was 0.1.3 while the tool was
+    0.1.5. Suggest refreshing the project's lock; silent when they match or uv tool is absent."""
+    tool = _uv_tool_version()
+    running = _package_version()
+    if tool and _version_key(running) < _version_key(tool):
+        typer.echo(f"Note: touchstone-bench {tool} is installed as a uv tool; you are running "
+                   f"{running} here (uv lock --upgrade-package touchstone-bench).", err=True)
+
+
 def _skew_note() -> None:
     """One line when the project pins a touchstone different from the CLI you're running — the skew
     that made the stranger's `uv run touchstone` resolve a version with no `survey` command."""
@@ -97,6 +137,7 @@ def main(
     if debug:
         os.environ["TOUCHSTONE_DEBUG"] = "1"
     _skew_note()
+    _tool_skew_note()
     if ctx.invoked_subcommand is not None:
         return
     typer.echo("Touchstone — the loop:")

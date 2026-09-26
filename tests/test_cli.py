@@ -173,6 +173,51 @@ def test_version_skew_silent_in_the_touchstone_checkout_itself(tmp_path, monkeyp
     assert "Note: this project pins" not in runner.invoke(app, []).output
 
 
+def test_uv_tool_skew_note_when_a_newer_tool_is_installed(monkeypatch):
+    import touchstone.cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.3")
+    monkeypatch.setattr(cli_mod, "_uv_tool_version", lambda: "0.1.5")
+    result = runner.invoke(app, [])
+    assert result.exit_code == 0
+    assert ("Note: touchstone-bench 0.1.5 is installed as a uv tool; you are running 0.1.3 here "
+            "(uv lock --upgrade-package touchstone-bench).") in result.output
+
+
+def test_uv_tool_skew_silent_when_running_matches_or_leads(monkeypatch):
+    import touchstone.cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.5")
+    for tool in ("0.1.5", "0.1.4", None):  # equal, older, absent -> silent
+        monkeypatch.setattr(cli_mod, "_uv_tool_version", lambda t=tool: t)
+        assert "installed as a uv tool" not in runner.invoke(app, []).output
+
+
+def test_uv_tool_version_parses_the_listing(monkeypatch):
+    import shutil
+    import subprocess
+
+    import touchstone.cli as cli_mod
+
+    monkeypatch.setattr(shutil, "which", lambda _n: "/usr/bin/uv")
+
+    class _Proc:
+        returncode = 0
+        stdout = "ruff v0.5.0\ntouchstone-bench v0.1.5\n- touchstone (from ...)\n"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc())
+    assert cli_mod._uv_tool_version() == "0.1.5"
+
+
+def test_uv_tool_version_none_when_uv_absent(monkeypatch):
+    import shutil
+
+    import touchstone.cli as cli_mod
+
+    monkeypatch.setattr(shutil, "which", lambda _n: None)
+    assert cli_mod._uv_tool_version() is None
+
+
 def test_doctor_reports_version_skew_in_its_own_table(tmp_path, monkeypatch):
     # The version-skew note (elsewhere on stderr) is also a doctor row on stdout, so a user piping
     # `doctor` to diagnose the stranger's stale-pinned-doctor confusion still sees the skew.
