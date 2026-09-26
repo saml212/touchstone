@@ -17,7 +17,7 @@ from pathlib import Path
 from .. import store
 from ..config import Settings, load_settings
 from ..harbor.dataset import Dataset
-from . import fidelity
+from . import db_sim, fidelity
 from .baseline import run_baseline
 from .environment import build_environment
 from .gate import run_gate
@@ -78,12 +78,14 @@ def _invoke_step(repo, map_data, prov, events, out, scrub, settings, fidelity_da
     result = build_invoke(repo, map_data, prov, events, out, settings, force)
     invoke = result.get("path")
     if invoke:
-        _remeasure(repo, map_data, events, out, scrub, settings, invoke, fidelity_data)
+        _remeasure(repo, prov, map_data, events, out, scrub, settings, invoke, fidelity_data)
         atomic_write_json(out / "fidelity.json", fidelity_data)
     return invoke
 
 
-def _remeasure(repo, map_data, events, out, scrub, settings, invoke, fidelity_data) -> None:
+def _remeasure(repo, prov, map_data, events, out, scrub, settings, invoke, fidelity_data) -> None:
+    from . import db_service
+
     threshold = settings.survey_fidelity_threshold
     for service in crossing_services(map_data):
         name = service["name"]
@@ -93,8 +95,13 @@ def _remeasure(repo, map_data, events, out, scrub, settings, invoke, fidelity_da
         ctx = _replay_ctx(service, tools)
         calls = [e for e in events if e.tool in {t["name"] for t in tools}]
         _log(f"invoke: re-measuring {name} through invoke.py")
-        fidelity_data[name] = fidelity.measure_service(
+        result = fidelity.measure_service(
             out / "simulators" / name, repo, calls, ctx, settings, scrub, invoke)
+        if db_service.is_db(service) and result["score"] < threshold:
+            _log(f"invoke: regenerating db simulator {name} with failure examples")
+            result = db_sim.regenerate(repo, prov, service, tools, events, out / "simulators",
+                                       scrub, settings, invoke, result)
+        fidelity_data[name] = result
 
 
 def _build_tasks(repo, conn, map_data, out, events, scrub, prov, settings, force, invoke):

@@ -265,7 +265,9 @@ def _generate(provider, repo: Path, service: dict, tool_source: str, examples, h
 
 def generate_db_simulator(repo, provider, service: dict, tools: list[dict], events, sim_root: Path,
                           scrub, settings, force: bool = False) -> dict:
-    """Write simulators/<name>/ for a db service and return its fidelity result (one retry)."""
+    """Write simulators/<name>/ for a db service and return its fidelity result. Only one generation
+    happens here; the one-shot regeneration on a low score is deferred to `regenerate` (run by the
+    invoke step, since tools dispatched through invoke.py can't be measured until it exists)."""
     from . import fidelity
     from .simulate import _examples, _replay_ctx, _tool_source
 
@@ -277,21 +279,26 @@ def generate_db_simulator(repo, provider, service: dict, tools: list[dict], even
     tool_source = _tool_source(repo, tools)
     examples = _examples(calls, scrub)
     write_sim(sim_dir, _generate(provider, repo, service, tool_source, examples))
-    result = fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
-    if unsupported(sim_dir) or result["score"] >= settings.survey_fidelity_threshold:
-        return result
-    return _retry(provider, repo, service, tools, examples, sim_dir, calls, ctx, settings, scrub,
-                  result)
+    return fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
 
 
-def _retry(provider, repo, service, tools, examples, sim_dir, calls, ctx, settings, scrub, prev):
+def regenerate(repo, provider, service: dict, tools: list[dict], events, sim_root: Path, scrub,
+               settings, invoke, prev: dict) -> dict:
+    """One-shot regeneration of a below-threshold db simulator, with the real (invoke-driven)
+    failures as a hint, re-measured through invoke.py. Keeps whichever simulator scored higher."""
     from . import fidelity
-    from .simulate import _tool_source
+    from .simulate import _examples, _replay_ctx, _tool_source
 
+    sim_dir = sim_root / service["name"]
+    if unsupported(sim_dir):
+        return prev
+    ctx = _replay_ctx(service, tools)
+    calls = [e for e in events if e.tool in {t["name"] for t in tools}]
+    examples = _examples(calls, scrub)
     snapshot = _snapshot(sim_dir)
     write_sim(sim_dir, _generate(provider, repo, service, _tool_source(repo, tools), examples,
                                  _failure_hint(prev)))
-    new = fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
+    new = fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub, invoke)
     if new["score"] >= prev["score"]:
         return new
     _restore(sim_dir, snapshot)  # keep the better (previous) simulator

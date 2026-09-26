@@ -24,7 +24,7 @@ import httpx
 from ..config import Settings
 from .fidelity_db import dump_db  # noqa: F401 re-exported (task criteria import it from here)
 from .fidelity_mask import _compare, _mask, _mask_field, masked_equal  # noqa: F401 re-exported
-from .recordings import ToolEvent
+from .recordings import ToolEvent, decode_output
 from .scrub import Scrubber
 
 _HEALTH_TIMEOUT = 20.0
@@ -159,7 +159,7 @@ def _run_replay(repo: Path, calls: list[ToolEvent], base: str, ctx: dict,
 
 def _failure(call: ToolEvent, got, scrub: Scrubber) -> dict:
     return {"tool": call.tool, "arguments": scrub.scrub(call.arguments),
-            "expected": scrub.scrub(call.output), "got": scrub.scrub(got)}
+            "expected": scrub.scrub(call.output), "got": scrub.scrub(decode_output(got))}
 
 
 def _score(calls: list[ToolEvent], got_list: list[dict], threshold: float,
@@ -168,7 +168,8 @@ def _score(calls: list[ToolEvent], got_list: list[dict], threshold: float,
     masked: set = set()
     reproduced = 0
     for call, got in zip(calls, got_list, strict=False):
-        ok, m = _compare(call.output, got.get("got"))
+        # Recorded outputs are stored JSON-decoded; decode a JSON-string result the same way first.
+        ok, m = _compare(call.output, decode_output(got.get("got")))
         masked |= m
         if ok:
             reproduced += 1
@@ -253,8 +254,7 @@ def simulators_running(mounts: list[dict]):
 
 def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolEvent],
                   settings: Settings, invoke: str | None = None) -> dict:
-    """Start each simulator, seed it, dump state, replay `calls` (real tool functions), dump again.
-    Returns {"initial", "final", "replayed"} keyed by simulator name, or {"error": ...}."""
+    """Start sims, dump state, replay, dump -> {initial, final, replayed} by sim, or {error}."""
     started: list[dict] = []
     try:
         started = _start_mounts(mounts)
@@ -274,8 +274,8 @@ def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolE
 
 def _measure_db(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict,
                 settings: Settings, scrub: Scrubber, threshold: float) -> dict:
-    """Fidelity for a db service: materialize state.db, replay the real tools against it (no
-    server), compare returned values. An unsupported service is reported 0 with its reason."""
+    """Fidelity for a db service: materialize state.db, replay real tools against it (no server),
+    compare returned. An unsupported service is reported 0 with its reason."""
     from . import db_service, db_sim
 
     reason = db_sim.unsupported(sim_dir)

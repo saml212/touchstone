@@ -17,7 +17,7 @@ import json
 import re
 from pathlib import Path
 
-from . import descriptions, fidelity
+from . import descriptions, fidelity, recordings
 from .minted_ids import scalar_leaves
 from .recordings import ToolEvent
 from .simulate import crossing_services
@@ -285,10 +285,12 @@ def reproduced(calls: list[ToolEvent], replayed: list[dict]) -> bool:
     if len(replayed) < len(calls):
         return False
     for call, got in zip(calls, replayed, strict=False):
-        value = got.get("got")
-        if isinstance(value, dict) and "__error__" in value:
+        raw = got.get("got")
+        if isinstance(raw, dict) and "__error__" in raw:
             return False
-        if not fidelity.masked_equal(call.output, value):
+        # Decode a JSON-string result the same way recorded outputs are stored, so a db tool that
+        # returns a JSON string still matches its decoded recording.
+        if not fidelity.masked_equal(call.output, recordings.decode_output(raw)):
             return False
     return True
 

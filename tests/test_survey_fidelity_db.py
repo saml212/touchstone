@@ -2,7 +2,6 @@
 server), compare returned values. Covers a relational tool that reads the db directly and a
 document-store tool driven through a generated invoke.py."""
 
-import json
 import sys
 
 from touchstone.survey import db_sim
@@ -85,7 +84,9 @@ def test_document_store_db_fidelity_through_invoke(tmp_path):
     db_sim.write_sim(sim, {"collections": {"orders": {"#W1": {"status": "pending", "total": 5}}},
                            "README.md": "x"})
     ctx = _replay_ctx(WORLD, [{"name": "get_order", "import_path": "orders_tool:get_order"}])
+    # The tool returns a JSON string; recordings store outputs JSON-decoded, so the recorded output
+    # is the decoded dict. Fidelity decodes the replayed string the same way before comparing.
     calls = [ToolEvent(tool="get_order", arguments={"order_id": "#W1"},
-                       output=json.dumps({"status": "pending", "total": 5}), episode="e1")]
+                       output={"status": "pending", "total": 5}, episode="e1")]
     result = measure_service(sim, repo, calls, ctx, _Settings(), Scrubber(), str(invoke_path))
     assert result["score"] == 1.0, result

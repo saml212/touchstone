@@ -32,6 +32,12 @@ def _decode(value):
         return value
 
 
+def decode_output(value):
+    """Public alias: JSON-decode a string result when possible, else keep it. Recorded outputs are
+    stored decoded, so a replayed value is decoded the same way before being compared to one."""
+    return _decode(value)
+
+
 def _calls_in(output: dict) -> list[dict]:
     message = output.get("message") if isinstance(output, dict) else None
     calls = message.get("tool_calls") if isinstance(message, dict) else None
