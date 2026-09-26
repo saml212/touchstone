@@ -173,6 +173,30 @@ def test_version_skew_silent_in_the_touchstone_checkout_itself(tmp_path, monkeyp
     assert "Note: this project pins" not in runner.invoke(app, []).output
 
 
+def test_doctor_reports_version_skew_in_its_own_table(tmp_path, monkeypatch):
+    # The version-skew note (elsewhere on stderr) is also a doctor row on stdout, so a user piping
+    # `doctor` to diagnose the stranger's stale-pinned-doctor confusion still sees the skew.
+    import touchstone.cli as cli_mod
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.3")
+    _write_lock(tmp_path, "touchstone", "0.1.0")
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "touchstone" in result.output and "skew" in result.output
+    assert "running 0.1.3; project pins 0.1.0" in result.output
+
+
+def test_doctor_version_row_ok_without_skew(tmp_path, monkeypatch):
+    import touchstone.cli as cli_mod
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.3")
+    result = runner.invoke(app, ["doctor"])  # no uv.lock -> no skew
+    assert result.exit_code == 0
+    assert "skew" not in result.output
+
+
 def test_doctor_exits_zero_with_all_tools_missing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     import shutil

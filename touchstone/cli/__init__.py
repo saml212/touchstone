@@ -174,6 +174,18 @@ def _harbor_host_row(settings) -> tuple[str, str, str]:
     return ("harbor host", "unreachable", f"{host}: {detail[0] if detail else 'ssh failed'}")
 
 
+def _version_row() -> tuple[str, str, str]:
+    """touchstone's own version, flagged `skew` when the project pins a different one. doctor is the
+    consistency command, so the version-skew note (elsewhere on stderr) is also a row in its table —
+    a user piping `doctor` still sees the skew that made the stranger trust an old pinned doctor."""
+    running = _package_version()
+    pinned = _project_pin()
+    if pinned and pinned != running:
+        return ("touchstone", "skew", f"running {running}; project pins {pinned} "
+                "(uv sync --upgrade-package touchstone-bench)")
+    return ("touchstone", "ok", running)
+
+
 def _doctor_rows(settings) -> list[tuple[str, str, str]]:
     """One (component, status, detail) row per environment check. No installs; the only network call
     is the harbor-host reachability probe, and only when a remote host is configured."""
@@ -183,6 +195,7 @@ def _doctor_rows(settings) -> list[tuple[str, str, str]]:
     from ..llm import provider_statuses
 
     rows: list[tuple[str, str, str]] = [
+        _version_row(),
         ("python", "ok", sys.version.split()[0]),
         ("database", "ok",
          f"{settings.db} ({'exists' if settings.db.exists() else 'not created'})"),
