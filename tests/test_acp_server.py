@@ -11,7 +11,8 @@ import json
 from types import SimpleNamespace
 
 from touchstone import store
-from touchstone.harbor.acp_server import LocalEnv, Session
+from touchstone.harbor import acp_server
+from touchstone.harbor.acp_server import LocalEnv, Session, _sim_env
 from touchstone.harbor.agent import load_config
 from touchstone.llm import Reply
 
@@ -104,3 +105,27 @@ def test_local_env_runs_commands_and_merges_base(tmp_path):
     result = asyncio.run(env.exec("echo $FLIGHT_API_BASE_URL"))
     assert result.return_code == 0
     assert "127.0.0.1:8000" in result.stdout
+
+
+def test_sim_env_starts_db_service_and_points_env_at_state_db(monkeypatch):
+    # a db service has no `port`: the old _sim_env did int(sim["port"]) and crashed build_session,
+    # so the ACP session never started and output.json was never written (bench trials all errored).
+    started = []
+    monkeypatch.setattr(acp_server, "_run_start", lambda cmd: started.append(cmd))
+    env = LocalEnv()
+    hosts = _sim_env(env, [{"name": "retail_db", "kind": "db",
+                            "base_url_env": "TOUCHSTONE_DB_RETAIL_DB", "db_url": False}])
+    assert hosts == {}
+    assert "bash /app/simulators/start.sh retail_db" in started  # no port argument for a db sim
+    assert env.base["TOUCHSTONE_DB_RETAIL_DB"] == "/app/simulators/retail_db/state.db"
+
+
+def test_sim_env_still_wires_http_services(monkeypatch):
+    started = []
+    monkeypatch.setattr(acp_server, "_run_start", lambda cmd: started.append(cmd))
+    env = LocalEnv()
+    hosts = _sim_env(env, [{"name": "widget", "port": 8000, "base_url_env": "WIDGET_URL"},
+                           {"name": "billing", "port": 8001, "host": "api.billing.test"}])
+    assert "bash /app/simulators/start.sh widget 8000" in started
+    assert env.base["WIDGET_URL"] == "http://127.0.0.1:8000"
+    assert hosts == {"api.billing.test": "http://127.0.0.1:8001"}

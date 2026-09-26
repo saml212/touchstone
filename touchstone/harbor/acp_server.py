@@ -46,18 +46,37 @@ class LocalEnv:
                                return_code=proc.returncode)
 
 
+def _run_start(cmd: str) -> None:
+    os.system(cmd)  # noqa: S605 — fixed simulator names, run inside the sandbox
+
+
+def _start_sim(env: LocalEnv, sim: dict, hosts: dict) -> None:
+    """Start one simulator inside the sandbox and wire its base URL into `env`/`hosts`. A db service
+    has no port: start.sh re-materializes state.db and the env var is pointed at that db path."""
+    from ..survey import db_service
+
+    name = sim["name"]
+    if db_service.is_db(sim):
+        _run_start(f"bash /app/simulators/start.sh {name}")
+        if sim.get("base_url_env"):
+            env.base[sim["base_url_env"]] = db_service.value_for(
+                db_service.container_db_path(name), url=sim.get("db_url", False))
+        return
+    port = int(sim["port"])
+    _run_start(f"bash /app/simulators/start.sh {name} {port}")
+    base = f"http://127.0.0.1:{port}"
+    if sim.get("base_url_env"):
+        env.base[sim["base_url_env"]] = base
+    elif sim.get("host"):
+        hosts[sim["host"]] = base
+
+
 def _sim_env(env: LocalEnv, simulators: list) -> dict:
     """Start each simulator locally and return the host->base map for constant-base-URL services;
     base_url_env services are pointed at their simulator directly in `env.base`."""
     hosts: dict[str, str] = {}
     for sim in simulators:
-        name, port = sim["name"], int(sim["port"])
-        os.system(f"bash /app/simulators/start.sh {name} {port}")  # noqa: S605 — fixed sim names
-        base = f"http://127.0.0.1:{port}"
-        if sim.get("base_url_env"):
-            env.base[sim["base_url_env"]] = base
-        elif sim.get("host"):
-            hosts[sim["host"]] = base
+        _start_sim(env, sim, hosts)
     return hosts
 
 
