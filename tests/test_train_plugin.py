@@ -42,9 +42,10 @@ def test_plugin_writes_datasets_under_dataset_train_on_job_end(tmp_path):
     train = tmp_path / "touchstone" / "train"
     assert (train / "distill.jsonl").exists()
     manifest = json.loads((train / "manifest.json").read_text())
-    # the job is both teacher and student: ds/refund distills (self-pass), ds/stuck is stuck
+    # the job is both teacher and student: ds/refund distills (self-pass, the only passing task so
+    # it is not held out), ds/stuck is stuck
     assert manifest["counts"]["distill_trajectories"] == 1
-    assert manifest["counts"]["hold_out"] == 1  # ds/refund passed -> hold_out for the student view
+    assert manifest["counts"]["distill"] == 1 and manifest["counts"]["hold_out"] == 0
     assert manifest["counts"]["stuck"] == 1
 
 

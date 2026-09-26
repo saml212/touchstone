@@ -60,8 +60,10 @@ def test_write_produces_three_files_and_manifest(tmp_path):
 
     manifest = json.loads((out / "manifest.json").read_text())
     assert manifest["counts"] == {
-        "distill": 1, "rl": 0, "hold_out": 1, "stuck": 1,
-        "distill_trajectories": 2, "distill_missing_trajectory": 0,
+        # lookup is the only passing student task (N=1) -> it distills, none held out; the
+        # student's own passing lookup trial has no trajectory, so it is excluded (teacher's kept).
+        "distill": 2, "rl": 0, "hold_out": 0, "stuck": 1,
+        "distill_trajectories": 2, "distill_missing_trajectory": 1,
     }
     assert manifest["inputs"]["teacher"][0]["model"] == "openai/gpt-4o-mini"
     assert manifest["threshold"] == 1.0 and manifest["touchstone_version"]
@@ -73,8 +75,22 @@ def test_sentence_reports_routes_and_out(tmp_path):
     written = write_datasets(out, [Job.read(_teacher(tmp_path))], [Job.read(_student(tmp_path))])
     s = written.sentence()
     assert "distill: 2 trajectories from 2 tasks" in s
-    assert "rl: 0 tasks" in s and "hold-out: 1" in s and "stuck: 1" in s
+    assert "excluded 1: no trajectory artifact" in s  # the artifact-less passing trial is named
+    assert "rl: 0 tasks" in s and "hold-out: 0" in s and "stuck: 1" in s
     assert s.endswith(f"{out}/")
+
+
+def test_five_passing_trials_distill_at_least_four(tmp_path):
+    # The stranger's bug head-on: 5 tasks passed at 1.0, distill was empty. Now >= 4 distill.
+    cfg = {"agents": [{"name": "replica", "model_name": "m"}]}
+    jd = _job(tmp_path, "baseline", cfg)
+    for i in range(5):
+        _trial(jd, f"p{i}", f"ds/pass{i}", reward=1.0, traj={"schema_version": "ATIF-v1.8"})
+    out = tmp_path / "train"
+    written = write_datasets(out, [], [Job.read(jd)])
+    assert len(written.distill) >= 4
+    assert len((out / "distill.jsonl").read_text().splitlines()) >= 4
+    assert written.manifest["counts"]["hold_out"] == 1  # ~20% held out, not all five
 
 
 def test_rl_toml_carries_band_tasks(tmp_path):

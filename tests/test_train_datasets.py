@@ -1,7 +1,7 @@
 import json
 
 from touchstone.harbor.jobs import Job
-from touchstone.train.datasets import distill, distill_skipped, rl_tasks, route
+from touchstone.train.datasets import distill, distill_excluded, rl_tasks, route
 
 
 def _trial(job_dir, name, task_name, *, reward, traj=None, model="openai/gpt-4o-mini"):
@@ -51,7 +51,7 @@ def test_distill_missing_trajectory_counted_not_crashed(tmp_path):
     _trial(jd, "t2__a", "ds/lookup", reward=1.0, traj={"a": 1})
     job = Job.read(jd)
     assert len(distill([job])) == 1
-    assert distill_skipped([job]) == 1
+    assert distill_excluded([job], {"ds/refund", "ds/lookup"}) == 1
 
 
 def test_rl_band_excludes_zero_and_one(tmp_path):
@@ -67,7 +67,7 @@ def test_rl_band_excludes_zero_and_one(tmp_path):
     assert r["pass_rate"] == 0.5 and r["attempts"] == 2 and r["path"] == "tasks/refund"
 
 
-def test_route_all_four_outcomes(tmp_path):
+def test_route_teacher_rl_and_stuck(tmp_path):
     teacher = _job(tmp_path, "teacher")
     _trial(teacher, "t1", "ds/distillable", reward=1.0, traj={"a": 1})
     # teacher fails ds/stuck (no success there)
@@ -76,12 +76,22 @@ def test_route_all_four_outcomes(tmp_path):
     _trial(student, "s1", "ds/distillable", reward=0.0)          # rate 0 + teacher pass -> distill
     _trial(student, "s2a", "ds/rl", reward=1.0)                  # rate 0.5 -> rl
     _trial(student, "s2b", "ds/rl", reward=0.0)
-    _trial(student, "s3", "ds/holdout", reward=1.0)             # rate 1 -> hold_out
     _trial(student, "s4", "ds/stuck", reward=0.0)              # rate 0 + no teacher pass -> stuck
     routing = route([Job.read(teacher)], [Job.read(student)])
-    assert routing == {
-        "ds/distillable": "distill",
-        "ds/holdout": "hold_out",
-        "ds/rl": "rl",
-        "ds/stuck": "stuck",
-    }
+    assert routing == {"ds/distillable": "distill", "ds/rl": "rl", "ds/stuck": "stuck"}
+
+
+def test_route_splits_passing_tasks_80_20_never_all_holdout(tmp_path):
+    # The stranger's bug: 5 tasks passed at 1.0 and all went to hold_out, distill was empty.
+    student = _job(tmp_path, "student")
+    for i in range(5):
+        _trial(student, f"p{i}", f"ds/pass{i}", reward=1.0)  # all pass, no teacher
+    routing = route([], [Job.read(student)])
+    dests = list(routing.values())
+    assert dests.count("distill") == 4 and dests.count("hold_out") == 1  # ~80/20, never 0/5
+
+
+def test_route_single_pass_still_distills(tmp_path):
+    student = _job(tmp_path, "student")
+    _trial(student, "p0", "ds/only", reward=1.0)
+    assert route([], [Job.read(student)]) == {"ds/only": "distill"}  # N=1 -> at least one distills

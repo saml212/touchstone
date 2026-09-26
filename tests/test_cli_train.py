@@ -43,9 +43,10 @@ def test_train_end_to_end_writes_files_and_sentence(tmp_path, seed_task):
                                  "--student", str(student), "--out", str(out)])
     assert result.exit_code == 0, result.output
     assert "distill: 2 trajectories from 2 tasks" in result.output
-    assert "hold-out: 1" in result.output and str(out) in result.output
+    # lookup is the only passing student task (N=1) -> it distills, nothing held out
+    assert "hold-out: 0" in result.output and str(out) in result.output
     assert (out / "distill.jsonl").exists() and (out / "rl_tasks.toml").exists()
-    assert json.loads((out / "manifest.json").read_text())["counts"]["distill"] == 1
+    assert json.loads((out / "manifest.json").read_text())["counts"]["distill"] == 2
 
 
 def test_train_default_out_is_dataset_train(tmp_path, seed_task):
