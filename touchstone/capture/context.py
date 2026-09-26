@@ -23,8 +23,24 @@ _log = logging.getLogger("touchstone")
 _db_path: str | None = None
 _local = threading.local()
 _current: ContextVar[EpisodeHandle | None] = ContextVar("touchstone_episode", default=None)
+_paused: ContextVar[bool] = ContextVar("touchstone_paused", default=False)
 _untracked_lock = threading.Lock()
 _untracked_ids: dict[str, str] = {}
+
+
+def is_paused() -> bool:
+    return _paused.get()
+
+
+@contextmanager
+def paused():
+    """Suspend model/tool span recording for the duration of the block. Use it around a model call
+    that is NOT the agent under test (a simulated user, a judge, an evaluator)."""
+    token = _paused.set(True)
+    try:
+        yield
+    finally:
+        _paused.reset(token)
 
 
 def configure(db_path: str) -> None:
@@ -129,7 +145,9 @@ def add_span(
     started_at: str | None = None,
     parent_id: str | None = None,
     tool_call_id: str | None = None,
-) -> store.Span:
+) -> store.Span | None:
+    if _paused.get() and kind in ("model", "tool"):
+        return None  # inside touchstone.capture.paused(): not the agent under test
     conn = get_conn()
     ep = current_episode()
     span = store.Span(
