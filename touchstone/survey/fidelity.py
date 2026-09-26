@@ -20,7 +20,7 @@ from pathlib import Path
 import httpx
 
 from ..config import Settings
-from .fidelity_db import dump_db  # noqa: F401 re-exported (task criteria import it from here)
+from .fidelity_db import dump_db, measure_db  # noqa: F401 re-exported for callers and criteria
 from .fidelity_mask import _compare, _mask, _mask_field, masked_equal  # noqa: F401 re-exported
 from .recordings import ToolEvent, decode_output
 from .scrub import Scrubber
@@ -265,34 +265,6 @@ def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolE
             _kill(s["proc"], s["log"])
 
 
-def _scrub_calls(calls: list[ToolEvent], scrub: Scrubber) -> list[ToolEvent]:
-    """state.db is seeded from scrubbed data, so the recorded calls are scrubbed the same way before
-    replay + compare — one namespace, so an id in an argument resolves the document it seeded."""
-    return [ToolEvent(tool=c.tool, arguments=scrub.scrub(c.arguments), output=scrub.scrub(c.output),
-                      episode=c.episode, module=c.module) for c in calls]
-
-
-def _measure_db(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict,
-                settings: Settings, scrub: Scrubber, threshold: float) -> dict:
-    """Fidelity for a db service: materialize state.db, replay real tools against it, compare
-    returned. An unsupported service is reported 0 with its reason."""
-    from . import db_service, db_sim
-
-    reason = db_sim.unsupported(sim_dir)
-    if reason:
-        result = _failed_result(calls, threshold, f"db service unsupported: {reason}")
-        result["unsupported"] = reason
-        return result
-    db = db_sim.materialize(sim_dir)
-    base = db_service.value_for(str(db), url=ctx.get("db_url", False))
-    scrubbed = _scrub_calls(calls, scrub)
-    try:
-        got_list = _run_replay(repo, scrubbed, base, ctx, settings)
-    except _SimError as exc:
-        return _failed_result(calls, threshold, str(exc))
-    return _score(scrubbed, got_list, threshold, scrub)
-
-
 def measure_service(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict,
                     settings: Settings, scrub: Scrubber, invoke: str | None = None) -> dict:
     """Fidelity of the simulator in `sim_dir` against `calls`. Always kills the process."""
@@ -300,7 +272,7 @@ def measure_service(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict
         ctx = {**ctx, "invoke": invoke}
     threshold = settings.survey_fidelity_threshold
     if ctx.get("kind") == "db":
-        return _measure_db(sim_dir, repo, calls, ctx, settings, scrub, threshold)
+        return measure_db(sim_dir, repo, calls, ctx, settings, scrub, threshold)
     if calls and not _redirectable(ctx):
         # Nothing can repoint the tool, so the real base URL would be hit: flag it below-threshold.
         return _failed_result(calls, threshold, _NO_REDIRECT)

@@ -90,3 +90,24 @@ def test_document_store_db_fidelity_through_invoke(tmp_path):
                        output={"status": "pending", "total": 5}, episode="e1")]
     result = measure_service(sim, repo, calls, ctx, _Settings(), Scrubber(), str(invoke_path))
     assert result["score"] == 1.0, result
+
+
+def test_by_episode_groups_in_order():
+    from touchstone.survey.fidelity_db import _by_episode
+
+    calls = [ToolEvent("t", {}, 1, "e1"), ToolEvent("t", {}, 2, "e2"),
+             ToolEvent("t", {}, 3, "e1")]
+    groups = _by_episode(calls)
+    assert [[c.output for c in g] for g in groups] == [[1, 3], [2]]
+
+
+def test_scrub_calls_only_grades_recorded_outputs():
+    # A proposed-but-unexecuted tool call has output None: no ground truth, so it is not graded.
+    from touchstone.survey.fidelity_db import _scrub_calls
+
+    calls = [ToolEvent("t", {"email": "a@b.com"}, {"x": 1}, "e"),
+             ToolEvent("t", {}, None, "e")]
+    scrubbed = _scrub_calls(calls, Scrubber())
+    graded = [c for c in scrubbed if c.output is not None]
+    assert len(graded) == 1
+    assert "a@b.com" not in str(graded[0].arguments)  # scrubbed in the graded call
