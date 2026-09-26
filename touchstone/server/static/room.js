@@ -23,21 +23,26 @@ function notice(text) {
 
 // -- conversation ------------------------------------------------------------
 
+const seenCaptions = new Set();  // ids already on screen, so only genuinely new captions fade in
+
 function renderMessages(messages) {
   const box = $("messages");
   box.innerHTML = messages
     .map((m) => {
-      const cls = m.role === "assistant" ? "msg agent" : "msg";
-      const who = m.role === "assistant" ? "Reviewer" : m.speaker;
-      return `<div class="${cls}"><div class="who"><b>${esc(who)}</b></div>` +
-        `<div class="body">${esc(m.text)}</div></div>`;
+      const fresh = m.id && !seenCaptions.has(m.id) ? " isNew" : "";
+      const reviewer = m.role === "assistant";
+      const who = reviewer ? "Reviewer" : (m.speaker || "you");
+      return `<div class="turn ${reviewer ? "reviewer" : "person"}${fresh}">` +
+        `<div class="who">${esc(who)}</div><div class="cap">${esc(m.text)}</div></div>`;
     })
     .join("");
+  messages.forEach((m) => m.id && seenCaptions.add(m.id));
   box.scrollTop = box.scrollHeight;
   const lastAgent = [...messages].reverse().find((m) => m.role === "assistant");
   if (lastAgent && lastAgent.id !== lastAgentAudioId) {
     lastAgentAudioId = lastAgent.id;
-    if (mode !== "realtime") speak(lastAgent);  // realtime voices replies over the WebSocket
+    if (!micOn) setVoiceState("mic off");         // the reply arrived; drop the "thinking" word
+    if (mode !== "realtime") speak(lastAgent);    // realtime voices replies over the WebSocket
   }
 }
 
@@ -49,37 +54,31 @@ function pct(x) {
 
 function renderTrust(trust) {
   const el = $("trust");
-  if (!trust || !trust.reviewed) { el.textContent = "trust — (no reviews yet)"; return; }
-  el.textContent = `trust ${pct(trust.score)} · agreed ${trust.agreed}/${trust.reviewed}`;
+  if (!trust || !trust.reviewed) { el.textContent = "trust — · no reviews yet"; return; }
+  el.textContent = `trust ${pct(trust.score)} · ${trust.agreed} of ${trust.reviewed} reviewed`;
 }
 
-const FILTERS = [
-  ["unsure", "unsure"], ["disagree", "disagree"],
-  ["unreviewed", "unreviewed"], ["needs_review", "needs review"],
-];
+const QUEUE = [["unsure", "unsure"], ["disagree", "disagree"], ["unreviewed", "unreviewed"]];
 
-function renderChips(review) {
+function renderQueue(review) {
   const counts = (review && review.counts) || {};
-  const parts = FILTERS.map(([key, label]) => {
-    const n = key === "needs_review" ? (review && review.needs_review) || 0 : counts[key] || 0;
-    return `<button class="chip" data-filter="${key}">${label} ${n}</button>`;
-  });
-  const chips = $("chips");
-  chips.innerHTML = parts.join("");
-  const stale = (counts.stale) || 0;
-  chips.title = stale ? `${stale} trial(s) from renamed/removed tasks are hidden` : "";
-  document.querySelectorAll(".chip").forEach((b) => {
-    b.onclick = () => send(`Show me the ${b.dataset.filter.replace("_", " ")} trials.`);
-  });
+  const parts = QUEUE
+    .map(([key, label]) => (counts[key] ? `${counts[key]} ${label}` : ""))
+    .filter(Boolean);
+  const needs = (review && review.needs_review) || 0;
+  if (needs) parts.push(`${needs} need review`);
+  const el = $("queue");
+  el.textContent = parts.join(" · ");
+  const stale = counts.stale || 0;
+  el.title = stale ? `${stale} trial(s) from renamed/removed tasks are hidden` : "";
 }
 
 function criterionRow(c) {
   const ok = c.score === 1 || c.score === true;
-  const mark = c.score === null || c.score === undefined ? "" : ok ? "✓" : "✗";
   const raw = c.raw && c.raw !== c.description ? ` title="${esc(c.raw)}"` : "";
-  return `<li class="crit ${ok ? "pass" : "fail"}"><span class="dim">${esc(c.dimension)}</span>` +
+  return `<li class="crit ${ok ? "pass" : "fail"}"><span class="dot" aria-hidden="true"></span>` +
     `<span class="desc"${raw}>${esc(c.description)}</span>` +
-    `<span class="mark">${mark} ${pct(c.score)}</span></li>`;
+    `<span class="mark">${pct(c.score)}</span></li>`;
 }
 
 function renderProposed(review) {
@@ -96,10 +95,13 @@ function renderTrial(review) {
   $("trialCard").classList.toggle("hidden", !cur);
   if (!cur) return;
   $("trialTask").textContent = cur.task;
-  $("trialReward").textContent = `verifier reward ${pct(cur.reward)}`;
+  const width = Math.round(Math.max(0, Math.min(1, cur.reward || 0)) * 100);
+  $("trialReward").innerHTML = `<span class="num">${pct(cur.reward)}</span>` +
+    `<span class="bar"><span style="width:${width}%"></span></span>` +
+    `<span class="cap">verifier reward</span>`;
   $("trialInstruction").textContent = cur.instruction || "—";
   $("trialTrajectory").innerHTML = (cur.trajectory || [])
-    .map((line) => `<div class="step">${esc(line)}</div>`).join("") || "<div class='muted'>—</div>";
+    .map((line) => `<li class="step">${esc(line)}</li>`).join("") || "<li class='muted'>—</li>";
   $("trialCriteria").innerHTML = (cur.criteria || []).map(criterionRow).join("") ||
     "<li class='muted'>no criteria</li>";
   renderProposed(review);
@@ -108,8 +110,16 @@ function renderTrial(review) {
 function applyReview(review) {
   reviewState = review || {};
   renderTrust(reviewState.trust);
-  renderChips(reviewState);
+  renderQueue(reviewState);
   renderTrial(reviewState);
+}
+
+// The goal sentence for the top bar: the jobs the agent handles, lifted from the reviewer's
+// opening line ("Your agent handles X, Y and Z; …"); falls back to the room topic.
+function goalLine(messages, topic) {
+  const opening = (messages || []).find((m) => m.role === "assistant");
+  const match = opening && /handles (.+?)[;.]/.exec(opening.text || "");
+  return match ? match[1] : topic;
 }
 
 let reviewState = {};
@@ -117,7 +127,7 @@ let messagesState = [];
 let pollTimer = null;
 
 function applyState(s) {
-  $("topic").textContent = s.room.topic;
+  $("topic").textContent = goalLine(s.messages, s.room.topic);
   $("closed").classList.toggle("hidden", !s.room.closed_at);
   if (!speaker && s.you) speaker = s.you;  // no join card: the server names the local user
   if (s.mode) { mode = s.mode; refreshTalkButton(); }
@@ -146,7 +156,7 @@ function connect() {
   // the DOM stale; the server also pushes a full "state" event at the end of every turn.
   ws.onopen = () => {
     stopPolling();
-    if (!(mode === "realtime" && micOn)) setVoiceState("");
+    if (!(mode === "realtime" && micOn)) setVoiceState("mic off");
     refresh();
   };
   ws.onmessage = (ev) => {
@@ -156,12 +166,12 @@ function connect() {
     else if (type === "closed") { $("closed").classList.remove("hidden"); }
     else if (type === "audio") { playPCM(base64ToInt16(data.b64)); }
     else if (type === "message") { messagesState = messagesState.concat(data); renderMessages(messagesState); }
-    else if (type === "fallback") { mode = "local"; refreshTalkButton(); setVoiceState("● fell back to local voice"); }
+    else if (type === "fallback") { mode = "local"; refreshTalkButton(); setVoiceState("local voice"); }
   };
   ws.onclose = () => {
     socket = null;
     startPolling();
-    if (mode === "realtime") setVoiceState("● reconnecting…");
+    if (mode === "realtime") setVoiceState("reconnecting…");
     setTimeout(connect, 1500);
   };
 }
@@ -178,6 +188,7 @@ function setVoiceState(text) {
 async function send(text) {
   if (!text.trim()) return;
   $("text").value = "";
+  if (!micOn) setVoiceState("thinking");   // the reviewer is composing a reply (cleared on arrival)
   await fetch(`/api/rooms/${ROOM_ID}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -212,9 +223,8 @@ async function startReview() {
 // -- boot -------------------------------------------------------------------
 
 async function boot() {
-  $("send").onclick = () => send($("text").value);
   $("text").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send($("text").value); }
+    if (e.key === "Enter") { e.preventDefault(); send($("text").value); }
   });
   $("talk").onclick = toggleTalk;
   $("next").onclick = () => send("Next trial, please.");

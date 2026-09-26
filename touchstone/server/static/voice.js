@@ -48,7 +48,7 @@ function playPCM(int16) {
   playHead += buf.duration;
   playing = true;
   clearTimeout(playTail);
-  setVoiceState("● speaking");
+  setVoiceState("speaking");
   node.onended = endAgentAudio;
 }
 
@@ -57,7 +57,7 @@ function endAgentAudio() {
   clearTimeout(playTail);
   playTail = setTimeout(() => {   // ~300ms tail so the mic doesn't catch the speaker's decay
     playing = false;
-    setVoiceState(micOn ? "● listening" : "");
+    setVoiceState(micOn ? "listening" : "mic off");
   }, 300);
 }
 
@@ -82,24 +82,25 @@ async function openRealtimeMic() {
   procNode.connect(captureCtx.destination);
   micOn = true;
   wsSend({ type: "ptt", state: "down", speaker });   // claim the shared floor once
-  setVoiceState("● listening");
+  setVoiceState("listening");
+  refreshTalkButton();
   return true;
 }
 
 function setMic(on) {
   micOn = on;
   wsSend({ type: "ptt", state: on ? "down" : "up", speaker });
-  setVoiceState(on ? (playing ? "● speaking" : "● listening") : "");
+  setVoiceState(on ? (playing ? "speaking" : "listening") : "mic off");
   refreshTalkButton();
 }
 
-// -- #talk button ------------------------------------------------------------
+// -- #talk button (round mic; the glyph is fixed markup, so we toggle state, not text) --------
 
 function refreshTalkButton() {
   const btn = $("talk");
   if (!btn) return;
-  if (mode === "realtime") { btn.textContent = micOn ? "● mic on" : "○ mic off"; return; }
-  btn.textContent = recorder && recorder.state === "recording" ? "● recording" : "● talk";
+  const active = mode === "realtime" ? micOn : !!(recorder && recorder.state === "recording");
+  btn.setAttribute("aria-pressed", active ? "true" : "false");
 }
 
 async function toggleTalk() {
@@ -114,7 +115,6 @@ async function toggleTalk() {
 // -- local push-to-talk (MediaRecorder -> POST /audio) -----------------------
 
 async function toggleLocalTalk() {
-  const btn = $("talk");
   if (recorder && recorder.state === "recording") { recorder.stop(); return; }
   let stream;
   try {
@@ -126,15 +126,13 @@ async function toggleLocalTalk() {
   recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
   chunks = [];
   recorder.ondataavailable = (e) => chunks.push(e.data);
-  recorder.onstop = () => finishLocalClip(stream, btn);
+  recorder.onstop = () => finishLocalClip(stream);
   recorder.start();
-  btn.classList.add("recording");
   refreshTalkButton();
 }
 
-async function finishLocalClip(stream, btn) {
+async function finishLocalClip(stream) {
   stream.getTracks().forEach((t) => t.stop());
-  btn.classList.remove("recording");
   refreshTalkButton();
   const form = new FormData();
   form.append("speaker", speaker);
