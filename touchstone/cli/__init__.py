@@ -120,6 +120,12 @@ provider = "claude-cli"        # read-only code-mapping agent: claude-cli | code
 # model = ""                     # provider default when empty
 fidelity_threshold = 0.8       # a simulator below this is flagged, never silently used
 names = []                     # full names to scrub from recordings before they enter files
+
+[harbor]
+# survey (its gate + baseline), bench, and train run in Docker. No daemon on this machine?
+# Name a host you can ssh to and everything runs there instead:
+# host = "my-build-box"
+# remote_root = "/srv/touchstone"
 """
 
 

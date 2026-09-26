@@ -28,6 +28,15 @@ def test_init_writes_keychain_prefix_when_passed(tmp_path, monkeypatch):
     assert 'keychain_prefix = "rockie-"' in text
 
 
+def test_init_writes_commented_harbor_section(tmp_path, monkeypatch):
+    # A no-Docker reader meets the remote-host escape hatch in the config itself, commented out.
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init"])
+    text = (tmp_path / "touchstone.toml").read_text()
+    assert "[harbor]" in text
+    assert "# host = " in text and "# remote_root = " in text
+
+
 def test_bare_command_prints_the_loop_and_next_step(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, [])

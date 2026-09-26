@@ -34,6 +34,11 @@ touchstone review                        # opens the browser and starts the voic
 touchstone train                         # turn finished jobs into distill + RL datasets
 ```
 
+**Docker first.** `survey` (its gate + baseline), `bench`, and `train` run benchmarks in Docker —
+locally, or on a machine you name under `[harbor]` in `touchstone.toml` (see
+[Running Harbor](#running-harbor-remote-docker-note)). With neither, `survey` stops in seconds
+before the long mapping run; `touchstone survey --skip-gate --skip-baseline` maps without Docker.
+
 `touchstone survey` reads the recordings and the code with a read-only coding agent
 (`[survey] provider`, default `claude-cli`; the customer's login pays), maps the tools and their
 network boundaries, generates a SQLite-backed simulator per service, and replays every recorded call
@@ -72,9 +77,6 @@ captured:
 ```
 touchstone survey .
 ```
-
-`bench`, `gate` and `baseline` need a running Docker daemon — locally, or on a machine you name under
-`[harbor]` in `touchstone.toml`.
 
 Wrap any model call that is *not* the agent under test — a simulated user, a judge, an evaluator — in
 `with touchstone.capture.paused():` so its model and tool spans are left unrecorded.
