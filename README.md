@@ -42,12 +42,39 @@ unless `--force` — and touches nothing outside `touchstone/` in the target rep
 
 `touchstone bench` also takes `--agent packaged|replica`, `--dataset <dir>`, and
 `--against <job_dir>` (a per-task comparison against a previous run). `touchstone doctor` reports the
-environment. Capture is one line in your own app:
+environment.
+
+### Keys
+
+Your agent under test uses its own provider key exactly as it always has — `OPENAI_API_KEY` or
+`ANTHROPIC_API_KEY` in the environment you run it in; Touchstone reads nothing from it. Touchstone's
+*own* OpenAI calls — the realtime voice in the review room, and an `openai:<model>` review provider —
+read the same `OPENAI_API_KEY`, or a macOS Keychain item `<keychain_prefix>openai-api-key`. The
+prefix defaults to `touchstone-` (so `touchstone-openai-api-key`); set `keychain_prefix` in
+`touchstone.toml` to point at an item you already have. `touchstone doctor` prints which keys resolve.
+
+### Capture
+
+Add two lines to your own app — one to start recording, one to mark each conversation:
 
 ```python
 import touchstone
-touchstone.trace()   # records every model + tool call to .touchstone/touchstone.db
+touchstone.trace()                       # records every model + tool call to .touchstone/touchstone.db
+
+with touchstone.episode("check-order-status"):   # one conversation = one episode
+    reply = my_agent.run(user_message)
 ```
+
+Then run your agent the way you normally do — a handful of real conversations is enough to start
+(~10 gives the survey something to cluster), and more only sharpens it — and survey what was
+captured:
+
+```
+touchstone survey .
+```
+
+`bench`, `gate` and `baseline` need a running Docker daemon — locally, or on a machine you name under
+`[harbor]` in `touchstone.toml`.
 
 Wrap any model call that is *not* the agent under test — a simulated user, a judge, an evaluator — in
 `with touchstone.capture.paused():` so its model and tool spans are left unrecorded.
@@ -137,7 +164,7 @@ same path. With a local Docker daemon, everything runs locally and these setting
 ## Install
 
 ```
-uv tool install --from git+ssh://git@github.com/saml212/touchstone touchstone-bench
+uv tool install touchstone-bench
 ```
 
 or, in a checkout, `uv run touchstone …`. Requires [Harbor](https://docs.harborframework.com)
