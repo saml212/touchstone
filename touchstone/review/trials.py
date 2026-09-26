@@ -267,18 +267,24 @@ def _crit_view(crit: dict, dimension: str, rel: str, index: int, descs: dict) ->
     return {"dimension": dimension, "description": plain, "raw": raw, "score": crit.get("value")}
 
 
+def _component_criteria(dimension: str, component: dict, descs: dict) -> list[dict]:
+    """The criteria of one reward component, viewed for the person, in file order."""
+    crits = component.get("detail", component).get("criteria", [])
+    out = []
+    for i, crit in enumerate(crits, 1):
+        name = component.get("name") or crit.get("name", "")
+        out.append(_crit_view(crit, dimension, f"tests/{dimension}/{name}.py", i, descs))
+    return out
+
+
 def _flatten_criteria(details: dict, descs: dict) -> list[dict]:
     """reward-details.json -> a flat [{dimension, description, raw, score}] list, in file order,
     each with the product-readable description from descriptions.toml when one exists."""
     out: list[dict] = []
     for dimension, block in details.items():
-        if not isinstance(block, dict):
-            continue
-        for component in block.get("components", [block]):
-            crits = component.get("detail", component).get("criteria", [])
-            for i, crit in enumerate(crits, 1):
-                name = component.get("name") or crit.get("name", "")
-                out.append(_crit_view(crit, dimension, f"tests/{dimension}/{name}.py", i, descs))
+        if isinstance(block, dict):
+            for component in block.get("components", [block]):
+                out += _component_criteria(dimension, component, descs)
     return out
 
 
