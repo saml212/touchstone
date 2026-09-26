@@ -21,7 +21,6 @@ from __future__ import annotations
 import ast
 import shutil
 import tempfile
-import tomllib
 from pathlib import Path
 
 import tomli_w
@@ -29,11 +28,8 @@ import tomli_w
 from ..harbor import rewardkit
 from ..survey import descriptions
 from ..survey.writes import atomic_write
-
-
-class ChangeError(ValueError):
-    """A change could not be applied safely; the message is one clear sentence for the human."""
-
+from . import guard, tomls
+from .guard import ChangeError  # a single ChangeError type across changes + guard
 
 # ---- rewardkit criteria .py files ------------------------------------------
 
@@ -146,7 +142,7 @@ def _ensure_reward_dimension(tests_root: Path, path: Path) -> None:
         dims = sorted({d.name for d in tests_root.iterdir() if d.is_dir()} | {dim})
         rewardkit.write_reward_toml(tests_root, dims)
         return
-    doc = _load_toml(reward)
+    doc = tomls.load_toml(reward)
     rewards = doc.get("reward")
     if isinstance(rewards, list) and rewards and isinstance(rewards[0].get("weights"), dict):
         weights = rewards[0]["weights"]
@@ -169,80 +165,36 @@ def _read_or_create(path: Path, op: str, rel: str) -> list[str]:
     return []
 
 
+def _task_dir_of(path: Path) -> Path:
+    root = _tests_root(path)
+    return root.parent if root is not None else path.parent
+
+
+def _guard_call(path: Path, params: dict) -> None:
+    """Refuse a full criterion call with placeholder or (for sqlite) unreal arguments, before it is
+    rendered — the `expected` shortcut keeps an already-accepted call, so it is not re-guarded."""
+    guard.check_call(_task_dir_of(path), (params.get("fn") or "").removeprefix("rk."),
+                     params.get("args", []))
+
+
 def _apply_py(path: Path, op: str, criterion, params: dict | None, rel: str) -> None:
     calls = _read_or_create(path, op, rel)
     if op == "add":
+        _guard_call(path, params or {})
         calls.append(_render_call(params or {}))
     elif op == "edit":
         i = _index(criterion, len(calls))
         params = params or {}
-        calls[i] = (_with_expected(calls[i], params["expected"]) if "expected" in params
-                    else _render_call(params))
+        if "expected" in params:
+            calls[i] = _with_expected(calls[i], params["expected"])
+        else:
+            _guard_call(path, params)
+            calls[i] = _render_call(params)
     elif op == "remove":
         calls.pop(_index(criterion, len(calls)))
     else:
         raise ChangeError(f"unknown op {op!r} for a criteria file.")
     rewardkit.write_criteria(path.parent, path.stem, calls)
-
-
-# ---- reward.toml dimension weights -----------------------------------------
-
-
-def _load_toml(path: Path) -> dict:
-    try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise ChangeError(f"{path.name} could not be parsed; edit it by hand.") from exc
-
-
-def _apply_reward(path: Path, criterion, weight) -> None:
-    doc = _load_toml(path)
-    rewards = doc.get("reward")
-    if not (isinstance(rewards, list) and rewards and isinstance(rewards[0].get("weights"), dict)):
-        raise ChangeError(f"{path.name} is not a rewardkit reward.toml; edit it by hand.")
-    weights = rewards[0]["weights"]
-    if criterion not in weights:
-        raise ChangeError(f"'{criterion}' is not a dimension in {path.name}.")
-    if weight is None:
-        raise ChangeError("a weight change needs a `weight` value.")
-    weights[criterion] = float(weight)
-    atomic_write(path, tomli_w.dumps(doc))
-
-
-# ---- judge criteria toml ---------------------------------------------------
-
-
-def _match_judge(items: list[dict], criterion) -> int:
-    for i, item in enumerate(items):
-        if item.get("description") == criterion:
-            return i
-    raise ChangeError(f"no judge criterion matches '{criterion}'.")
-
-
-def _judge_entry(change: dict) -> dict:
-    entry = {"description": change.get("description", ""),
-             "type": (change.get("params") or {}).get("type", "binary")}
-    points = (change.get("params") or {}).get("points")
-    if points is not None:
-        entry["points"] = points
-    return entry
-
-
-def _apply_judge(path: Path, change: dict) -> None:
-    doc = _load_toml(path)
-    if "judge" not in doc or not isinstance(doc.get("criterion"), list):
-        raise ChangeError(f"{path.name} is not a rewardkit judge file; edit it by hand.")
-    items = doc["criterion"]
-    op = change["op"]
-    if op == "add":
-        items.append(_judge_entry(change))
-    elif op == "edit":
-        items[_match_judge(items, change.get("criterion"))] = _judge_entry(change)
-    elif op == "remove":
-        items.pop(_match_judge(items, change.get("criterion")))
-    else:
-        raise ChangeError(f"unknown op {op!r} for a judge file.")
-    atomic_write(path, tomli_w.dumps({"judge": doc["judge"], "criterion": items}))
 
 
 # ---- text (instruction / persona) ------------------------------------------
@@ -273,12 +225,12 @@ def _apply_one(task_dir: Path, change: dict) -> str:
     if op == "text":
         _apply_text(path, change.get("text"))
     elif path.name == "reward.toml":
-        _apply_reward(path, change.get("criterion"), change.get("weight"))
+        tomls.apply_reward(path, change.get("criterion"), change.get("weight"))
     elif path.suffix == ".py":
         _apply_py(path, op, change.get("criterion"), change.get("params"), rel)
         _sync_descriptions(task_dir, rel, path, change)
     elif path.suffix == ".toml":
-        _apply_judge(path, change)
+        tomls.apply_judge(path, change)
     else:
         raise ChangeError(f"don't know how to change {path.name}.")
     return rel
@@ -331,14 +283,28 @@ def apply(task_dir: str | Path, change) -> list[str]:
     return [_apply_one(task_dir, c) for c in as_list(change)]
 
 
-def validate(task_dir: str | Path, change) -> None:
+def _check_intent(change, intent: str) -> None:
+    """Refuse a criterion whose KIND contradicts the person's words (a tool-use disagreement drafted
+    as a sqlite query, say). Only runs when `intent` carries the person's words — an apply, whose
+    go-ahead is a bare "yes", passes no intent and so is judged on shape alone."""
+    if not intent:
+        return
+    for c in as_list(change):
+        fn = (c.get("params") or {}).get("fn")
+        if fn:
+            guard.check_intent(fn, intent)
+
+
+def validate(task_dir: str | Path, change, intent: str = "") -> None:
     """Dry-run a change against a throwaway copy of the task; raise ChangeError with a precise
-    message if it cannot be applied (wrong shape, unknown op, missing file, out-of-range criterion).
+    message if it cannot be applied (wrong shape, unknown op, missing file, out-of-range criterion,
+    placeholder/unreal arguments, or a kind that contradicts `intent`, the person's words).
     Nothing in the real task is written — the review agent validates before it reads a change back
     and again before it commits, so a malformed draft never reaches disk."""
     task_dir = Path(task_dir)
     if not task_dir.is_dir():
         raise ChangeError(f"there is no task {task_dir.name!r} to change.")
+    _check_intent(change, intent)
     with tempfile.TemporaryDirectory() as tmp:
         clone = Path(tmp) / "task"
         shutil.copytree(task_dir, clone)

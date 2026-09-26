@@ -171,7 +171,8 @@ def test_descriptions_stay_in_sync_on_add_edit_remove(tmp_path):
     changes.apply(task, {"op": "add", "file": "tests/correctness/state.py",
                          "description": "a tracking ticket was opened",
                          "params": {"fn": "sqlite_query_equals",
-                                    "args": ["s/state.db", "SELECT COUNT(*) FROM tickets", 1]}})
+                                    "args": ["simulators/orders_service/state.db",
+                                             "SELECT COUNT(*) FROM tickets", 1]}})
     d = tomllib.loads((tests / "descriptions.toml").read_text())
     assert d["tests/correctness/state.py:3"] == "a tracking ticket was opened"
     # remove #1 -> #2 and #3 shift down to #1 and #2
@@ -195,16 +196,19 @@ def test_apply_list_applies_both(tmp_path):
     assert set(touched) == {"tests/reward.toml", "tests/correctness/state.py"}
 
 
-def test_describe_uses_plain_words_never_raw_code():
+def test_describe_reads_words_and_the_literal_call():
     from touchstone.review import readback
 
     edit = {"op": "edit", "file": "tests/correctness/state.py", "criterion": 1,
             "params": {"fn": "sqlite_query_equals",
                        "args": ["db", "SELECT refunded FROM orders WHERE id='B1'", 183.18]}}
-    assert "rk." not in readback.describe(edit)
-    assert "returns 183.18" in readback.describe(edit)
-    assert readback.describe({**edit, "description": "order B1 shows $183.18 refunded"}) == \
-        "change check 1 to order B1 shows $183.18 refunded"
+    text = readback.describe(edit)
+    assert "returns 183.18" in text  # the words a product person hears
+    # ...and the literal arguments a reader can check, so a nonsense value can't hide behind prose
+    assert "rk.sqlite_query_equals('db', \"SELECT refunded FROM orders WHERE id='B1'\", 183.18)" \
+        in text
+    assert readback.describe({**edit, "description": "order B1 shows $183.18 refunded"}).startswith(
+        "change check 1 to order B1 shows $183.18 refunded — rk.sqlite_query_equals(")
 
 
 def test_expected_shortcut_keeps_the_query_and_coerces_numbers(tmp_path):

@@ -1,11 +1,27 @@
-"""The plain read-back of a change — the sentence a product person says yes to before it is
-applied. Never raw code: the change's own description, or the check in words."""
+"""The plain read-back of a change — what a product person says yes to before it is applied.
+
+The check is rendered in plain words (its description, or the check in English) AND its literal
+rewardkit arguments, so a person hears the words while a reader sees the exact values that will be
+written: "the agent used order_status — rk.trajectory_tool_used('order_status')". This is how a
+placeholder or a nonsense argument becomes visible before anyone agrees to it."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from .changes import ChangeError, _render_call, as_list
+
+
+def _literal(change: dict) -> str:
+    """The exact ``rk.<fn>(...)`` source the change would write, appended so the values are seen —
+    or "" for an `expected`-only edit (which keeps the existing call) or a non-call change."""
+    params = change.get("params") or {}
+    if not params.get("fn"):
+        return ""
+    try:
+        return f" — {_render_call(params)}"
+    except ChangeError:
+        return ""
 
 
 def _describe_one(change: dict) -> str:
@@ -17,10 +33,11 @@ def _describe_one(change: dict) -> str:
     if Path(file).name == "reward.toml":
         return f"set the {change.get('criterion')} weight to {change.get('weight')}"
     if op == "add":
-        return f"add a check: {_summarise_target(change)}"
+        return f"add a check: {_summarise_target(change)}{_literal(change)}"
     if op == "remove":
         return f"remove check {change.get('criterion')}"
-    return f"change check {change.get('criterion')} to {_summarise_target(change)}"
+    n, target = change.get("criterion"), _summarise_target(change)
+    return f"change check {n} to {target}{_literal(change)}"
 
 
 _WORDS = {
