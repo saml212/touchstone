@@ -115,8 +115,62 @@ def _index(criterion, count: int) -> int:
     return idx
 
 
-def _apply_py(path: Path, op: str, criterion, params: dict | None) -> None:
-    calls = parse_criteria(path)
+def _tests_root(path: Path) -> Path | None:
+    """The `tests/` directory a criteria file lives under, or None if it is not under one."""
+    return next((p for p in path.parents if p.name == "tests"), None)
+
+
+def existing_criteria_files(tests_root: Path | None) -> list[str]:
+    """The criteria files (`tests/**/*.py`) that already exist, task-relative, for a clear error."""
+    if tests_root is None or not tests_root.is_dir():
+        return []
+    task_dir = tests_root.parent
+    return sorted(p.relative_to(task_dir).as_posix() for p in tests_root.rglob("*.py"))
+
+
+def _missing_criteria_msg(rel: str, tests_root: Path | None) -> str:
+    files = existing_criteria_files(tests_root)
+    have = ", ".join(files) if files else "none yet"
+    return (f"there is no {rel} to change; this task's checks are in: {have}. Edit one of those, "
+            "or add a new check.")
+
+
+def _ensure_reward_dimension(tests_root: Path, path: Path) -> None:
+    """A new criteria file in a fresh dimension dir must be weighted in reward.toml, the same wiring
+    the survey writes — else Harbor never aggregates it into the reward."""
+    parts = path.relative_to(tests_root).parts
+    if len(parts) < 2:
+        return
+    dim, reward = parts[0], tests_root / "reward.toml"
+    if not reward.is_file():
+        dims = sorted({d.name for d in tests_root.iterdir() if d.is_dir()} | {dim})
+        rewardkit.write_reward_toml(tests_root, dims)
+        return
+    doc = _load_toml(reward)
+    rewards = doc.get("reward")
+    if isinstance(rewards, list) and rewards and isinstance(rewards[0].get("weights"), dict):
+        weights = rewards[0]["weights"]
+        if dim not in weights:
+            weights[dim] = 1.0
+            atomic_write(reward, tomli_w.dumps(doc))
+
+
+def _read_or_create(path: Path, op: str, rel: str) -> list[str]:
+    """The file's criteria calls, creating an empty rewardkit file (import + reward wiring) for an
+    `add` to a task that never had this check, or refusing an edit/remove on an absent file."""
+    if path.exists():
+        return parse_criteria(path)
+    if op != "add":
+        raise ChangeError(_missing_criteria_msg(rel, _tests_root(path)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tests_root = _tests_root(path)
+    if tests_root is not None:
+        _ensure_reward_dimension(tests_root, path)
+    return []
+
+
+def _apply_py(path: Path, op: str, criterion, params: dict | None, rel: str) -> None:
+    calls = _read_or_create(path, op, rel)
     if op == "add":
         calls.append(_render_call(params or {}))
     elif op == "edit":
@@ -221,7 +275,7 @@ def _apply_one(task_dir: Path, change: dict) -> str:
     elif path.name == "reward.toml":
         _apply_reward(path, change.get("criterion"), change.get("weight"))
     elif path.suffix == ".py":
-        _apply_py(path, op, change.get("criterion"), change.get("params"))
+        _apply_py(path, op, change.get("criterion"), change.get("params"), rel)
         _sync_descriptions(task_dir, rel, path, change)
     elif path.suffix == ".toml":
         _apply_judge(path, change)

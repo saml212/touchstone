@@ -152,7 +152,9 @@ class ReviewAgent:
         if detail is None:
             return self._read_gate_failure(task, trial)
         self.scratch.current = {"task": task, "trial": trial}
-        detail["editable"] = _editable(self.dataset_dir / "tasks" / task)
+        task_dir = self.dataset_dir / "tasks" / task
+        detail["editable"] = _editable(task_dir)
+        detail["criteria_files"] = changes.existing_criteria_files(task_dir / "tests")
         detail["reward_pct"] = replies.reward_pct(detail.get("reward"))
         self._presented = detail  # ground this turn's reply in these scores
         return detail

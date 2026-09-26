@@ -34,7 +34,9 @@ TOOLS = [
         "name": "read_trial",
         "description": "Read one trial: instruction, the trajectory in plain words, and each "
                        "criterion's description and score. Its `editable` list gives each "
-                       "criterion a stable `handle` \"<file>:<index>\" to pass to a change. "
+                       "criterion a stable `handle` \"<file>:<index>\" to pass to a change, and "
+                       "`criteria_files` lists the task's criteria files — edit/remove must name "
+                       "one of those; an add may name a new file and it is created. "
                        "Sets it as the current trial. A needs_review task has no trajectory: this "
                        "returns `gate_failure` with a `reason` — tell the person that reason.",
         "parameters": {"type": "object",

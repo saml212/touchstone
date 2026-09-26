@@ -82,6 +82,52 @@ def test_judge_criterion_add_edit_remove(tmp_path):
     assert len(tomllib.loads(judge.read_text())["criterion"]) == 2
 
 
+def _trajectory_only_task(tmp_path):
+    """A task whose only correctness check is trajectory-based — it has no state.py, the case that
+    ENOENT'd when the room tried to add a state check."""
+    d = tmp_path / "tasks" / "check-order"
+    (d / "tests" / "correctness").mkdir(parents=True)
+    rewardkit.write_criteria(d / "tests" / "correctness", "trajectory",
+                             ["rk.trajectory_tool_used('lookup_order')"])
+    rewardkit.write_reward_toml(d / "tests", ["correctness", "safety"])
+    return d
+
+
+def test_add_creates_a_missing_criteria_file(tmp_path):
+    task = _trajectory_only_task(tmp_path)
+    state = task / "tests" / "correctness" / "state.py"
+    assert not state.exists()
+    touched = changes.apply(task, {"op": "add", "file": "tests/correctness/state.py",
+                                   "description": "the order was looked up before answering",
+                                   "params": {"fn": "trajectory_tool_used",
+                                              "args": ["lookup_order"]}})
+    assert touched == ["tests/correctness/state.py"]
+    # the file was created with the same rewardkit header the survey writes, and the check appended
+    assert state.read_text().startswith("import rewardkit as rk\n\n")
+    assert changes.parse_criteria(state) == ["rk.trajectory_tool_used('lookup_order')"]
+    # its description tracked into descriptions.toml so the UI can read it back
+    d = tomllib.loads((task / "tests" / "descriptions.toml").read_text())
+    assert d["tests/correctness/state.py:1"] == "the order was looked up before answering"
+
+
+def test_add_creates_file_and_wires_a_new_dimension(tmp_path):
+    task = _trajectory_only_task(tmp_path)
+    changes.apply(task, {"op": "add", "file": "tests/latency/timely.py",
+                         "params": {"fn": "file_exists", "args": ["answer.json"]}})
+    doc = tomllib.loads((task / "tests" / "reward.toml").read_text())
+    assert "latency" in doc["reward"][0]["weights"]  # the fresh dimension is weighted
+
+
+def test_edit_on_a_missing_file_names_the_files_that_exist(tmp_path):
+    task = _trajectory_only_task(tmp_path)
+    with pytest.raises(changes.ChangeError) as exc:
+        changes.apply(task, {"op": "edit", "file": "tests/correctness/state.py", "criterion": 1,
+                             "params": {"expected": 5}})
+    msg = str(exc.value)
+    assert "no tests/correctness/state.py" in msg
+    assert "tests/correctness/trajectory.py" in msg  # names the file that DOES exist
+
+
 def test_refuses_hand_edited_criteria_file(tmp_path):
     task = _task(tmp_path)
     (task / "tests" / "correctness" / "state.py").write_text(
