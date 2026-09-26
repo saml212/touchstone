@@ -143,7 +143,7 @@ def test_environment_flags_missing_deps(tmp_path):
     out = tmp_path / "touchstone"
     result = build_environment(repo, MAP, out)
     assert result["deps_ok"] is False
-    assert "no pyproject" in result["deps_reason"]
+    assert "pyproject.toml" in result["deps_reason"] and "setup.py" in result["deps_reason"]
     # sims still runnable — the runtime is always installed
     assert "fastapi" in (out / "environment" / "requirements.txt").read_text()
 
@@ -159,6 +159,85 @@ def test_environment_requirements_txt_fallback(tmp_path):
     assert "httpx==0.27.0" in reqs
     assert "-e ." not in reqs  # editable/local dropped
     assert result["deps_ok"] is True
+
+
+def test_deps_from_setup_py_read_statically(tmp_path):
+    # tau-bench ships install_requires in setup.py and no pyproject/requirements — resolve it with
+    # ast, and NEVER execute setup.py (a side effect here would corrupt the file).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "setup.py").write_text(
+        "from setuptools import setup\n"
+        "open('SIDE_EFFECT', 'w').write('executed')\n"
+        'setup(name="x", install_requires=["openai>=1.13.3", "litellm>=1.41.0",\n'
+        '      "c @ git+ssh://git@github.com/x/c"])\n', encoding="utf-8")
+    out = tmp_path / "touchstone"
+    result = build_environment(repo, MAP, out)
+    reqs = (out / "environment" / "requirements.txt").read_text()
+    assert "openai>=1.13.3" in reqs and "litellm>=1.41.0" in reqs
+    assert "git+ssh" not in reqs  # VCS dep dropped
+    assert result["deps_ok"] is True
+    assert not (repo / "SIDE_EFFECT").exists()  # setup.py was parsed, not run
+    # an installable package also gets an editable install of the snapshot
+    dockerfile = (out / "environment" / "Dockerfile").read_text()
+    assert "uv pip install --system --no-deps -e /app" in dockerfile
+
+
+def test_deps_from_setup_cfg(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "setup.cfg").write_text(
+        "[options]\ninstall_requires =\n    httpx>=0.27\n    numpy>=1.26\n", encoding="utf-8")
+    out = tmp_path / "touchstone"
+    result = build_environment(repo, MAP, out)
+    reqs = (out / "environment" / "requirements.txt").read_text()
+    assert "httpx>=0.27" in reqs and "numpy>=1.26" in reqs
+    assert result["deps_ok"] is True
+    assert "-e /app" in (out / "environment" / "Dockerfile").read_text()
+
+
+def test_deps_from_uv_lock_pinned(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "uv.lock").write_text(
+        '[[package]]\nname = "myapp"\nversion = "0.1"\nsource = { editable = "." }\n'
+        'dependencies = [\n    { name = "httpx" },\n    { name = "openai" },\n]\n\n'
+        '[[package]]\nname = "httpx"\nversion = "0.27.2"\n\n'
+        '[[package]]\nname = "openai"\nversion = "1.40.0"\n', encoding="utf-8")
+    out = tmp_path / "touchstone"
+    result = build_environment(repo, MAP, out)
+    reqs = (out / "environment" / "requirements.txt").read_text()
+    assert "httpx==0.27.2" in reqs and "openai==1.40.0" in reqs  # pinned from the lock
+    assert result["deps_ok"] is True
+
+
+def test_requirements_glob_picks_up_non_default_file(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements-prod.txt").write_text("flask>=3.0\n", encoding="utf-8")
+    out = tmp_path / "touchstone"
+    result = build_environment(repo, MAP, out)
+    assert "flask>=3.0" in (out / "environment" / "requirements.txt").read_text()
+    assert result["deps_ok"] is True
+
+
+def test_pyproject_build_system_triggers_editable_install(tmp_path):
+    repo = _git_repo(tmp_path)  # pyproject has [project] but no [build-system]
+    (repo / "pyproject.toml").write_text(
+        '[build-system]\nrequires=["hatchling"]\nbuild-backend="hatchling.build"\n'
+        '[project]\nname="c"\nversion="0.1"\ndependencies=["httpx>=0.27"]\n', encoding="utf-8")
+    out = tmp_path / "touchstone"
+    build_environment(repo, MAP, out)
+    assert "-e /app" in (out / "environment" / "Dockerfile").read_text()
+
+
+def test_non_package_repo_has_no_editable_install(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("httpx>=0.27\n", encoding="utf-8")
+    out = tmp_path / "touchstone"
+    build_environment(repo, MAP, out)
+    assert "-e /app" not in (out / "environment" / "Dockerfile").read_text()
 
 
 def test_environment_idempotent_then_force(tmp_path):

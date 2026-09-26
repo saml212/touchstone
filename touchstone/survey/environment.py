@@ -19,17 +19,16 @@ import importlib.metadata
 import re
 import shutil
 import subprocess
-import tomllib
 from pathlib import Path
 
 import touchstone
 
+from .deps import is_package, pyproject_deps, resolve_deps
 from .simulate import crossing_services, service_host
 from .writes import atomic_write
 
 _SKIP_DIRS = {".git", ".touchstone", "touchstone", ".venv", "node_modules", "__pycache__"}
 _SECRET_RE = re.compile(r"(^\.env$|^\.env\.|\.pem$|\.key$|^id_rsa|secret)", re.IGNORECASE)
-_VCS_RE = re.compile(r"@\s*(git|http|file)|://|git\+|^-e\b|^\.{0,2}/")
 _SIM_RUNTIME = ["fastapi", "uvicorn", "pydantic"]
 _SIM_SKIP = {"state.db", ".sim.log"}
 
@@ -44,6 +43,11 @@ COPY _touchstone/ /app/_touchstone/
 COPY requirements.txt /app/requirements.txt
 RUN uv pip install --system -r /app/requirements.txt
 """
+
+# When the snapshotted repo is itself an installable package, install it (deps already handled by
+# requirements.txt) so its own modules import the way they do in production, not just off the copied
+# tree. `repo/` is copied into /app, so the project root inside the image is /app.
+_EDITABLE_INSTALL = "RUN uv pip install --system --no-deps -e /app\n"
 
 # The one copy of "start a simulator" in the image. `start.sh <name> <port>` starts the sim in the
 # background (nohup survives the exec), waits for /__health, and POSTs /__reset. It exports nothing:
@@ -168,36 +172,8 @@ def _copy_invoke(out: Path, dest: Path) -> None:
         shutil.copy2(src, dest / "invoke.py")
 
 
-def _pyproject_deps(repo: Path) -> list[str] | None:
-    path = repo / "pyproject.toml"
-    if not path.is_file():
-        return None
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
-    deps = data.get("project", {}).get("dependencies")
-    return list(deps) if isinstance(deps, list) else None
-
-
-def _requirements_deps(repo: Path) -> list[str] | None:
-    path = repo / "requirements.txt"
-    if not path.is_file():
-        return None
-    lines = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.split("#", 1)[0].strip()
-        if line:
-            lines.append(line)
-    return lines
-
-
-def _resolve_deps(repo: Path) -> tuple[list[str] | None, str]:
-    """Resolvable (non-VCS, non-URL, non-path) runtime deps, or (None, reason) when none exist."""
-    deps = _pyproject_deps(repo)
-    if deps is None:
-        deps = _requirements_deps(repo)
-    if deps is None:
-        return None, "no pyproject.toml or requirements.txt"
-    keep = [d for d in deps if not _VCS_RE.search(d)]
-    return keep, "ok"
+def _dockerfile(repo: Path) -> str:
+    return DOCKERFILE + _EDITABLE_INSTALL if is_package(repo) else DOCKERFILE
 
 
 def _touchstone_deps() -> list[str]:
@@ -208,7 +184,7 @@ def _touchstone_deps() -> list[str]:
     except importlib.metadata.PackageNotFoundError:
         reqs = None
     if not reqs:  # running from source without installed metadata: read this repo's pyproject
-        reqs = _pyproject_deps(Path(touchstone.__file__).resolve().parent.parent) or []
+        reqs = pyproject_deps(Path(touchstone.__file__).resolve().parent.parent) or []
     return [r for r in reqs if ";" not in r]  # drop extras / environment markers
 
 
@@ -255,7 +231,7 @@ def _ports(map_data: dict) -> dict:
 def build_environment(repo: Path, map_data: dict, out: Path, force: bool = False) -> dict:
     """Write touchstone/environment/ and return the image tag, ports, and dependency status."""
     env_dir = out / "environment"
-    deps, reason = _resolve_deps(repo)
+    deps, reason = resolve_deps(repo)
     if not (env_dir / "Dockerfile").exists() or force:
         if env_dir.exists():
             shutil.rmtree(env_dir)
@@ -267,7 +243,7 @@ def build_environment(repo: Path, map_data: dict, out: Path, force: bool = False
         _copy_invoke(out, env_dir / "_touchstone")
         atomic_write(env_dir / "_touchstone" / "sitecustomize.py", SITECUSTOMIZE)
         atomic_write(env_dir / "requirements.txt", _requirements_text(deps or []))
-        atomic_write(env_dir / "Dockerfile", DOCKERFILE)
+        atomic_write(env_dir / "Dockerfile", _dockerfile(repo))
     wiring = _ports(map_data)
     return {"deps_ok": deps is not None, "deps_reason": reason,
             "image_tag": _image_tag(repo.name, env_dir), **wiring}
