@@ -35,7 +35,8 @@ TOOLS = [
         "description": "Read one trial: instruction, the trajectory in plain words, and each "
                        "criterion's description and score. Its `editable` list gives each "
                        "criterion a stable `handle` \"<file>:<index>\" to pass to a change. "
-                       "Sets it as the current trial.",
+                       "Sets it as the current trial. A needs_review task has no trajectory: this "
+                       "returns `gate_failure` with a `reason` — tell the person that reason.",
         "parameters": {"type": "object",
                        "properties": {"task": {"type": "string"}, "trial": {"type": "string"}},
                        "required": ["task", "trial"]}}},
@@ -72,7 +73,10 @@ SYSTEM = (
     "percentage, then each criterion with whether it passed or failed. ONLY THEN gloss what "
     "the user wanted and what the agent did in plain words, and ask whether they agree it passed. "
     "Never claim a pass or a fail the scores do not show; when the trajectory is empty, say the "
-    "agent did nothing. On agree, call record_review (verdict 'agree'); on disagree, record_review "
+    "agent did nothing. If read_trial returns a gate_failure, the task was set aside by the gate "
+    "and has no trajectory to review: tell the person its `reason` plainly (do not call it an "
+    "error), and offer to fix the task's criteria if they think it should have passed. On agree, "
+    "call record_review (verdict 'agree'); on disagree, record_review "
     "(verdict 'disagree'), ask what should have counted, call propose_change and read it back "
     "ONCE. The very next affirmative from them — any yes, including their answer to 'everywhere or "
     "just this one?' — is the go-ahead: call apply_change immediately (always=true if it holds for "

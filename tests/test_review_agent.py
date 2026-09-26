@@ -170,6 +170,28 @@ def test_present_a_trial_sets_current(tmp_path, conn):
     assert state["counts"]["unsure"] == 2  # both refund trials scored between 0 and 1
 
 
+def test_read_trial_on_a_gate_failure_gives_the_reason_not_an_error(tmp_path, conn):
+    # The header's "need review" count points at a gate-failed task that has no trajectory, so
+    # read_trial used to answer "no trial ...". It must instead return the gate failure reason from
+    # needs-review/<task>/gate.json, so the reviewer can say why the task was set aside.
+    dataset = _dataset(tmp_path)
+    _write(dataset / "needs-review" / "refund-order-1" / "gate.json",
+           {"failed_side": "oracle", "oracle": 0.0, "nop": 0.0})
+    agent = ReviewAgent(None, conn, _room(conn), _settings(tmp_path))
+    result = agent._read_trial({"task": "refund-order-1", "trial": "refund-order-1"})
+    assert result.get("gate_failure") is True and "error" not in result
+    assert "oracle scored 0.0" in result["reason"]
+    assert "does not pass its own criteria" in result["reason"]
+    assert agent.scratch.current["task"] == "refund-order-1"  # open for a criterion change
+
+
+def test_read_trial_still_errors_for_a_truly_missing_trial(tmp_path, conn):
+    _dataset(tmp_path)
+    agent = ReviewAgent(None, conn, _room(conn), _settings(tmp_path))
+    result = agent._read_trial({"task": "nope", "trial": "nope/x"})
+    assert "error" in result and result.get("gate_failure") is None
+
+
 def test_agree_records_review_and_moves_trust(tmp_path, conn):
     _dataset(tmp_path)
     room = _room(conn)

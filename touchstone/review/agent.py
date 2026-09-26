@@ -74,8 +74,7 @@ class ReviewAgent:
 
     def _ground(self, say: str) -> str:
         """Guarantee the reply states the verifier's actual scores when a trial was just presented,
-        so the narrative can never contradict the numbers on screen. If the model already stated the
-        reward figure we trust its wording; otherwise we prepend the facts."""
+        so the narrative can't contradict the screen; if the model already stated it, trust it."""
         if not self._presented:
             return say
         token = replies.reward_pct(self._presented.get("reward"))
@@ -89,8 +88,7 @@ class ReviewAgent:
         for _ in range(MAX_STEPS):
             reply = self.provider.chat(messages, TOOLS)
             if not reply.tool_calls:
-                # No content after a tool error is the failure mode we must never paper over: say
-                # what went wrong so the room isn't left with an empty "let me look at that".
+                # No content after a tool error must never be papered over — say what went wrong.
                 return (reply.content or "").strip() or replies.tool_error_reply(last_error)
             messages.append({"role": "assistant", "content": reply.content,
                              "tool_calls": reply.tool_calls})
@@ -131,8 +129,7 @@ class ReviewAgent:
                 result = json.dumps(handler(args), ensure_ascii=False, default=str)
             except (changes.ChangeError, OSError, ValueError, RuntimeError) as exc:
                 result = json.dumps({"error": str(exc)})
-        # Log every tool call so a failed apply is diagnosable from the server log. Review args
-        # carry tasks/criteria, never secrets; truncate so a long change can't flood the log.
+        # Log every tool call (tasks/criteria, never secrets; truncated) to diagnose a failed apply.
         _log.info("review tool %s args=%s -> %s", name,
                   json.dumps(args, default=str)[:800], result[:800])
         return result
@@ -153,12 +150,21 @@ class ReviewAgent:
         task, trial = args.get("task", ""), args.get("trial", "")
         detail = trials.read(self.dataset_dir, self.jobs_dir, task, trial)
         if detail is None:
-            return {"error": f"no trial {trial} for {task}"}
+            return self._read_gate_failure(task, trial)
         self.scratch.current = {"task": task, "trial": trial}
         detail["editable"] = _editable(self.dataset_dir / "tasks" / task)
         detail["reward_pct"] = replies.reward_pct(detail.get("reward"))
         self._presented = detail  # ground this turn's reply in these scores
         return detail
+
+    def _read_gate_failure(self, task: str, trial: str) -> dict:
+        """A needs-review task has no trajectory: return why the gate set it aside (from its
+        gate.json) so the reviewer says it, not the old "no trial" error the header pointed at."""
+        for item in trials.needs_review(self.dataset_dir):
+            if item.get("task") in (task, trial):
+                self.scratch.current = {"task": item["task"], "trial": item["task"]}
+                return {**item, "gate_failure": True, "reason": _gate_reason(item)}
+        return {"error": f"no trial {trial} for {task}"}
 
     def _record_review(self, args: dict) -> dict:
         review = store.Review(task=args.get("task", ""), trial=args.get("trial", ""),
@@ -301,3 +307,14 @@ class ReviewAgent:
         if not current:
             return None
         return trials.read(self.dataset_dir, self.jobs_dir, current["task"], current["trial"])
+
+
+def _gate_reason(item: dict) -> str:
+    """Why the gate set a needs-review task aside, in plain words the reviewer can say aloud."""
+    reasons = {
+        "oracle": (f"oracle scored {item.get('oracle')} — the recorded conversation does not pass "
+                   "its own criteria"),
+        "nop": f"an empty agent scored {item.get('nop')} — the task passes with no work",
+    }
+    return (reasons.get(item.get("failed_side")) or item.get("reason")
+            or "the gate could not grade this task")
