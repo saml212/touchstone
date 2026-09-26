@@ -129,3 +129,15 @@ def test_model_ref_forms():
         "openai/gpt-4o-mini"
     assert baseline._model_ref({"model_default": "openai/x", "provider": "openai"}) == "openai/x"
     assert baseline._model_ref({"model_default": "m", "provider": ""}) == "m"
+
+
+def test_model_ref_maps_litellm_recorded_models_to_their_provider():
+    # The recordings can name the provider `litellm`; a litellm/... model must resolve to the real
+    # provider or key forwarding and the simulated-user agent pick wrong.
+    def ref(m):
+        return baseline._model_ref({"model_default": m, "provider": "litellm"})
+    assert ref("litellm/gpt-4.1-mini") == "openai/gpt-4.1-mini"
+    assert ref("litellm/claude-haiku-4-5") == "anthropic/claude-haiku-4-5"
+    assert ref("litellm/anthropic/claude-sonnet-4-5") == "anthropic/claude-sonnet-4-5"
+    assert ref("gpt-4o-mini") == "openai/gpt-4o-mini"  # bare name under a litellm provider maps too
+    assert ref("openai/gpt-4o-mini") == "openai/gpt-4o-mini"  # a real provider is left alone

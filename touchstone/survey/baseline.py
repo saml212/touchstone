@@ -36,11 +36,25 @@ def _current_tasks(out: Path) -> set:
         else set()
 
 
+def _map_litellm(model: str) -> str:
+    """A model recorded through litellm carries a `litellm/...` provider that no real key or agent
+    maps to; rewrite it to the underlying provider so key forwarding and the simulated-user agent
+    choose correctly (litellm/gpt-4.1-mini -> openai/gpt-4.1-mini, litellm/claude-* -> anthropic/*,
+    litellm/<provider>/<model> -> <provider>/<model>)."""
+    if not model.startswith("litellm/"):
+        return model
+    rest = model.split("/", 1)[1]
+    if "/" in rest:  # litellm/<provider>/<model>
+        return rest
+    if rest.startswith("claude"):
+        return f"anthropic/{rest}"
+    return f"openai/{rest}"  # bare OpenAI-family name (gpt-*, o1/o3-*)
+
+
 def _model_ref(cfg: dict) -> str:
     model = cfg["model_default"]
-    if "/" in model or not cfg["provider"]:
-        return model
-    return f"{cfg['provider']}/{model}"
+    ref = model if ("/" in model or not cfg["provider"]) else f"{cfg['provider']}/{model}"
+    return _map_litellm(ref)  # also maps a bare name under a `litellm` provider
 
 
 def _summarize(job_dir: Path, model: str, mode: str) -> dict:
