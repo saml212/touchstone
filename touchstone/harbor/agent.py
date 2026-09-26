@@ -237,6 +237,9 @@ async def _start_simulators(environment, simulators: list) -> tuple[dict, dict]:
     env: dict[str, str] = {}
     hosts: dict[str, str] = {}
     for sim in simulators:
+        if sim.get("kind") == "db":
+            await _start_db_simulator(environment, sim, env)
+            continue
         name, port = sim["name"], int(sim["port"])
         await environment.exec(f"bash /app/simulators/start.sh {name} {port}")
         base = f"http://127.0.0.1:{port}"
@@ -245,6 +248,16 @@ async def _start_simulators(environment, simulators: list) -> tuple[dict, dict]:
         elif sim.get("host"):
             hosts[sim["host"]] = base
     return env, hosts
+
+
+async def _start_db_simulator(environment, sim: dict, env: dict) -> None:
+    """A db service: start.sh re-materializes state.db; point its env var at the db path."""
+    from ..survey.db_service import container_db_path, value_for
+
+    name = sim["name"]
+    await environment.exec(f"bash /app/simulators/start.sh {name}")
+    if sim.get("base_url_env"):
+        env[sim["base_url_env"]] = value_for(container_db_path(name), url=sim.get("db_url", False))
 
 
 def _tail(result) -> str:

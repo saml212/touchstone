@@ -48,15 +48,27 @@ def _canary(name: str) -> str:
             f"harbor-canary GUID {guid} -->\n\n")
 
 
+def _service_base(service: dict, ports: dict) -> str:
+    from . import db_service
+
+    name = service["name"]
+    if db_service.is_db(service):
+        return db_service.value_for(db_service.container_db_path(name),
+                                    url=db_service.is_url(service))
+    return f"http://127.0.0.1:{ports[name]}"
+
+
 def _solve_lines(services: list[dict], ports: dict, base_url_envs: dict) -> list[str]:
+    from . import db_service
+
     lines = []
     for service in services:
         name = service["name"]
-        port = ports[name]
         env = base_url_envs.get(name)
-        lines.append(f"bash /app/simulators/start.sh {name} {port}")
+        start = f"bash /app/simulators/start.sh {name}"
+        lines.append(start if db_service.is_db(service) else f"{start} {ports[name]}")
         if env:
-            lines.append(f'export {env}="http://127.0.0.1:{port}"')
+            lines.append(f'export {env}="{_service_base(service, ports)}"')
     return lines
 
 
@@ -147,7 +159,7 @@ def _write_task_toml(task_dir: Path, doc: dict) -> None:
 
 def _replay_spec(calls: list[ToolEvent], tools: dict, services: list[dict],
                 ports: dict, base_url_envs: dict) -> dict:
-    base_urls = {base_url_envs[s["name"]]: f"http://127.0.0.1:{ports[s['name']]}"
+    base_urls = {base_url_envs[s["name"]]: _service_base(s, ports)
                  for s in services if base_url_envs.get(s["name"])}
     used = {c.tool for c in calls}
     return {"base_urls": base_urls, "tools": {k: v for k, v in tools.items() if k in used},

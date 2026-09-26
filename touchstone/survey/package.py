@@ -69,9 +69,20 @@ async def call(name, arguments, environment):
 # ---- writing agent.toml + tools.py -----------------------------------------
 
 
+def _service_base(name: str, env_result: dict) -> str:
+    """The base URL a tool's env var is set to in the sandbox: a loopback port for an HTTP sim, or
+    the container path of state.db (sqlite:///… when the code reads a URL) for a db sim."""
+    from . import db_service
+
+    if env_result.get("kinds", {}).get(name) == "db":
+        return db_service.value_for(db_service.container_db_path(name),
+                                    url=env_result.get("db_urls", {}).get(name, False))
+    return f"http://127.0.0.1:{env_result['ports'][name]}"
+
+
 def _base_urls(env_result: dict) -> dict:
-    ports, envs = env_result.get("ports", {}), env_result.get("base_url_envs", {})
-    return {envs[n]: f"http://127.0.0.1:{ports[n]}"
+    envs = env_result.get("base_url_envs", {})
+    return {envs[n]: _service_base(n, env_result)
             for n in env_result.get("services", []) if envs.get(n)}
 
 
@@ -83,18 +94,23 @@ def _simulators_map(env_result: dict) -> dict:
             for n in env_result.get("services", []) if hosts.get(n) and not envs.get(n)}
 
 
+def _sim_entry(name: str, env_result: dict) -> dict:
+    envs, hosts, kinds = (env_result.get("base_url_envs", {}), env_result.get("hosts", {}),
+                          env_result.get("kinds", {}))
+    if kinds.get(name) == "db":  # no port and no host: setup() re-materializes state.db
+        sim = {"name": name, "kind": "db", "base_url_env": envs[name],
+               "db_url": env_result.get("db_urls", {}).get(name, False)}
+        return sim
+    sim = {"name": name, "port": env_result["ports"][name]}
+    if envs.get(name):
+        sim["base_url_env"] = envs[name]
+    elif hosts.get(name):
+        sim["host"] = hosts[name]
+    return sim
+
+
 def _sim_manifest(env_result: dict) -> list:
-    ports, envs, hosts = (env_result.get("ports", {}), env_result.get("base_url_envs", {}),
-                          env_result.get("hosts", {}))
-    manifest = []
-    for name in env_result.get("services", []):
-        sim = {"name": name, "port": ports[name]}
-        if envs.get(name):
-            sim["base_url_env"] = envs[name]
-        elif hosts.get(name):
-            sim["host"] = hosts[name]
-        manifest.append(sim)
-    return manifest
+    return [_sim_entry(name, env_result) for name in env_result.get("services", [])]
 
 
 def _write_tools_py(agent_dir: Path, map_data: dict, env_result: dict) -> None:

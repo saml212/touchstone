@@ -53,7 +53,14 @@ START_SH = """\
 #!/bin/bash
 set -u
 name="$1"
-port="$2"
+port="${2:-0}"
+sim="/app/simulators/$name"
+if [ ! -f "$sim/app.py" ]; then
+  # A db service has no server: (re)materialize state.db from schema.sql/seed.json (or
+  # collections.json) and return. The net shim is not involved.
+  python -m touchstone.survey.db_sim "$sim"
+  exit 0
+fi
 poke() {
   python - "$1" "${2:-GET}" <<'PY' 2>/dev/null
 import sys, urllib.request as u
@@ -223,14 +230,26 @@ def _image_tag(repo_name: str, env_dir: Path) -> str:
     return f"touchstone-env-{_sanitize_tag(repo_name)}:{digest.hexdigest()[:12]}"
 
 
-def _ports(map_data: dict) -> tuple[dict, dict, dict]:
-    ports, base_url_envs, hosts = {}, {}, {}
-    for i, service in enumerate(crossing_services(map_data)):
+def _ports(map_data: dict) -> dict:
+    """Per-crossing-service wiring. A db service gets no port/host; its env var is the mapped one
+    or a synthesized TOUCHSTONE_DB_<NAME>, and db_urls says whether its value is a URL."""
+    from . import db_service
+
+    ports, base_url_envs, hosts, kinds, db_urls = {}, {}, {}, {}, {}
+    next_port = 8000
+    for service in crossing_services(map_data):
         name = service["name"]
-        ports[name] = 8000 + i
-        base_url_envs[name] = service.get("base_url_env")
-        hosts[name] = service_host(service)
-    return ports, base_url_envs, hosts
+        kinds[name] = service.get("kind")
+        if db_service.is_db(service):
+            base_url_envs[name] = db_service.env_name(service)
+            hosts[name], db_urls[name] = None, db_service.is_url(service)
+        else:
+            ports[name] = next_port
+            next_port += 1
+            base_url_envs[name] = service.get("base_url_env")
+            hosts[name] = service_host(service)
+    return {"ports": ports, "base_url_envs": base_url_envs, "hosts": hosts,
+            "kinds": kinds, "db_urls": db_urls, "services": sorted(base_url_envs)}
 
 
 def build_environment(repo: Path, map_data: dict, out: Path, force: bool = False) -> dict:
@@ -249,7 +268,6 @@ def build_environment(repo: Path, map_data: dict, out: Path, force: bool = False
         atomic_write(env_dir / "_touchstone" / "sitecustomize.py", SITECUSTOMIZE)
         atomic_write(env_dir / "requirements.txt", _requirements_text(deps or []))
         atomic_write(env_dir / "Dockerfile", DOCKERFILE)
-    ports, base_url_envs, hosts = _ports(map_data)
-    return {"deps_ok": deps is not None, "deps_reason": reason, "ports": ports,
-            "base_url_envs": base_url_envs, "hosts": hosts,
-            "image_tag": _image_tag(repo.name, env_dir), "services": sorted(ports)}
+    wiring = _ports(map_data)
+    return {"deps_ok": deps is not None, "deps_reason": reason,
+            "image_tag": _image_tag(repo.name, env_dir), **wiring}
