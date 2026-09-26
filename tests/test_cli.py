@@ -141,36 +141,19 @@ def _write_lock(tmp_path, name, version, source='source = { git = "ssh://x/y" }'
         f'[[package]]\nname = "{name}"\nversion = "{version}"\n{source}\n', encoding="utf-8")
 
 
-def test_version_skew_warns_when_project_pins_a_different_touchstone(tmp_path, monkeypatch):
+def test_never_mentions_a_project_pin_or_pypi_version(tmp_path, monkeypatch):
+    # The skew note must only compare the running CLI against a version it verified (a uv tool),
+    # never a project pin or a pypi "latest" it did not check. A uv.lock pinning a different version
+    # with no uv tool installed must produce no note at all — the stranger's "repo pins 0.1.5, pypi
+    # latest 0.1.7" while on 0.1.9 sent them chasing versions that were never confirmed.
     import touchstone.cli as cli_mod
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.2")
-    _write_lock(tmp_path, "touchstone", "0.1.0")  # the stranger's exact skew (old dist name)
-    result = runner.invoke(app, [])
-    assert result.exit_code == 0
-    assert ("Note: this project pins touchstone-bench 0.1.0; you are running 0.1.2 "
-            "(uv sync --upgrade-package touchstone-bench).") in result.output
-
-
-def test_version_skew_silent_when_versions_match_or_no_lock(tmp_path, monkeypatch):
-    import touchstone.cli as cli_mod
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.2")
-    assert "Note: this project pins" not in runner.invoke(app, []).output  # no uv.lock
-    _write_lock(tmp_path, "touchstone-bench", "0.1.2")
-    assert "Note: this project pins" not in runner.invoke(app, []).output  # same version
-
-
-def test_version_skew_silent_in_the_touchstone_checkout_itself(tmp_path, monkeypatch):
-    import touchstone.cli as cli_mod
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.3")
-    # the checkout's own package entry is a virtual/editable root, not a dependency pin
-    _write_lock(tmp_path, "touchstone-bench", "0.1.0", source='source = { virtual = "." }')
-    assert "Note: this project pins" not in runner.invoke(app, []).output
+    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.9")
+    monkeypatch.setattr(cli_mod, "_uv_tool_version", lambda: None)
+    _write_lock(tmp_path, "touchstone", "0.1.5")  # a lock pin the CLI must not surface
+    out = runner.invoke(app, []).output
+    assert "project pins" not in out and "pypi" not in out and "0.1.5" not in out
 
 
 def test_uv_tool_skew_note_when_a_newer_tool_is_installed(monkeypatch):
@@ -218,26 +201,29 @@ def test_uv_tool_version_none_when_uv_absent(monkeypatch):
     assert cli_mod._uv_tool_version() is None
 
 
-def test_doctor_reports_version_skew_in_its_own_table(tmp_path, monkeypatch):
-    # The version-skew note (elsewhere on stderr) is also a doctor row on stdout, so a user piping
-    # `doctor` to diagnose the stranger's stale-pinned-doctor confusion still sees the skew.
+def test_doctor_reports_version_skew_against_a_newer_uv_tool(tmp_path, monkeypatch):
+    # doctor's version row flags skew only against a version it verified — a newer touchstone-bench
+    # installed as a uv tool — never a project pin or pypi "latest". A user piping doctor sees it.
     import touchstone.cli as cli_mod
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.3")
-    _write_lock(tmp_path, "touchstone", "0.1.0")
+    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.9")
+    monkeypatch.setattr(cli_mod, "_uv_tool_version", lambda: "0.1.10")
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "touchstone" in result.output and "skew" in result.output
-    assert "running 0.1.3; project pins 0.1.0" in result.output
+    assert "skew" in result.output
+    assert "running 0.1.9; a newer 0.1.10 is installed as a uv tool" in result.output
+    assert "project pins" not in result.output
 
 
-def test_doctor_version_row_ok_without_skew(tmp_path, monkeypatch):
+def test_doctor_version_row_ok_without_a_newer_tool(tmp_path, monkeypatch):
     import touchstone.cli as cli_mod
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.3")
-    result = runner.invoke(app, ["doctor"])  # no uv.lock -> no skew
+    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.9")
+    monkeypatch.setattr(cli_mod, "_uv_tool_version", lambda: None)
+    _write_lock(tmp_path, "touchstone", "0.1.5")  # a lock pin must not trip a skew row
+    result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     assert "skew" not in result.output
 

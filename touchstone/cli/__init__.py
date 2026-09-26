@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import tomllib
 from pathlib import Path
 
 import typer
@@ -62,23 +61,6 @@ def _version_callback(value: bool) -> None:
 _DIST_NAMES = ("touchstone-bench", "touchstone")
 
 
-def _project_pin() -> str | None:
-    """The touchstone version the cwd's uv.lock resolves as a dependency, or None when the cwd isn't
-    a touchstone consumer (no lock, no touchstone dep, or the touchstone checkout itself)."""
-    lock = Path.cwd() / "uv.lock"
-    if not lock.is_file():
-        return None
-    try:
-        data = tomllib.loads(lock.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return None
-    for pkg in data.get("package", []):
-        source = pkg.get("source", {})
-        if pkg.get("name") in _DIST_NAMES and "virtual" not in source and "editable" not in source:
-            return pkg.get("version")
-    return None
-
-
 def _version_key(v: str) -> tuple:
     """A comparable tuple from a dotted version, digits only ('0.1.10' -> (0, 1, 10))."""
     out = []
@@ -119,16 +101,6 @@ def _tool_skew_note() -> None:
                    f"{running} here (uv lock --upgrade-package touchstone-bench).", err=True)
 
 
-def _skew_note() -> None:
-    """One line when the project pins a touchstone different from the CLI you're running — the skew
-    that made the stranger's `uv run touchstone` resolve a version with no `survey` command."""
-    pinned = _project_pin()
-    running = _package_version()
-    if pinned and pinned != running:
-        typer.echo(f"Note: this project pins touchstone-bench {pinned}; you are running {running} "
-                   "(uv sync --upgrade-package touchstone-bench).", err=True)
-
-
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -140,7 +112,6 @@ def main(
     """Touchstone — turn your running agent into a benchmark, review it, train on it."""
     if debug:
         os.environ["TOUCHSTONE_DEBUG"] = "1"
-    _skew_note()
     _tool_skew_note()
     if ctx.invoked_subcommand is not None:
         return

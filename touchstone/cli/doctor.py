@@ -38,14 +38,15 @@ def _harbor_host_row(settings) -> tuple[str, str, str]:
 
 
 def _version_row() -> tuple[str, str, str]:
-    """touchstone's own version, flagged `skew` when the project pins a different one. doctor is the
-    consistency command, so the version-skew note (elsewhere on stderr) is also a row in its table —
-    a user piping `doctor` still sees the skew that made the stranger trust an old pinned doctor."""
+    """touchstone's own version, flagged `skew` only against a version doctor actually verified: a
+    newer touchstone-bench installed as a uv tool on this machine. It never names a project pin or a
+    pypi "latest" it did not check, so it can't send a user chasing a version that isn't there."""
     running = _cli._package_version()
-    pinned = _cli._project_pin()
-    if pinned and pinned != running:
-        return ("touchstone", "skew", f"running {running}; project pins {pinned} "
-                "(uv sync --upgrade-package touchstone-bench)")
+    tool = _cli._uv_tool_version()
+    if tool and _cli._version_key(running) < _cli._version_key(tool):
+        return ("touchstone", "skew",
+                f"running {running}; a newer {tool} is installed as a uv tool "
+                "(uv tool upgrade touchstone-bench)")
     return ("touchstone", "ok", running)
 
 
