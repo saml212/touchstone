@@ -1,19 +1,11 @@
 """Simulator for a `kind == "db"` service: a SQLite `state.db` the customer's real tools read.
 
-Unlike an HTTP simulator there is no `app.py` server and no port. The survey provider returns ONE
-JSON object describing the database in one of two shapes:
-
-  relational      {"schema.sql": "<CREATE TABLE ...>", "seed.json": {"<table>": [ {row}, ... ]},
-                   "README.md": "..."}
-  document store  {"collections": {"orders": {"<id>": {...doc...}}, ...}, "README.md": "..."}
-
-Touchstone (never the model) materializes `simulators/<name>/state.db` from those files. A document
-store becomes one table per collection `(id TEXT PRIMARY KEY, doc TEXT)` with the document in
-`doc`, so task criteria stay `sqlite_query_equals(..., json_extract(doc,'$.field'), ...)`. A service
-whose tools cannot run against SQLite is written as `UNSUPPORTED.md` and scored 0 with the reason.
-
-`python -m touchstone.survey.db_sim <sim_dir>` (re)builds state.db from the written files;
-`start.sh` runs it in the image before replay.
+No `app.py` server and no port. The survey provider returns ONE JSON object describing the database,
+either relational ({schema.sql, seed.json}) or a document store ({collections}); touchstone (never
+the model) materializes `simulators/<name>/state.db` from it. A document store becomes one table per
+collection `(id TEXT PRIMARY KEY, doc TEXT)`, so criteria stay `json_extract(doc,'$.field')`. Tools
+that can't run against SQLite are written as `UNSUPPORTED.md` and scored 0. `python -m
+touchstone.survey.db_sim <sim_dir>` rebuilds state.db; `start.sh` runs it before replay.
 """
 
 from __future__ import annotations
@@ -44,8 +36,9 @@ Rules:
 - Pick document-store shape when the tools index a dict of documents (data["orders"][order_id]);
   pick relational shape when the tools run SQL. Use ONLY sqlite-compatible SQL.
 - The seed/collections MUST contain every row or document any recorded call below returned or
-  touched, with ids and values EXACTLY as recorded (already scrubbed), plus enough additional
-  consistent rows that list/search tools return plausible results.
+  touched, with ids and values EXACTLY as recorded (already scrubbed). Add only a SMALL number of
+  extra plausible rows per collection (a handful, so list/search tools look realistic). Do NOT
+  reproduce an entire dataset or product catalog — keep the answer compact so it is valid JSON.
 - Do not invent tables or fields the tools never read. Keep README.md to what this simulates and how
   it was derived.
 - If the tools CANNOT run against SQLite (e.g. raw psycopg with no configurable URL, a non-SQL
@@ -62,7 +55,6 @@ Rules:
 Return only the JSON object."""
 
 
-# ---- provider answer -> files ----------------------------------------------
 
 
 def parse_files(text: str) -> dict:
@@ -123,7 +115,6 @@ def _clear(sim_dir: Path) -> None:
         (sim_dir / name).unlink(missing_ok=True)
 
 
-# ---- materialize state.db --------------------------------------------------
 
 
 def materialize(sim_dir: str | Path) -> Path | None:
@@ -193,7 +184,6 @@ def is_document_store(sim_dir: str | Path) -> bool:
     return (Path(sim_dir) / "collections.json").is_file()
 
 
-# ---- prompt materials + generation -----------------------------------------
 
 
 _SCHEMA_NEEDLES = ("create table", "sqlalchemy", "declarative_base", "table(", "column(")
@@ -263,11 +253,20 @@ def _generate(provider, repo: Path, service: dict, tool_source: str, examples, h
     return parse_files(provider.run(_db_prompt(repo, service, tool_source, examples, hint), repo))
 
 
+def _generate_or_unsupported(provider, repo, service, sim_dir, tool_source, examples, hint=""):
+    """Generate the sim files, or record UNSUPPORTED on an unparseable reply (don't fail survey)."""
+    try:
+        write_sim(sim_dir, _generate(provider, repo, service, tool_source, examples, hint))
+        return True
+    except (ValueError, json.JSONDecodeError) as exc:
+        write_unsupported(sim_dir, f"db simulator generation failed: {str(exc)[:200]}")
+        return False
+
+
 def generate_db_simulator(repo, provider, service: dict, tools: list[dict], events, sim_root: Path,
                           scrub, settings, force: bool = False) -> dict:
     """Write simulators/<name>/ for a db service and return its fidelity result. Only one generation
-    happens here; the one-shot regeneration on a low score is deferred to `regenerate` (run by the
-    invoke step, since tools dispatched through invoke.py can't be measured until it exists)."""
+    happens here; the low-score regeneration is deferred to `regenerate` (run post-invoke)."""
     from . import fidelity
     from .simulate import _examples, _replay_ctx, _tool_source
 
@@ -278,14 +277,13 @@ def generate_db_simulator(repo, provider, service: dict, tools: list[dict], even
         return fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
     tool_source = _tool_source(repo, tools)
     examples = _examples(calls, scrub)
-    write_sim(sim_dir, _generate(provider, repo, service, tool_source, examples))
+    _generate_or_unsupported(provider, repo, service, sim_dir, tool_source, examples)
     return fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
 
 
 def regenerate(repo, provider, service: dict, tools: list[dict], events, sim_root: Path, scrub,
                settings, invoke, prev: dict) -> dict:
-    """One-shot regeneration of a below-threshold db simulator, with the real (invoke-driven)
-    failures as a hint, re-measured through invoke.py. Keeps whichever simulator scored higher."""
+    """Regenerate a below-threshold db sim with the invoke-driven failures as a hint; keeps best."""
     from . import fidelity
     from .simulate import _examples, _replay_ctx, _tool_source
 
@@ -296,8 +294,10 @@ def regenerate(repo, provider, service: dict, tools: list[dict], events, sim_roo
     calls = [e for e in events if e.tool in {t["name"] for t in tools}]
     examples = _examples(calls, scrub)
     snapshot = _snapshot(sim_dir)
-    write_sim(sim_dir, _generate(provider, repo, service, _tool_source(repo, tools), examples,
-                                 _failure_hint(prev)))
+    if not _generate_or_unsupported(provider, repo, service, sim_dir, _tool_source(repo, tools),
+                                    examples, _failure_hint(prev)):
+        _restore(sim_dir, snapshot)  # regeneration unparseable: keep the previous simulator
+        return prev
     new = fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub, invoke)
     if new["score"] >= prev["score"]:
         return new

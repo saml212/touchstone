@@ -5,6 +5,7 @@ import json
 import sqlite3
 
 from touchstone.survey import db_service, db_sim
+from touchstone.survey.scrub import Scrubber
 
 
 def _rows(db, query):
@@ -72,3 +73,29 @@ def test_env_name_and_value_path_vs_url():
     # a sqlite URL when the code reads a URL
     url_svc = {"name": "world", "kind": "db", "base_url_default": "postgresql://h/db"}
     assert db_service.env_value("/x/state.db", url_svc) == "sqlite:////x/state.db"
+
+
+class _JunkProvider:
+    name = "junk"
+
+    def run(self, prompt, cwd):
+        return "sorry, I could not produce JSON"
+
+
+class _S:
+    survey_fidelity_threshold = 0.8
+    survey_python = None
+
+
+def test_generation_failure_is_unsupported_not_fatal(tmp_path):
+    from touchstone.survey.db_sim import generate_db_simulator
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    service = {"name": "world", "kind": "db", "base_url_env": None, "base_url_default": ":memory:"}
+    tools = [{"name": "t", "import_path": "m:t", "file": None}]
+    result = generate_db_simulator(repo, _JunkProvider(), service, tools, [],
+                                   tmp_path / "simulators", Scrubber(), _S())
+    assert result["score"] == 0.0
+    assert "unsupported" in result and result["unsupported"]  # flagged, survey continues
+    assert db_sim.unsupported(tmp_path / "simulators" / "world")
