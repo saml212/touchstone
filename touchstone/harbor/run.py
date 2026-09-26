@@ -85,6 +85,32 @@ def _require_target(settings: Settings) -> str:
         "or set [harbor] host in touchstone.toml.")
 
 
+def _is_reward_header(stripped: str) -> bool:
+    return stripped.startswith("┃") and "Reward" in stripped and "Count" in stripped
+
+
+def _box_step(line: str, in_box: bool, prev: str | None) -> tuple[bool, str | None, bool]:
+    """One line -> (in_box, prev-row, keep): in the box a row equal to the one before is dropped."""
+    stripped = line.strip()
+    if _is_reward_header(stripped):
+        return True, None, True
+    if in_box and stripped.startswith("│"):
+        return True, line, line != prev
+    return (False, None, True) if in_box else (in_box, prev, True)
+
+
+def _collapse_reward_box(text: str) -> str:
+    """Harbor's `Reward / Count` box repeats one identical row per reward file, so it prints three
+    times; collapse adjacent identical body rows so it prints once (other output is untouched)."""
+    out: list[str] = []
+    in_box, prev = False, None
+    for line in text.splitlines(keepends=True):
+        in_box, prev, keep = _box_step(line, in_box, prev)
+        if keep:
+            out.append(line)
+    return "".join(out)
+
+
 def _exec(cmd: list[str], env: dict | None = None,
           stdin_data: str | None = None) -> tuple[int, str]:
     """Run `cmd`, echo its combined output, and return (returncode, output). `stdin_data` feeds
@@ -98,7 +124,8 @@ def _exec(cmd: list[str], env: dict | None = None,
             "host; install it (e.g. `brew install rsync openssh`) and retry") from exc
     output = (proc.stdout or "") + (proc.stderr or "")
     if output:
-        print(output, end="" if output.endswith("\n") else "\n")
+        shown = _collapse_reward_box(output)
+        print(shown, end="" if shown.endswith("\n") else "\n")
     return proc.returncode, output
 
 

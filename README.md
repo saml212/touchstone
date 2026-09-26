@@ -34,6 +34,12 @@ touchstone review                        # opens the browser and starts the voic
 touchstone train                         # turn finished jobs into distill + RL datasets
 ```
 
+**Where the benchmark runs.** `bench`, the survey's gate and baseline, and the review's regrade all
+run Harbor in Docker. On a laptop that means starting Docker Desktop or colima; or name any machine
+you can already ssh to under `[harbor] host` / `remote_root` in `touchstone.toml`, and Touchstone
+syncs the dataset there and runs Harbor over ssh, pulling the jobs back — nothing is installed on the
+host beyond `uvx`.
+
 **Docker first.** `survey` (its gate + baseline), `bench`, and `train` run benchmarks in Docker —
 locally, or on a machine you name under `[harbor]` in `touchstone.toml` (see
 [Running Harbor](#running-harbor-remote-docker-note)). With neither, `survey` stops in seconds

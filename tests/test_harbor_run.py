@@ -431,3 +431,31 @@ def test_remote_push_excludes_prior_run_outputs(tmp_path, monkeypatch):
     run_mod.run(ds, "oracle", jobs_dir=tmp_path / "jobs", settings=settings)
     push = calls[0]
     assert "--delete" in push and "jobs" in push and "runs" in push  # both protected from --delete
+
+
+def test_collapse_reward_box_prints_the_summary_once():
+    """Harbor's `Reward / Count` box repeats one identical row per reward file; the echo collapses
+    the duplicates so the distribution shows once, while the run table and other output stay."""
+    raw = (
+        "tasks • touchstone • gpt-4o\n"
+        "┃ Trials ┃ Exceptions ┃ Correctness ┃ Reward ┃ Safety ┃\n"
+        "│      6 │          0 │       1.000 │  1.000 │  1.000 │\n"
+        "\n"
+        "┃ Reward ┃ Count ┃\n"
+        "│ 1.0    │     6 │\n"
+        "│ 1.0    │     6 │\n"
+        "│ 1.0    │     6 │\n"
+        "└────────┴───────┘\n"
+        "Total runtime: 1m 10s\n")
+    out = run_mod._collapse_reward_box(raw)
+    assert out.count("│ 1.0    │     6 │\n") == 1              # the duplicate rows collapsed
+    assert "┃ Trials ┃" in out and "│      6 │" in out         # the run summary table is untouched
+    assert "Total runtime: 1m 10s" in out                     # trailing output survives
+
+
+def test_collapse_reward_box_keeps_distinct_distribution_rows():
+    raw = ("┃ Reward ┃ Count ┃\n"
+           "│ 0.5    │     2 │\n"
+           "│ 1.0    │     4 │\n"
+           "└────────┴───────┘\n")
+    assert run_mod._collapse_reward_box(raw) == raw  # a real distribution is left alone
