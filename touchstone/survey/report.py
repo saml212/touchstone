@@ -40,6 +40,8 @@ def services_section(map_data: dict) -> str:
 
 
 def _sim_status(result: dict) -> str:
+    if result.get("unsupported"):
+        return f"unsupported: {result['unsupported']}"
     return "ok" if result.get("score", 0) >= result.get("threshold", 0) else "below threshold"
 
 

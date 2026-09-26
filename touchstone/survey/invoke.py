@@ -37,6 +37,9 @@ Map of the agent's tools (name, import path, the service each calls) and its mod
 Tool source (how the code actually calls each tool):
 {tool_source}
 
+Database services (a tool reads/writes this database in-process, not over HTTP):
+{db_services}
+
 invoke.py must:
 - define `def invoke(name: str, arguments: dict) -> object` that calls the customer's REAL tool
   `name` with keyword `arguments`, EXACTLY as the agent's own code calls it. Import the customer's
@@ -56,16 +59,47 @@ def _map_digest(map_data: dict) -> str:
     return json.dumps(keep, indent=2)[:6000]
 
 
+def _db_services_block(map_data: dict) -> str:
+    """Instruct invoke.py to build each db service's client from its env var (a SQLite path), and to
+    load/write-back JSON collections for a document store, never the code's default path."""
+    from . import db_service
+
+    lines = []
+    for s in map_data.get("services", []):
+        if db_service.is_db(s):
+            lines.append(
+                f"- Database `{s['name']}`: the tools' database is the SQLite file at the path in "
+                f"env var {db_service.env_name(s)} (read it at call time); build the "
+                f"connection/client the tools need from it, never the code's default location. If "
+                f"the tools work on in-memory JSON documents, load every collection from that "
+                f"SQLite file (one table per collection, columns id + doc) into dicts once per "
+                f"process, call the tool with them exactly as the code does, and write the changed "
+                f"documents back (json.dumps, sorted keys) after each call.")
+    return "\n".join(lines) or "(none)"
+
+
 def _generate(provider: SurveyProvider, repo: Path, map_data: dict, tools: list[dict]) -> str:
     from .package_entry import _strip_fence
 
-    prompt = INVOKE_PROMPT.format(map=_map_digest(map_data), tool_source=_tool_source(repo, tools))
+    prompt = INVOKE_PROMPT.format(map=_map_digest(map_data), tool_source=_tool_source(repo, tools),
+                                  db_services=_db_services_block(map_data))
     return _strip_fence(provider.run(prompt, repo))
 
 
 def _mounts(map_data: dict, out: Path) -> list[dict]:
-    return [{"sim_dir": out / "simulators" / s["name"], "env": s.get("base_url_env"),
-             "host": service_host(s)} for s in crossing_services(map_data)]
+    from . import db_service
+
+    return [{"sim_dir": out / "simulators" / s["name"], "env": _mount_env(s),
+             "host": service_host(s), "kind": s.get("kind"), "db_url": db_service.is_url(s)}
+            for s in crossing_services(map_data)]
+
+
+def _mount_env(service: dict) -> str | None:
+    from . import db_service
+
+    if db_service.is_db(service):
+        return db_service.env_name(service)
+    return service.get("base_url_env")
 
 
 def _invoke_cmd(repo: Path, settings: Settings, invoke_path: Path, name: str,

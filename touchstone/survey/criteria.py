@@ -13,6 +13,7 @@ cannot reproduce is skipped, never made into a task.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -111,14 +112,69 @@ def _changed_cells(table: str, before: dict, after: dict, db_rel: str,
                    literals: set, referenced: set) -> list[tuple[str, str]]:
     pk = after.get("pk", "rowid")
     before_rows, after_rows = _rows_by_pk(before), _rows_by_pk(after)
+    is_doc = _is_doc_rows(after_rows)
     lines = []
     for key, row in after_rows.items():
         old = before_rows.get(key)
         # Only grade a changed row the agent actually named (its key appears in a tool arg/result).
         # A counter/sequence row the simulator bumps on its own (WHERE name='email') is not.
         if old is not None and key in referenced:
-            lines += _cell_lines(table, pk, key, old, row, db_rel, literals)
+            lines += (_doc_cell_lines(table, pk, key, old, row, db_rel, literals) if is_doc
+                      else _cell_lines(table, pk, key, old, row, db_rel, literals))
     return lines
+
+
+# ---- document-store tables (id TEXT PRIMARY KEY, doc TEXT) ------------------
+
+
+def _is_doc_rows(rows_by_pk: dict) -> bool:
+    """A document-store table: every row is exactly (id, doc). Its criteria read `doc` fields with
+    json_extract instead of grading the whole JSON blob."""
+    rows = list(rows_by_pk.values())
+    return bool(rows) and all("doc" in r and set(r) <= {"id", "doc"} for r in rows)
+
+
+def _doc_of(row: dict):
+    raw = row.get("doc")
+    try:
+        return json.loads(raw) if isinstance(raw, str) else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _flatten_doc(doc, prefix: str = "$") -> dict:
+    """Scalar leaves of a JSON document keyed by their json_extract path ($.a.b, $.items[0].id)."""
+    if isinstance(doc, dict):
+        out: dict = {}
+        for k, v in doc.items():
+            out.update(_flatten_doc(v, f"{prefix}.{k}"))
+        return out
+    if isinstance(doc, list):
+        out = {}
+        for i, v in enumerate(doc):
+            out.update(_flatten_doc(v, f"{prefix}[{i}]"))
+        return out
+    return {prefix: doc}
+
+
+def _field_name(path: str) -> str:
+    return path[2:] if path.startswith("$.") else path
+
+
+def _doc_cell_lines(table: str, pk: str, key, old_row: dict, new_row: dict, db_rel: str,
+                    literals: set) -> list[tuple[str, str]]:
+    old = _flatten_doc(_doc_of(old_row) or {})
+    new = _flatten_doc(_doc_of(new_row) or {})
+    out = []
+    for path, val in new.items():
+        field = _field_name(path)
+        if old.get(path) != val and not _VOLATILE.search(field) and _token_value(val):
+            query = f"SELECT json_extract(doc,'{path}') FROM {table} WHERE {pk}={_sql_literal(key)}"
+            out.append((f"rk.sqlite_query_equals({db_rel!r}, {query!r}, {val!r})",
+                        descriptions.cell(table, field, key, val)))
+    if out:
+        literals.add(str(key))
+    return out
 
 
 def _token_value(val) -> bool:
@@ -207,10 +263,12 @@ def _tool_criteria(map_data: dict, calls: list[ToolEvent],
 
 
 def _mounts(services: list[dict], out: Path, base_url_envs: dict) -> list[dict]:
+    from . import db_service
     from .simulate import service_host
 
     return [{"sim_dir": out / "simulators" / s["name"], "env": base_url_envs.get(s["name"]),
-             "host": service_host(s)} for s in services]
+             "host": service_host(s), "kind": s.get("kind"),
+             "db_url": db_service.is_url(s)} for s in services]
 
 
 def capture_effect(services, out, base_url_envs, repo, tools, calls, settings,
