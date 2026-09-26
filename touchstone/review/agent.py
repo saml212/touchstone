@@ -16,19 +16,8 @@ from dataclasses import dataclass, field
 from .. import store
 from ..harbor import run as run_mod
 from ..interview import rooms
-from ..survey.report import passes_counts
-from . import changes, readback, regrade, replies, snapshot, trials
-from .facts import (
-    _baseline_sets,
-    _editable,
-    _gated_tasks,
-    _job_labels,
-    _join,
-    _shared_tasks,
-    errored_sentence,
-    latest_run_errors,
-    latest_run_sets,
-)
+from . import changes, opening, readback, regrade, replies, snapshot, trials
+from .facts import _editable, _shared_tasks
 from .prompt import SYSTEM, TOOLS
 from .scratch import _Scratch
 
@@ -67,40 +56,8 @@ class ReviewAgent:
     # ---- opening -----------------------------------------------------------
 
     def open_statement(self) -> str:
-        jobs_done = _job_labels(self.dataset_dir)
-        built = _gated_tasks(self.dataset_dir)
-        errs = latest_run_errors(self.jobs_dir)
-        if not jobs_done and not built and not errs:
-            return (f"Let's review “{self.room.topic}”. I couldn't find a benchmark here "
-                    "yet — run `touchstone survey` first, then reopen this room.")
-        does = _join(jobs_done) or "several jobs"
-        if errs and errs["errored"]:  # a failed run is never "everything passes"
-            return f"Your agent handles {does}; {errored_sentence(errs)}"
-        return f"Your agent handles {does}; {self._pass_tail(built)} {self._offer()}"
-
-    def _pass_tail(self, built: list[str]) -> str:
-        """"N tasks, passes K of the R run [(U not run)]" — run/passed counted from the latest
-        rewarded job (the run the room is about to review), so six scored trials read as "0 of the
-        6 run", never "0 of the 0 run (6 not run)" off a stale baseline. Falls back to the baseline
-        file, then the plain task count, when no rewarded job exists."""
-        sets = latest_run_sets(self.jobs_dir) or _baseline_sets(self.dataset_dir)
-        if sets is None:
-            return f"{len(built)} tasks."
-        n, k, r, u = passes_counts(built, sets["ran"], sets["passed"])
-        if u > 0:
-            return f"{n} tasks, your current setup passes {k} of the {r} run ({u} not run yet)."
-        return f"{n} tasks, your current setup passes {k} of the {r} run."
-
-    def _offer(self) -> str:
-        """The opening's offer, chosen from what is actually there to review."""
-        c = trials.counts(self._scan())
-        if c["unsure"]:
-            return "Want to walk through the trials the verifier was unsure about?"
-        if c["disagree"]:
-            return "Want to look at the tasks where the models disagree?"
-        if c["unreviewed"]:
-            return "Want to walk through the ones nobody has reviewed yet?"
-        return "everything passes — want to spot-check a few?"
+        return opening.statement(self.dataset_dir, self.jobs_dir, self.room.topic,
+                                 trials.counts(self._scan()))
 
     # ---- a turn ------------------------------------------------------------
 
