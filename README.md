@@ -29,7 +29,8 @@ touchstone demo                          # run the built-in agent and capture ep
 touchstone survey <repo>                 # read-only: map the code, simulate its services, score fidelity
 touchstone bench -m <provider/model>     # run a model over the dataset; print pass rate per task
 touchstone jobs                          # list Harbor job dirs with their pass rate per task
-touchstone serve  /  touchstone review     # open the review room (voice or text)
+touchstone serve                         # the standalone local UI (overview, tasks, trials, train)
+touchstone review                        # opens the browser and starts the voice review (server included)
 touchstone train                         # turn finished jobs into distill + RL datasets
 ```
 
@@ -86,11 +87,12 @@ any model without touching the customer's code.
 
 ## The review room
 
-`touchstone serve` then `touchstone review` opens a room (voice or text) where a product person walks
-the finished trials with an AI. It opens from the product's goal (the job labels and the baseline
-pass count), then picks trials in order — verifier unsure, models disagree, never reviewed, then
-gate failures — and for each reads the instruction, the trajectory in plain words, and every
-criterion's score, and asks "do you agree it passed?". Agreement records trust (the share of
+`touchstone review` is the whole thing: it starts the server if it isn't already running, opens the
+browser on the room, and shows one big "▶ start" button — one click lets the browser use your
+microphone, and from then on you just talk. The AI opens from the product's goal (the job labels and
+the baseline pass count) and walks the finished trials in order — verifier unsure, models disagree,
+never reviewed, then gate failures — reading each instruction, the trajectory in plain words, and
+every criterion's score, and asking "do you agree it passed?". Agreement records trust (the share of
 reviewed trials where the human agreed with the verifier, shown live). On a disagreement the agent
 drafts a criterion change — edit/add/remove a rewardkit check, a dimension weight, a judge line, or
 the instruction wording — reads it back, and on "yes" writes the `tests/` file and runs

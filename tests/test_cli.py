@@ -143,9 +143,29 @@ def test_readonly_db_dir_fails_cleanly(tmp_path, monkeypatch):
         os.chmod(ro, stat.S_IRWXU)
 
 
+def _stub_review_server(monkeypatch, *, up):
+    """Stub review's server plumbing so tests never bind a port or block on Ctrl-C.
+    Returns (calls, opened): calls['port'] is the started port, opened['url'] the browser url."""
+    import types
+
+    from touchstone.cli import review as review_mod
+    calls, opened = {"started": 0}, {}
+
+    def fake_start(host, port):
+        calls["started"] += 1
+        calls["port"] = port
+        return types.SimpleNamespace(should_exit=True)  # _wait_for_exit returns at once
+
+    monkeypatch.setattr(review_mod, "_server_up", lambda h, p: up)
+    monkeypatch.setattr(review_mod, "_start_server", fake_start)
+    monkeypatch.setattr(review_mod, "_open_browser", lambda url: opened.__setitem__("url", url))
+    return calls, opened
+
+
 def test_review_opens_a_room_with_an_opening(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init"])
+    _stub_review_server(monkeypatch, up=True)  # server already up: no start, no block
     result = runner.invoke(app, ["review", "--no-open"])
     assert result.exit_code == 0
     assert "/rooms/" in result.stdout
@@ -157,3 +177,24 @@ def test_review_opens_a_room_with_an_opening(tmp_path, monkeypatch):
         assert msgs and msgs[0].role == "assistant"
     finally:
         conn.close()
+
+
+def test_review_starts_server_when_down(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init"])
+    calls, opened = _stub_review_server(monkeypatch, up=False)
+    result = runner.invoke(app, ["review", "--port", "8799"])
+    assert result.exit_code == 0
+    assert calls["started"] == 1 and calls["port"] == 8799  # started in-process on the given port
+    assert opened["url"].startswith("http://127.0.0.1:8799/rooms/")  # browser opened on the room
+    assert "Talk in your browser" in result.stdout
+
+
+def test_review_reuses_running_server(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init"])
+    calls, opened = _stub_review_server(monkeypatch, up=True)
+    result = runner.invoke(app, ["review", "--port", "8765"])
+    assert result.exit_code == 0
+    assert calls["started"] == 0  # already up -> the in-process starter is never called
+    assert opened["url"].startswith("http://127.0.0.1:8765/rooms/")
