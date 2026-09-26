@@ -102,6 +102,22 @@ def rl_tasks(jobs: list[Job]) -> list[dict]:
     return records
 
 
+def rl_note(student_jobs: list[Job]) -> str | None:
+    """Why rl_tasks is empty, or None when the learnability band has tasks. RL keeps tasks whose
+    pass rate is strictly between 0 and 1; a single-attempt run scores only 0 or 1, so it never
+    fills the band — the note says so instead of leaving an unexplained empty rl_tasks.toml."""
+    rates = [_pass_rate(trials) for trials in _tasks(student_jobs).values()]
+    if not rates or any(0 < rate < 1 for rate in rates):
+        return None
+    n = len(rates)
+    passing = sum(1 for rate in rates if rate >= PASS)
+    if passing == n:
+        return f"none between 0% and 100% pass — all {n} at 100%"
+    if passing == 0:
+        return f"none between 0% and 100% pass — all {n} at 0%"
+    return f"none between 0% and 100% pass — {passing} at 100%, {n - passing} at 0%"
+
+
 def _teacher_passes(teacher_jobs: list[Job], threshold: float) -> set[str]:
     return {t.task_name for t in _passing(teacher_jobs, threshold)}
 

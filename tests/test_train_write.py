@@ -80,6 +80,26 @@ def test_sentence_reports_routes_and_out(tmp_path):
     assert s.endswith(f"{out}/")
 
 
+def test_empty_rl_says_why_all_at_100(tmp_path):
+    # The stranger got an empty rl_tasks.toml with no explanation: six trials, all at 100%, so
+    # nothing lands in the 0<pass<1 learnability band. Both the sentence and the manifest say so.
+    cfg = {"agents": [{"name": "replica", "model_name": "m"}]}
+    jd = _job(tmp_path, "student", cfg)
+    for i in range(6):
+        _trial(jd, f"p{i}", f"ds/pass{i}", reward=1.0, traj={"schema_version": "ATIF-v1.8"})
+    out = tmp_path / "train"
+    written = write_datasets(out, [], [Job.read(jd)])
+    assert not written.rl
+    assert "rl: 0 tasks (none between 0% and 100% pass — all 6 at 100%)" in written.sentence()
+    assert written.manifest["rl_note"] == "none between 0% and 100% pass — all 6 at 100%"
+    # a run with a band task carries no note
+    jd2 = _job(tmp_path, "banded", cfg)
+    _trial(jd2, "a", "ds/x", reward=1.0)
+    _trial(jd2, "b", "ds/x", reward=0.0)
+    written2 = write_datasets(tmp_path / "train2", [], [Job.read(jd2)])
+    assert written2.rl and written2.manifest["rl_note"] is None
+
+
 def test_five_passing_trials_distill_at_least_four(tmp_path):
     # The stranger's bug head-on: 5 tasks passed at 1.0, distill was empty. Now >= 4 distill.
     cfg = {"agents": [{"name": "replica", "model_name": "m"}]}

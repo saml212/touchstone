@@ -22,7 +22,7 @@ import tomli_w
 
 from ..harbor.jobs import Job
 from ..survey.writes import atomic_write
-from .datasets import distill, distill_excluded, rl_tasks, route
+from .datasets import distill, distill_excluded, rl_note, rl_tasks, route
 
 
 def _all_jobs(teacher_jobs: list[Job], student_jobs: list[Job]) -> list[Job]:
@@ -63,11 +63,12 @@ def _write_rl(out: Path, records: list[dict]) -> None:
 
 
 def _manifest(teacher_jobs: list[Job], student_jobs: list[Job], routing: dict[str, str],
-              distilled: list[dict], excluded: int, threshold: float) -> dict:
+              distilled: list[dict], excluded: int, threshold: float, note: str | None) -> dict:
     return {
         "created_at": datetime.now(UTC).isoformat(),
         "touchstone_version": _touchstone_version(),
         "threshold": threshold,
+        "rl_note": note,
         "inputs": {
             "teacher": [_agent_model(j) for j in teacher_jobs],
             "student": [_agent_model(j) for j in student_jobs],
@@ -94,6 +95,7 @@ class Written:
     distill: list[dict]
     rl: list[dict]
     excluded: int = 0
+    rl_note: str | None = None
 
     def sentence(self) -> str:
         """The one-line result the CLI prints."""
@@ -104,7 +106,7 @@ class Written:
             lo, hi = _fmt(min(rates)), _fmt(max(rates))
             band = f" (pass {lo})" if lo == hi else f" (pass {lo}–{hi})"
         else:
-            band = ""
+            band = f" ({self.rl_note})" if self.rl_note else ""
         excl = f" (excluded {self.excluded}: no trajectory artifact)" if self.excluded else ""
         return (f"distill: {len(self.distill)} trajectories from {tasks} tasks{excl} · "
                 f"rl: {len(self.rl)} tasks{band} · hold-out: {counts['hold_out']} · "
@@ -121,9 +123,11 @@ def write_datasets(out: str | Path, teacher_jobs: list[Job], student_jobs: list[
     distill_tasks = {name for name, dest in routing.items() if dest == "distill"}
     distilled = [r for r in distill(jobs, threshold=threshold) if r["task"] in distill_tasks]
     excluded = distill_excluded(jobs, distill_tasks, threshold=threshold)
+    note = rl_note(student_jobs) if not rl else None
     _write_distill(out, distilled)
     _write_rl(out, rl)
-    manifest = _manifest(teacher_jobs, student_jobs, routing, distilled, excluded, threshold)
+    manifest = _manifest(teacher_jobs, student_jobs, routing, distilled, excluded, threshold, note)
     atomic_write(out / "manifest.json",
                  json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
-    return Written(out=out, manifest=manifest, distill=distilled, rl=rl, excluded=excluded)
+    return Written(out=out, manifest=manifest, distill=distilled, rl=rl, excluded=excluded,
+                   rl_note=note)
