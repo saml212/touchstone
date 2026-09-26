@@ -211,6 +211,27 @@ def _image_tag(repo_name: str, env_dir: Path) -> str:
     return f"touchstone-env-{_sanitize_tag(repo_name)}:{digest.hexdigest()[:12]}"
 
 
+def _dataset_root(dataset: Path) -> Path:
+    """The dataset root (holds environment/ and tasks/) from a root, a tasks/ dir, or a task dir."""
+    if (dataset / "task.toml").is_file():  # a single task dir: <root>/tasks/<name>
+        return dataset.parent.parent
+    if dataset.name == "tasks":
+        return dataset.parent
+    return dataset
+
+
+def dataset_image(dataset: str | Path) -> tuple[Path, str] | None:
+    """(environment dir, shared image tag) for a dataset, or None when it has no environment/ to
+    build. The tag is recomputed from the environment dir exactly as the gate computed it at survey
+    time (`_image_tag(repo.name, ...)`, and the dataset root is `<repo>/touchstone`), so it matches
+    the `FROM <tag>` every task's environment Dockerfile carries."""
+    root = _dataset_root(Path(dataset).resolve())
+    env_dir = root / "environment"
+    if not (env_dir / "Dockerfile").is_file():
+        return None
+    return env_dir, _image_tag(root.parent.name, env_dir)
+
+
 def _ports(map_data: dict) -> dict:
     """Per-crossing-service wiring. A db service gets no port/host; its env var is the mapped one
     or a synthesized TOUCHSTONE_DB_<NAME>, and db_urls says whether its value is a URL."""

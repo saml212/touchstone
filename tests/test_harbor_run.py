@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from touchstone.config import Settings
+from touchstone.harbor import images as images_mod
 from touchstone.harbor import remote
 from touchstone.harbor import run as run_mod
 
@@ -315,6 +316,53 @@ def test_require_target_names_the_host_when_its_daemon_is_down(monkeypatch):
     with pytest.raises(run_mod.DockerDaemonError) as exc:
         run_mod._require_target(Settings(harbor_host="mini"))
     assert "on host mini" in str(exc.value)
+
+
+def _dataset_with_env(tmp_path, repo_name="acme"):
+    """A dataset laid out as a survey writes it: <repo>/touchstone with environment/Dockerfile."""
+    root = tmp_path / repo_name / "touchstone"
+    (root / "tasks" / "t1").mkdir(parents=True)
+    (root / "tasks" / "t1" / "task.toml").write_text("")
+    (root / "environment").mkdir()
+    (root / "environment" / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    return root
+
+
+def test_run_builds_shared_image_before_running(tmp_path, monkeypatch):
+    # A survey that ran without Docker never built the dataset's shared image; bench must build it
+    # (idempotently) before `harbor run`, or every task fails at `FROM <shared image>`.
+    _record_calls(monkeypatch)
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: True)
+    monkeypatch.setattr(images_mod, "_image_exists_local", lambda tag: False)  # not built yet
+    built = []
+    monkeypatch.setattr(run_mod, "_build_call",
+                        lambda cmd, where, env=None: built.append((cmd, where)))
+    ds = _dataset_with_env(tmp_path)
+    job = run_mod.run(ds, "oracle", jobs_dir=tmp_path / "jobs", settings=Settings())
+    assert len(built) == 1  # the shared image was built once
+    cmd, where = built[0]
+    assert cmd[:3] == ["docker", "build", "-t"]
+    assert cmd[3].startswith("touchstone-env-acme:") and where == "local"  # tag from environment/
+    assert cmd[-1].endswith("/environment")  # built from the dataset's environment dir
+    assert job.name == "2026-01-01__00-00-00"  # and the run still happened
+
+
+def test_run_skips_build_when_shared_image_present(tmp_path, monkeypatch):
+    _record_calls(monkeypatch)
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: True)
+    monkeypatch.setattr(images_mod, "_image_exists_local", lambda tag: True)  # already built
+    built = []
+    monkeypatch.setattr(run_mod, "_build_call", lambda *a, **k: built.append(a))
+    ds = _dataset_with_env(tmp_path)
+    run_mod.run(ds, "oracle", jobs_dir=tmp_path / "jobs", settings=Settings())
+    assert built == []  # image present -> no rebuild
+
+
+def test_ensure_dataset_image_noop_without_environment(tmp_path, monkeypatch):
+    # A raw tasks-only dataset (no environment/ dir) has nothing to build: never touch Docker.
+    monkeypatch.setattr(images_mod, "_image_exists_local",
+                        lambda tag: (_ for _ in ()).throw(AssertionError("should not probe")))
+    run_mod.ensure_dataset_image(_dataset(tmp_path), Settings())  # returns without raising
 
 
 def test_build_image_retries_once_then_succeeds(tmp_path, monkeypatch):

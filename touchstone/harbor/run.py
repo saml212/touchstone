@@ -233,16 +233,6 @@ def _build_remote(context_dir: Path, tag: str, settings: Settings) -> None:
                 f"host {host}")
 
 
-def build_image(context_dir: str | Path, tag: str, settings: Settings | None = None) -> None:
-    """Build the image `tag` from `context_dir`, on the SSH host when there is no local Docker."""
-    context_dir = Path(context_dir)
-    settings = settings or load_settings()
-    if _require_target(settings) == "remote":
-        _build_remote(context_dir, tag, settings)
-    else:
-        _build_call(["docker", "build", "-t", tag, str(context_dir)], "local")
-
-
 def _tasks_dir(path: Path) -> Path:
     return path if path.name == "tasks" else path / "tasks"
 
@@ -288,6 +278,7 @@ def run(path: str | Path, agent: str, *, model: str | None = None,
     path, jobs_dir = Path(path), Path(jobs_dir)
     extra_args = extra_args or []
     settings = settings or load_settings()
+    ensure_dataset_image(path, settings)  # the shared base image every task's Dockerfile is FROM
     want = ([model] if _is_custom_agent(agent) else []) + ([user_model] if user_model else [])
     keys_ = _provider_keys(want, settings)
     if _require_target(settings) == "remote":
@@ -295,6 +286,8 @@ def run(path: str | Path, agent: str, *, model: str | None = None,
     return _run_local(path, agent, model, jobs_dir, n_concurrent, extra_args, keys_)
 
 
-# Re-export `regrade` so `run_mod.regrade` stays the public entry point; its implementation lives in
-# regrade_run to keep this file small. Imported at the bottom so run's helpers are defined first.
+# Re-export `regrade`, `build_image`, and `ensure_dataset_image` so `run_mod.<name>` stays the
+# public entry point; their implementations live in sibling modules to keep this file small.
+# Imported at the bottom so run's helpers are defined first (both siblings import run).
+from .images import build_image, ensure_dataset_image  # noqa: E402,F401
 from .regrade_run import regrade  # noqa: E402,F401

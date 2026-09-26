@@ -53,6 +53,7 @@ def regrade(job_dir: str | Path, tasks_path: str | Path, *,
     artifacts (no agent, no key); runs on the SSH host when there is no local Docker."""
     job_dir, tasks_path = Path(job_dir), Path(tasks_path)
     settings = settings or load_settings()
+    run.ensure_dataset_image(tasks_path, settings)  # the shared base image the verifier is FROM
     if run._require_target(settings) == "remote":
         return _regrade_remote(job_dir, tasks_path, settings)
     return _regrade_local(job_dir, tasks_path)
