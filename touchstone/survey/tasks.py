@@ -250,7 +250,12 @@ def write_tasks(repo: Path, conn, map_data: dict, groups: dict, events: list[Too
                 env_result: dict, provider: SurveyProvider, scrub: Scrubber, settings,
                 force: bool = False) -> dict:
     """Write a Harbor task per variant episode. Returns written / reused / skipped task names."""
+    from . import db_seed, db_service
+
     out = repo / "touchstone"
+    for service in map_data.get("services", []):  # prime the scrubber so criteria match the seed
+        if db_service.is_db(service):
+            db_seed.prime_scrubber(repo, service, scrub)
     by_ep = _events_by_episode(events)
     resolved = _resolved_ids(conn)
     dataset = _dataset_name(repo, settings)
@@ -264,8 +269,11 @@ def write_tasks(repo: Path, conn, map_data: dict, groups: dict, events: list[Too
             result["reused"].append(name)
             continue
         _clear_prior_review(out, name)
+        # Only calls the agent actually executed (a recorded output) are replayed: a proposed-but-
+        # unexecuted call has no ground truth and, replayed, would mutate state it never touched.
+        episode_calls = [c for c in by_ep.get(ep_id, []) if c.output is not None]
         outcome = _build_task(task_dir, name, dataset, group, ep_id, conn, map_data,
                               env_result, provider, repo, scrub, settings,
-                              _scrub_calls(by_ep.get(ep_id, []), scrub))
+                              _scrub_calls(episode_calls, scrub))
         _record(result, outcome)
     return result

@@ -46,3 +46,17 @@ def test_constant_base_url_service_is_flagged_not_replayed(tmp_path):
     assert result["score"] == 0.0
     assert result["score"] < result["threshold"]
     assert "constant" in result["failures"][0]["error"]
+
+
+def test_scalar_list_compared_unordered():
+    # A tool that sorts ids returns them in a different order once scrubbing renumbers the ids;
+    # a set of the same ids is still a faithful reproduction.
+    ok, masked = _compare({"exchange_items": ["b2", "a1"]}, {"exchange_items": ["a1", "b2"]})
+    assert ok
+    assert "<unordered-list>" in masked
+
+
+def test_structured_list_keeps_order():
+    # A list of objects (a sequence) is still order-sensitive.
+    ok, _ = _compare({"steps": [{"n": 1}, {"n": 2}]}, {"steps": [{"n": 2}, {"n": 1}]})
+    assert not ok

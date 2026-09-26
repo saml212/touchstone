@@ -24,11 +24,21 @@ def _mask(value, masked: set):
     if isinstance(value, dict):
         return {k: _mask_field(k, v, masked) for k, v in value.items()}
     if isinstance(value, list):
-        return [_mask(v, masked) for v in value]
+        return _mask_list([_mask(v, masked) for v in value], masked)
     if isinstance(value, str) and _ISO.search(value):
         masked.add("<iso-timestamp>")
         return "<ts>"
     return value
+
+
+def _mask_list(items: list, masked: set):
+    """A list of scalars (ids, item_ids) is compared as a set: its order is often incidental (a tool
+    that sorts ids reorders them once scrubbing renumbers the ids), so ordering must not fail a
+    reproduction. A list holding any structure keeps its order (sequences there are meaningful)."""
+    if items and all(isinstance(v, str | int | float | bool) or v is None for v in items):
+        masked.add("<unordered-list>")
+        return sorted(items, key=lambda v: (v is None, str(type(v)), str(v)))
+    return items
 
 
 def _mask_field(key: str, value, masked: set):
