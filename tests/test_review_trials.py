@@ -64,6 +64,23 @@ def test_gate_jobs_excluded_and_latest_run_per_agent_model_kept(tmp_path):
     assert "cust/m1" in refs[0].label
 
 
+def test_errored_trial_excluded_from_scan(tmp_path):
+    # One trial ran (keeps the job in review); a sibling's agent never ran (no trajectory -> the
+    # manifest failed its collection, so jobs.Trial marks it reward None). The picker skips it.
+    jobs_dir = tmp_path / "jobs"
+    a = _job(jobs_dir, "j1")
+    _trial(a, "refund", 0.5)
+    d = a / "escalate__abc"
+    _write(d / "result.json", {"task_name": "escalate",
+                               "agent_info": {"name": "cust", "model_info": {"name": "m1"}}})
+    _write(d / "verifier" / "reward.json", {"reward": 0.0})
+    _write(d / "artifacts" / "manifest.json",
+           [{"source": "/logs/agent/trajectory.json", "destination": "agent/trajectory.json",
+             "type": "file", "status": "failed"}])
+    refs = trials.scan(jobs_dir)
+    assert [r.task for r in refs] == ["refund"]  # escalate errored -> not walked
+
+
 def test_stale_trials_skipped_and_counted(tmp_path):
     dataset = tmp_path / "touchstone"
     _write(dataset / "tasks" / "refund" / "task.toml", "")  # only refund still exists

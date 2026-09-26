@@ -99,7 +99,8 @@ def _errored_reason(errored: list) -> str:
         blob = f"{t.exception} {t.error or ''}".lower()
         if "docker" in blob and ("daemon" in blob or "connect" in blob or "socket" in blob):
             return "Docker was not running"
-    return next((t.exception for t in errored if t.exception), "the run errored")
+    return next((t.exception or t.error for t in errored if t.exception or t.error),
+                "the run errored")
 
 
 def latest_run_errors(jobs_dir: Path) -> dict | None:
@@ -112,7 +113,7 @@ def latest_run_errors(jobs_dir: Path) -> dict | None:
     job = _jobs.Job.read(job_dir)
     if not job.trials:
         return None
-    errored = [t for t in job.trials if t.reward is None and t.exception]
+    errored = [t for t in job.trials if t.reward is None and (t.exception or t.error)]
     return {"errored": len(errored), "total": len(job.trials), "reason": _errored_reason(errored)}
 
 

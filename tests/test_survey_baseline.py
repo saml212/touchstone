@@ -16,7 +16,7 @@ def _agent_toml(out, mode="packaged", model="gpt-4o-mini", provider="openai"):
         f'[agent]\nmode = "{mode}"\nmodel_default = "{model}"\nprovider = "{provider}"\n')
 
 
-def _mock_harbor(monkeypatch, rates, capture=None, rewards=None):
+def _mock_harbor(monkeypatch, rates, capture=None, rewards=None, ran=None):
     def fake_run(path, agent, **kw):
         if capture is not None:
             capture.update(agent=agent, model=kw.get("model"), extra=kw.get("extra_args"),
@@ -26,6 +26,7 @@ def _mock_harbor(monkeypatch, rates, capture=None, rewards=None):
     monkeypatch.setattr(baseline.jobs.Job, "read", staticmethod(lambda d: d))
     monkeypatch.setattr(baseline.jobs, "pass_rates", lambda job: rates)
     monkeypatch.setattr(baseline.jobs, "mean_rewards", lambda job: rewards or rates)
+    monkeypatch.setattr(baseline.jobs, "ran_tasks", lambda job: set(rates if ran is None else ran))
 
 
 def test_run_baseline_writes_summary_and_passes_model_and_mode(tmp_path, monkeypatch):
@@ -110,6 +111,17 @@ def test_run_baseline_harbor_failure_is_captured(tmp_path, monkeypatch):
     data = baseline.run_baseline(tmp_path, {}, Settings())
     assert "harbor blew up" in data["error"] and data["mode"] == "replica"
     assert not (out / "baseline.json").exists()
+
+
+def test_run_baseline_drops_tasks_the_agent_never_ran(tmp_path, monkeypatch):
+    # t2's agent never ran (no trajectory): pass_rates would call it a false 0. The baseline must
+    # drop it entirely, so it counts as "not run yet", never as a failure.
+    out = tmp_path / "touchstone"
+    _agent_toml(out)
+    _mock_harbor(monkeypatch, {"t1": 1.0, "t2": 0.0}, ran={"t1"})
+    data = baseline.run_baseline(tmp_path, {}, Settings())
+    assert set(data["pass_rates"]) == {"t1"} and "t2" not in data["rewards"]
+    assert data["passed"] == ["t1"] and data["failed"] == []
 
 
 def test_model_ref_forms():

@@ -137,7 +137,8 @@ def scan(jobs_dir: Path, conn=None, dataset_dir: Path | None = None) -> list[Tri
     for job_dir, label in review_jobs:
         for trial_dir in _trial_dirs(job_dir):
             trial = jobs.Trial.read(trial_dir)
-            if not _task_exists(dataset_dir, trial.task_name):
+            # A trial with no reward errored (raised, or the agent never ran) — nothing to review.
+            if trial.reward is None or not _task_exists(dataset_dir, trial.task_name):
                 continue
             trial_id = f"{job_dir.name}/{trial_dir.name}"
             reviewed = (trial.task_name, trial_id) in reviewed_keys

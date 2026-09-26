@@ -45,11 +45,15 @@ def _model_ref(cfg: dict) -> str:
 
 def _summarize(job_dir: Path, model: str, mode: str) -> dict:
     job = jobs.Job.read(job_dir)
-    rates = jobs.pass_rates(job)
+    # A task whose agent never ran (no trajectory) has no real score — drop it so the first-five
+    # sentence counts it as "not run yet", never as a passed/failed 0%.
+    ran = jobs.ran_tasks(job)
+    rates = {n: r for n, r in jobs.pass_rates(job).items() if n in ran}
+    rewards = {n: r for n, r in jobs.mean_rewards(job).items() if n in ran}
     passed = sorted(n for n, r in rates.items() if r >= 1.0)
     failed = sorted(n for n, r in rates.items() if r < 1.0)
     return {"job_dir": str(job_dir), "model": model, "mode": mode, "pass_rates": rates,
-            "rewards": jobs.mean_rewards(job), "passed": passed, "failed": failed}
+            "rewards": rewards, "passed": passed, "failed": failed}
 
 
 def _reusable(existing: Path, out: Path, force: bool) -> dict | None:
