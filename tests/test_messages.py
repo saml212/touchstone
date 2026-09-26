@@ -1,6 +1,7 @@
 import json
 
 from touchstone.messages import canonical, to_anthropic, to_openai
+from touchstone.messages_wire import to_anthropic_tools, to_openai_tools
 
 OPENAI_WIRE = [
     {"role": "system", "content": "be terse"},
@@ -315,3 +316,38 @@ def test_legacy_function_role_becomes_a_linked_tool_message():
     assert tools[0]["name"] == "get_weather"
     assert tools[0]["content"] == '{"temp": 20}'
     assert tools[0]["tool_call_id"] == "c1"  # linked by name to the preceding call
+
+
+NEUTRAL_TOOL = {"name": "refund", "description": "Refund an order.",
+                "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}},
+                               "required": ["order_id"]}}
+OPENAI_TOOL = {"type": "function", "function": NEUTRAL_TOOL}
+
+
+def test_to_openai_tools_wraps_neutral_schema():
+    assert to_openai_tools([NEUTRAL_TOOL]) == [OPENAI_TOOL]
+
+
+def test_to_openai_tools_passes_through_wrapped():
+    assert to_openai_tools([OPENAI_TOOL]) == [OPENAI_TOOL]  # idempotent
+
+
+def test_to_anthropic_tools_maps_neutral_to_input_schema():
+    assert to_anthropic_tools([NEUTRAL_TOOL]) == [
+        {"name": "refund", "description": "Refund an order.",
+         "input_schema": NEUTRAL_TOOL["parameters"]}
+    ]
+
+
+def test_to_anthropic_tools_reads_openai_wrapper():
+    assert to_anthropic_tools([OPENAI_TOOL]) == [
+        {"name": "refund", "description": "Refund an order.",
+         "input_schema": NEUTRAL_TOOL["parameters"]}
+    ]
+
+
+def test_tool_wrappers_default_empty_parameters():
+    bare = {"name": "ping"}
+    assert to_openai_tools([bare])[0]["function"]["parameters"] == {"type": "object",
+                                                                    "properties": {}}
+    assert to_anthropic_tools([bare])[0]["input_schema"] == {"type": "object", "properties": {}}

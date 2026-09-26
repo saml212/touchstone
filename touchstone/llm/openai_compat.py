@@ -12,6 +12,7 @@ import json
 import httpx
 
 from ..messages import to_openai
+from ..messages_wire import to_openai_tools
 from ._http import ProviderError, apost_json, post_json
 from .base import Reply
 
@@ -52,7 +53,7 @@ class OpenAICompatProvider:
     def _body(self, messages, tools, want_json) -> dict:
         body: dict = {"model": self.model, "messages": to_openai(messages)}
         if tools:
-            body["tools"] = tools
+            body["tools"] = to_openai_tools(tools)
         if want_json:
             body["response_format"] = {"type": "json_object"}
         return body

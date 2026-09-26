@@ -137,3 +137,42 @@ def to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
     for msg in canonical(messages):
         _add_anthropic_message(msg, systems, turns)
     return "\n\n".join(systems), turns
+
+
+# ---- tool schemas ----------------------------------------------------------
+# Datasets carry tool schemas in the neutral shape {name, description, parameters}; each provider
+# wraps them into its own wire form at call time. Both wrappers are idempotent, so an already-wired
+# schema (a packaged capture, or a caller that pre-wrapped) passes through unchanged.
+
+_EMPTY_SCHEMA = {"type": "object", "properties": {}}
+
+
+def _tool_fields(tool: dict) -> tuple[str | None, str, dict]:
+    fn = tool.get("function", tool)
+    return fn.get("name"), fn.get("description", ""), fn.get("parameters") or _EMPTY_SCHEMA
+
+
+def to_openai_tools(tools: list[dict]) -> list[dict]:
+    """Neutral tool schemas -> OpenAI chat `tools` ({"type":"function","function":{…}})."""
+    out = []
+    for tool in tools:
+        if tool.get("type") == "function" and "function" in tool:
+            out.append(tool)
+            continue
+        name, description, parameters = _tool_fields(tool)
+        out.append({"type": "function",
+                    "function": {"name": name, "description": description,
+                                 "parameters": parameters}})
+    return out
+
+
+def to_anthropic_tools(tools: list[dict]) -> list[dict]:
+    """Neutral tool schemas -> Anthropic `tools` ({name, description, input_schema})."""
+    out = []
+    for tool in tools:
+        if "input_schema" in tool:  # already Anthropic-shaped
+            out.append(tool)
+            continue
+        name, description, parameters = _tool_fields(tool)
+        out.append({"name": name, "description": description, "input_schema": parameters})
+    return out

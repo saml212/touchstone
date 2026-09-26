@@ -12,6 +12,7 @@ import json
 import httpx
 
 from ..messages import to_anthropic
+from ..messages_wire import to_anthropic_tools
 from ._http import ProviderError, apost_json, post_json
 from .base import Reply
 
@@ -65,7 +66,7 @@ class AnthropicProvider:
         if system:
             body["system"] = system
         if tools:
-            body["tools"] = [_convert_tool(t) for t in tools]
+            body["tools"] = to_anthropic_tools(tools)
         return body
 
     def _parse(self, resp: httpx.Response) -> Reply:
@@ -123,17 +124,3 @@ class AnthropicProvider:
                 backoff=self.backoff,
             )
         return self._parse(resp)
-
-
-# ---- conversion ------------------------------------------------------------
-
-
-def _convert_tool(tool: dict) -> dict:
-    if "input_schema" in tool:  # already Anthropic-shaped
-        return tool
-    fn = tool.get("function", tool)
-    return {
-        "name": fn.get("name"),
-        "description": fn.get("description", ""),
-        "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
-    }

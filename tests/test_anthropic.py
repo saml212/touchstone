@@ -67,6 +67,21 @@ def test_tools_converted_to_input_schema():
     ]
 
 
+def test_neutral_tools_converted_to_input_schema():
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return _ok()
+
+    params = {"type": "object", "properties": {"a": {"type": "number"}}}
+    neutral = [{"name": "refund", "description": "d", "parameters": params}]
+    make(handler).chat([{"role": "user", "content": "x"}], tools=neutral)
+    assert seen["body"]["tools"] == [
+        {"name": "refund", "description": "d", "input_schema": params}
+    ]
+
+
 def test_tool_use_block_parsed():
     blocks = [{"type": "tool_use", "id": "u1", "name": "refund", "input": {"amount": 5}}]
     r = make(lambda req: _ok(blocks)).chat([{"role": "user", "content": "refund"}])

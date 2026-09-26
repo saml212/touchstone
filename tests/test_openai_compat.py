@@ -86,6 +86,25 @@ def test_tools_forwarded():
     assert seen["body"]["tools"] == tools
 
 
+def test_neutral_tools_wrapped_with_type_function():
+    """The dataset's neutral {name, description, parameters} schemas must reach OpenAI wrapped in
+    {"type":"function","function":{…}}; unwrapped they 400 with 'Missing … tools[0].type'."""
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return _ok()
+
+    params = {"type": "object", "properties": {"order_id": {"type": "string"}}}
+    neutral = [{"name": "order_status", "description": "Look up an order.", "parameters": params}]
+    make(handler).chat([{"role": "user", "content": "x"}], tools=neutral)
+    assert seen["body"]["tools"] == [
+        {"type": "function",
+         "function": {"name": "order_status", "description": "Look up an order.",
+                      "parameters": params}}
+    ]
+
+
 def test_retries_on_429_then_succeeds():
     calls = {"n": 0}
 
