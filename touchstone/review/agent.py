@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from .. import store
 from ..harbor import run as run_mod
 from ..interview import rooms
-from . import changes, guard, opening, readback, regrade, replies, snapshot, trials
+from . import changes, guard, opening, readback, regrade, replies, snapshot, taskid, trials
 from .facts import _editable, _shared_tasks
 from .prompt import SYSTEM, TOOLS
 from .scratch import _Scratch
@@ -178,15 +178,10 @@ class ReviewAgent:
         return {"recorded": review.verdict, "trust": self._trust()}
 
     def _task_arg(self, args: dict) -> str:
-        """The task a tool acts on: the model's `task` when it names a real task dir, else the open
-        trial's task (models often send the job label instead of the task name)."""
-        named = args.get("task") or ""
-        if named and (self.dataset_dir / "tasks" / named / "task.toml").is_file():
-            return named
-        current = (self.scratch.current or {}).get("task", "")
-        if not current:
-            raise changes.ChangeError("no trial is open — read a trial first, then change it.")
-        return current
+        """The task a tool acts on: the model's `task` matched leniently against the dataset, else
+        the trial open in the room — the reviewer never asks the person for a task id."""
+        open_task = (self.scratch.current or {}).get("task", "")
+        return taskid.resolve_task(self.dataset_dir, args.get("task") or "", open_task)
 
     def _propose_change(self, args: dict) -> dict:
         task, change = self._task_arg(args), args.get("change")

@@ -65,17 +65,18 @@ TOOLS = [
     {"type": "function", "function": {
         "name": "propose_change",
         "description": CHANGE_SCHEMA + " Reads the change back WITHOUT writing it; a malformed "
-                       "change returns an error to fix and re-draft.",
+                       "change returns an error to fix and re-draft. `task` is optional and "
+                       "defaults to the open trial — omit it rather than guess a task id.",
         "parameters": {"type": "object",
                        "properties": {"task": {"type": "string"}, "change": {}},
-                       "required": ["task", "change"]}}},
+                       "required": ["change"]}}},
     {"type": "function", "function": {
         "name": "apply_change",
         "description": "Apply the change you just proposed and read back, regrade the trial's job, "
                        "and report the new reward and any other trials that moved. Takes no change "
                        "argument — it always writes the last proposed change, never a new one. "
                        "always=true ONLY when the person said every/all/always/everywhere; "
-                       "otherwise false.",
+                       "otherwise false. `task` is optional and defaults to the open trial.",
         "parameters": {"type": "object", "properties": {
             "task": {"type": "string"},
             "always": {"type": "boolean"}}}}},

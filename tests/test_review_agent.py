@@ -481,6 +481,47 @@ def test_change_tools_fall_back_to_the_open_trial_task(tmp_path, monkeypatch):
     assert ra._task_arg({}) == "refund-order-2"
 
 
+def _taskid_dataset(tmp_path, *names):
+    from touchstone.review.taskid import resolve_task
+
+    ds = tmp_path / "touchstone"
+    for name in names:
+        (ds / "tasks" / name).mkdir(parents=True)
+        (ds / "tasks" / name / "task.toml").write_text("[metadata.touchstone]\n")
+    return ds, resolve_task
+
+
+def test_resolve_task_defaults_to_the_open_trial(tmp_path):
+    ds, resolve = _taskid_dataset(tmp_path, "check-order-status-1")
+    assert resolve(ds, "", "check-order-status-1") == "check-order-status-1"
+
+
+def test_resolve_task_matches_a_prefix_without_the_suffix(tmp_path):
+    ds, resolve = _taskid_dataset(tmp_path, "check-order-status-1", "check-order-status-2")
+    assert resolve(ds, "check-order-status", "check-order-status-1") == "check-order-status-1"
+
+
+def test_resolve_task_finds_the_closest_task_when_the_open_trial_differs(tmp_path):
+    ds, resolve = _taskid_dataset(tmp_path, "check-order-status-1", "issue-a-refund-1")
+    # open trial is a refund task, but the person named a check task -> the check task, not a reject
+    assert resolve(ds, "check-order-status", "issue-a-refund-1") == "check-order-status-1"
+
+
+def test_resolve_task_falls_back_to_the_open_trial_for_an_unknown_name(tmp_path):
+    ds, resolve = _taskid_dataset(tmp_path, "check-order-status-1")
+    assert resolve(ds, "not-a-task", "check-order-status-1") == "check-order-status-1"
+
+
+def test_resolve_task_asks_to_open_a_trial_only_when_none_is_open(tmp_path):
+    import pytest
+
+    from touchstone.review.changes import ChangeError
+
+    ds, resolve = _taskid_dataset(tmp_path, "check-order-status-1")
+    with pytest.raises(ChangeError, match="read a trial first"):
+        resolve(ds, "whatever", "")
+
+
 def test_applied_reply_reads_out_deltas_and_failures():
     from touchstone.review import replies
 
