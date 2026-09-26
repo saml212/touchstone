@@ -152,11 +152,15 @@ def _adapter_check(repo: Path, map_data: dict, out: Path, invoke_path: Path,
         return False, f"adapter check error: {str(exc)[:400]}"
 
 
+_INVOKE_ATTEMPTS = 3
+
+
 def build_invoke(repo: Path, map_data: dict, provider: SurveyProvider, events: list[ToolEvent],
                  out: Path, settings: Settings, force: bool = False) -> dict:
-    """Write agent/invoke.py and adapter-check it. Returns {ok, path, flag}. Kept only when the
-    check passes (one recorded call per tool dispatches without raising); else removed so callers
-    fall back to the mapped import path."""
+    """Write agent/invoke.py and adapter-check it. Returns {ok, path, flag}. Generation is
+    LLM-driven, so a failed adapter check is retried a few times (a passing invoke.py gates every
+    downstream fidelity + task, so one flaky generation must not collapse the survey); the file is
+    kept only when a check passes, else removed so callers fall back to the mapped import path."""
     path = out / "agent" / "invoke.py"
     if path.exists() and not force:
         return {"ok": True, "path": str(path), "flag": None}
@@ -165,9 +169,11 @@ def build_invoke(repo: Path, map_data: dict, provider: SurveyProvider, events: l
     if not calls:
         return {"ok": False, "path": None, "flag": "no recorded tool calls to drive invoke.py"}
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(path, _generate(provider, repo, map_data, list(map_data.get("tools", []))))
-    ok, flag = _adapter_check(repo, map_data, out, path, calls, settings)
-    if ok:
-        return {"ok": True, "path": str(path), "flag": None}
+    flag = ""
+    for _ in range(_INVOKE_ATTEMPTS):
+        atomic_write(path, _generate(provider, repo, map_data, list(map_data.get("tools", []))))
+        ok, flag = _adapter_check(repo, map_data, out, path, calls, settings)
+        if ok:
+            return {"ok": True, "path": str(path), "flag": None}
     path.unlink()
     return {"ok": False, "path": None, "flag": f"invoke.py adapter check failed: {flag}"}
