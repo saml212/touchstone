@@ -1,10 +1,9 @@
 """The review agent: a small state machine over a chat provider with a tool surface.
 
-The room posts a participant message; `respond` runs the provider in a tool-calling loop (opening ->
-pick a trial -> present it -> agree? -> on disagree draft + apply a criterion change -> regrade ->
-next). Its five tools (list_trials, read_trial, record_review, propose_change, apply_change) are the
-only way it touches the dataset, the reviews table, or Harbor. Trust and the current trial live in
-the room state (a role="draft" scratch message + the reviews table) so the UI reads them.
+`respond` runs the provider in a tool-calling loop (pick a trial -> present -> agree? -> on disagree
+draft + apply a criterion change -> regrade -> next). Its five tools (list_trials, read_trial,
+record_review, propose_change, apply_change) are the only way it touches the dataset, the reviews
+table, or Harbor; trust and the current trial live in the room state so the UI reads them.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from dataclasses import dataclass, field
 from .. import store
 from ..harbor import run as run_mod
 from ..interview import rooms
-from . import changes, opening, readback, regrade, replies, snapshot, trials
+from . import changes, guard, opening, readback, regrade, replies, snapshot, trials
 from .facts import _editable, _shared_tasks
 from .prompt import SYSTEM, TOOLS
 from .scratch import _Scratch
@@ -69,13 +68,14 @@ class ReviewAgent:
             return AgentTurn(say="Tell me when to start and I'll pull up the first trial.")
         self._scope_all = replies.wants_everywhere(history)
         self._wording = replies.wants_wording_change(history)
+        self._intent = replies.user_words_since_agent(history)  # steers a change's KIND
         say = self._ground(self._run_loop(history))
         self._save_scratch()
         return AgentTurn(say=say, draft=self.draft(), commit=self.committed())
 
     def _ground(self, say: str) -> str:
-        """Guarantee the reply states the verifier's actual scores when a trial was just presented,
-        so the narrative can't contradict the screen; if the model already stated it, trust it."""
+        """Prefix the verifier's actual scores when a trial was just presented and the model did not
+        already state them, so the narrative can't contradict the screen."""
         if not self._presented:
             return say
         token = replies.reward_pct(self._presented.get("reward"))
@@ -99,8 +99,8 @@ class ReviewAgent:
         return replies.tool_error_reply(last_error)  # hit MAX_STEPS -> surface the last error
 
     def _steps(self, messages: list[dict], calls: list[dict]) -> tuple[dict | None, str | None]:
-        """Run the turn's tool calls, appending each result; stop at a successful apply.
-        Returns (the apply result or None, the last tool error or None)."""
+        """Run the turn's tool calls, appending each result; stop at a successful apply. Returns
+        (the apply result or None, the last tool error or None)."""
         last_error = None
         for call in calls:
             result = self._dispatch(call)
@@ -156,17 +156,18 @@ class ReviewAgent:
         task_dir = self.dataset_dir / "tasks" / task
         detail["editable"] = _editable(task_dir)
         detail["criteria_files"] = changes.existing_criteria_files(task_dir / "tests")
+        detail["state_db_paths"] = guard.valid_db_paths(task_dir)  # real db paths to copy verbatim
         detail["reward_pct"] = replies.reward_pct(detail.get("reward"))
         self._presented = detail  # ground this turn's reply in these scores
         return detail
 
     def _read_gate_failure(self, task: str, trial: str) -> dict:
-        """A needs-review task has no trajectory: return why the gate set it aside (from its
-        gate.json) so the reviewer says it, not the old "no trial" error the header pointed at."""
+        """A needs-review task has no trajectory: return why the gate set it aside so the reviewer
+        says that, not a "no trial" error."""
         for item in trials.needs_review(self.dataset_dir):
             if item.get("task") in (task, trial):
                 self.scratch.current = {"task": item["task"], "trial": item["task"]}
-                return {**item, "gate_failure": True, "reason": _gate_reason(item)}
+                return {**item, "gate_failure": True, "reason": replies.gate_reason(item)}
         return {"error": f"no trial {trial} for {task}"}
 
     def _record_review(self, args: dict) -> dict:
@@ -177,8 +178,8 @@ class ReviewAgent:
         return {"recorded": review.verdict, "trust": self._trust()}
 
     def _task_arg(self, args: dict) -> str:
-        """The task a tool acts on: the model's `task` when it names a real task dir, else the
-        open trial's task. Models often send the job label ("refund-order") for the task name."""
+        """The task a tool acts on: the model's `task` when it names a real task dir, else the open
+        trial's task (models often send the job label instead of the task name)."""
         named = args.get("task") or ""
         if named and (self.dataset_dir / "tasks" / named / "task.toml").is_file():
             return named
@@ -190,15 +191,17 @@ class ReviewAgent:
     def _propose_change(self, args: dict) -> dict:
         task, change = self._task_arg(args), args.get("change")
         self._guard_instruction_change(change)
-        changes.validate(self.dataset_dir / "tasks" / task, change)  # bad shape -> re-draft
+        # Validate against the person's words so a placeholder, an unreal db path, or a wrong kind
+        # comes back as a clear error the model retries once, or the room relays.
+        changes.validate(self.dataset_dir / "tasks" / task, change,
+                         intent=getattr(self, "_intent", ""))
         self.scratch.proposed = change
         self.scratch.readback = readback.describe(change)
         return {"readback": self.scratch.readback}
 
     def _guard_instruction_change(self, change) -> None:
-        """A disagreement about a CHECK changes a criterion, never the instruction wording — an
-        instruction edit moves no reward on the recorded trials, so it only reads as broken. The
-        instruction is editable only when the person said the wording itself is wrong."""
+        """A disagreement about a CHECK changes a criterion, never the instruction wording (that
+        moves no reward on recorded trials) — unless the person said the wording itself is wrong."""
         if getattr(self, "_wording", False):
             return
         if any(c.get("op") == "text" for c in changes.as_list(change)):
@@ -208,10 +211,8 @@ class ReviewAgent:
                 "wording itself is wrong.")
 
     def _apply_change(self, args: dict) -> dict:
-        # Apply ONLY the proposal that was read back (self.scratch.proposed) — never a change the
-        # model re-sends in args. A model that echoes a different `change` here (a wrong file or
-        # index) would otherwise fail to apply after a valid read-back; the go-ahead applies what
-        # the human just heard, nothing else.
+        # Apply ONLY the proposal that was read back (self.scratch.proposed), never a change the
+        # model re-sends in args — the go-ahead applies what the human just heard, nothing else.
         change = self.scratch.proposed
         if change is None:
             return {"error": "no change has been proposed yet — call propose_change and read it "
@@ -230,8 +231,8 @@ class ReviewAgent:
         return {"applied_to": targets, **result}
 
     def _regrade_and_revert(self, targets: list[str], backups: dict) -> dict:
-        """Regrade after the change; put the files back when the regrade could not run at all (the
-        host's build failed), or when it ran but broke the verifier on every task it touched."""
+        """Regrade after the change; put the files back when the regrade could not run, or ran but
+        broke the verifier on every task it touched."""
         try:
             result = self._regrade_current()
         except (RuntimeError, OSError) as exc:  # the regrade itself never ran — name why, roll back
@@ -273,16 +274,11 @@ class ReviewAgent:
         self.scratch.readback = ""
 
     def _trust(self) -> dict:
-        reviews = store.list_reviews(self.conn)
-        seen: dict[tuple[str, str], str] = {}
-        for r in reviews:
-            seen[(r.task, r.trial)] = r.verdict
+        seen = {(r.task, r.trial): r.verdict for r in store.list_reviews(self.conn)}
         reviewed = len(seen)
         agreed = sum(1 for v in seen.values() if v == "agree")
         score = agreed / reviewed if reviewed else None
         return {"agreed": agreed, "reviewed": reviewed, "score": score}
-
-    # ---- scratch persistence (a role="draft" room message) -----------------
 
     def _load_scratch(self) -> _Scratch:
         for m in reversed(store.list_room_messages(self.conn, self.room.id)):
@@ -296,8 +292,6 @@ class ReviewAgent:
     def _save_scratch(self) -> None:
         rooms.post(self.conn, self.room.id, "agent", "draft",
                    json.dumps(self.scratch.to_dict(), ensure_ascii=False))
-
-    # ---- room-state views --------------------------------------------------
 
     def draft(self) -> list:
         proposed = self.scratch.proposed
@@ -323,14 +317,3 @@ class ReviewAgent:
         if not current:
             return None
         return trials.read(self.dataset_dir, self.jobs_dir, current["task"], current["trial"])
-
-
-def _gate_reason(item: dict) -> str:
-    """Why the gate set a needs-review task aside, in plain words the reviewer can say aloud."""
-    reasons = {
-        "oracle": (f"oracle scored {item.get('oracle')} — the recorded conversation does not pass "
-                   "its own criteria"),
-        "nop": f"an empty agent scored {item.get('nop')} — the task passes with no work",
-    }
-    return (reasons.get(item.get("failed_side")) or item.get("reason")
-            or "the gate could not grade this task")

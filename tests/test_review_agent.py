@@ -555,3 +555,31 @@ def test_check_disagreement_refuses_an_instruction_change(tmp_path, conn):
     agent._wording = True
     out = agent._propose_change({"task": "issue-a-refund-1", "change": text_change})
     assert "rewards will not move until the tasks are re-run" in out["readback"]
+
+
+def test_tool_use_disagreement_drafted_as_sqlite_is_blocked_end_to_end(tmp_path, conn):
+    """The live regression: the person asks for a tool-use check, the model drafts a sqlite query.
+    propose_change refuses it (kind mismatch), so nothing is drafted and the reviewer relays it."""
+    _dataset(tmp_path)
+    room = _room(conn)
+    sqlite_change = {"op": "add", "file": "tests/correctness/state.py",
+                     "params": {"fn": "sqlite_query_equals",
+                                "args": ["s/state.db", "SELECT 1 FROM orders", "refund was used"]}}
+    provider = Seq([
+        _call("read_trial", {"task": "issue-a-refund-1", "trial": "src/issue-a-refund-1__x"}),
+        _call("propose_change", {"task": "issue-a-refund-1", "change": sqlite_change}),
+        Reply(content="That's about which tool ran, so I'd add a tool-use check, not a database "
+                      "one — want me to?"),
+    ])
+    agent = ReviewAgent(provider, conn, room, _settings(tmp_path))
+    agent.respond([{"role": "user", "speaker": "sam",
+                    "text": "the agent should have used refund before answering"}])
+    assert agent.review_state()["proposed"] is None  # the sqlite draft was refused, not stored
+    assert agent.committed() == []
+
+
+def test_read_trial_surfaces_real_db_paths_to_copy(tmp_path, conn):
+    _dataset(tmp_path)
+    agent = ReviewAgent(Seq([]), conn, _room(conn), _settings(tmp_path))
+    detail = agent._read_trial({"task": "issue-a-refund-1", "trial": "src/issue-a-refund-1__x"})
+    assert detail["state_db_paths"] == ["s/state.db"]  # the sibling check's db path, normalised

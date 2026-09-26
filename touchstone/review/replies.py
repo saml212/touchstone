@@ -55,6 +55,24 @@ def grounding_line(detail: dict) -> str:
     return " ".join(parts)
 
 
+def gate_reason(item: dict) -> str:
+    """Why the gate set a needs-review task aside, in plain words the reviewer can say aloud."""
+    reasons = {
+        "oracle": (f"oracle scored {item.get('oracle')} — the recorded conversation does not pass "
+                   "its own criteria"),
+        "nop": f"an empty agent scored {item.get('nop')} — the task passes with no work",
+    }
+    return (reasons.get(item.get("failed_side")) or item.get("reason")
+            or "the gate could not grade this task")
+
+
+def user_words_since_agent(history: list[dict]) -> str:
+    """Everything the participants said since the agent last spoke — the person's words that decide
+    what KIND of check a disagreement asks for (tool use, a stored value, or the reply)."""
+    idx = max((i for i, m in enumerate(history) if m.get("role") == "assistant"), default=-1)
+    return " ".join(m.get("text", "") for m in history[idx + 1:] if m.get("role") == "user")
+
+
 def wants_done(history: list[dict]) -> bool:
     """The participants asked to close the room since the agent last spoke (`/done`)."""
     idx = max((i for i, m in enumerate(history) if m.get("role") == "assistant"), default=-1)
