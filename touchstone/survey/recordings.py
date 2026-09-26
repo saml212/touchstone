@@ -21,6 +21,7 @@ class ToolEvent:
     arguments: object  # decoded JSON (usually a dict), or the raw value when not JSON
     output: object  # decoded JSON, or the raw string
     episode: str
+    module: str | None = None  # the tool function's defining module, when a tool span recorded it
 
 
 def _decode(value):
@@ -73,17 +74,28 @@ def _collect_results(span, by_id: dict, by_name: dict) -> None:
             by_name[name].append(output)
 
 
-def _collect(spans) -> tuple[dict, list, dict, dict]:
-    """Across the episode's spans: the tool calls (by id, in order), results keyed by id, and
-    id-less results queued by tool name (for the legacy function form that threads no id)."""
+def _collect_modules(span, by_id: dict) -> None:
+    """A tool span records the function's `module`; key it by the call it resolved (tool_call_id) so
+    an event rebuilt from the model spans can be attributed to the module that ran."""
+    module = (span.input or {}).get("module") if isinstance(span.input, dict) else None
+    if span.kind == "tool" and span.tool_call_id and module:
+        by_id.setdefault(span.tool_call_id, module)
+
+
+def _collect(spans) -> tuple[dict, list, dict, dict, dict]:
+    """Across the episode's spans: the tool calls (by id, in order), results keyed by id, id-less
+    results queued by tool name (the legacy function form threads no id), and tool-span modules by
+    tool_call_id."""
     calls: dict[str, dict] = {}
     order: list[str] = []
     by_id: dict[str, object] = {}
     by_name: dict[str, deque] = defaultdict(deque)
+    modules: dict[str, str] = {}
     for span in spans:
         _collect_calls(span, calls, order)
         _collect_results(span, by_id, by_name)
-    return calls, order, by_id, by_name
+        _collect_modules(span, modules)
+    return calls, order, by_id, by_name, modules
 
 
 def _output_for(cid: str, name: str, by_id: dict, by_name: dict):
@@ -96,13 +108,14 @@ def _output_for(cid: str, name: str, by_id: dict, by_name: dict):
 
 
 def _episode_events(spans) -> list[ToolEvent]:
-    calls, order, by_id, by_name = _collect(spans)
+    calls, order, by_id, by_name, modules = _collect(spans)
     events = []
     for cid in order:
         call = calls[cid]
         name = call.get("name")
         events.append(ToolEvent(tool=name, arguments=_decode(call.get("arguments")),
-                                output=_output_for(cid, name, by_id, by_name), episode=""))
+                                output=_output_for(cid, name, by_id, by_name), episode="",
+                                module=modules.get(cid)))
     return events
 
 

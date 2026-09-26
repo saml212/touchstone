@@ -222,11 +222,17 @@ def _resolve_tool_call_id(tname: str) -> str | None:
     return None
 
 
-def _record_tool(tname, bound, tool_call_id, started, *, result=None, error=None) -> None:
+def _record_tool(tname, bound, tool_call_id, started, *, module=None, result=None,
+                 error=None) -> None:
     def _do():
         call_id = tool_call_id if tool_call_id is not None else _resolve_tool_call_id(tname)
         output = None if error else {"result": jsonable(result)}
-        add_span("tool", tname, input={"name": tname, "arguments": bound}, output=output,
+        # `module` (the tool function's defining module) lets the survey attribute a call whose name
+        # is shared by two services to the service whose import_path matches the module that ran.
+        span_input = {"name": tname, "arguments": bound}
+        if module:
+            span_input["module"] = module
+        add_span("tool", tname, input=span_input, output=output,
                  error=error, started_at=started, tool_call_id=call_id)
 
     _safe("tool span", _do)  # a recording failure must never lose the tool's own result
@@ -239,6 +245,7 @@ def tool(fn=None, *, name: str | None = None):
 
     def decorate(f):
         tname = name or f.__name__
+        tmod = getattr(f, "__module__", None)
 
         if inspect.iscoroutinefunction(f):
             @wraps(f)
@@ -249,9 +256,9 @@ def tool(fn=None, *, name: str | None = None):
                 try:
                     result = await f(*args, **kwargs)
                 except Exception as exc:
-                    _record_tool(tname, bound, tcid, started, error=repr(exc))
+                    _record_tool(tname, bound, tcid, started, module=tmod, error=repr(exc))
                     raise
-                _record_tool(tname, bound, tcid, started, result=result)
+                _record_tool(tname, bound, tcid, started, module=tmod, result=result)
                 return result
 
             return awrapper
@@ -264,9 +271,9 @@ def tool(fn=None, *, name: str | None = None):
             try:
                 result = f(*args, **kwargs)
             except Exception as exc:
-                _record_tool(tname, bound, tcid, started, error=repr(exc))
+                _record_tool(tname, bound, tcid, started, module=tmod, error=repr(exc))
                 raise
-            _record_tool(tname, bound, tcid, started, result=result)
+            _record_tool(tname, bound, tcid, started, module=tmod, result=result)
             return result
 
         return wrapper

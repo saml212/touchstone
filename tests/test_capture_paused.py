@@ -57,3 +57,17 @@ def test_tool_span_inside_paused_records_nothing(traced):
     tools = [s for ep in store.list_episodes(conn)
              for s in store.list_spans(conn, ep.id) if s.kind == "tool"]
     assert len(tools) == 1
+
+
+def test_tool_span_records_module(traced):
+    @context.tool
+    def lookup(x):
+        return x
+
+    lookup(3)
+    conn = context.get_conn()
+    tools = [s for ep in store.list_episodes(conn)
+             for s in store.list_spans(conn, ep.id) if s.kind == "tool"]
+    assert len(tools) == 1
+    # the tool function's defining module is recorded so the survey can attribute a shared-name call
+    assert tools[0].input.get("module") == lookup.__module__
