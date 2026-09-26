@@ -123,10 +123,12 @@ def _remeasure(repo, prov, map_data, events, out, scrub, settings, invoke, fidel
         _log(f"invoke: re-measuring {name} through invoke.py")
         result = fidelity.measure_service(
             out / "simulators" / name, repo, calls, ctx, settings, scrub, invoke)
-        if db_service.is_db(service) and result["score"] < threshold:
-            _log(f"invoke: regenerating db simulator {name} with failure examples")
-            result = db_sim.regenerate(repo, prov, service, tools, events, out / "simulators",
-                                       scrub, settings, invoke, result, calls)
+        if db_service.is_db(service):
+            if result["score"] < threshold:
+                _log(f"invoke: regenerating db simulator {name} with failure examples")
+                result = db_sim.regenerate(repo, prov, service, tools, events, out / "simulators",
+                                           scrub, settings, invoke, result, calls)
+            result["source"] = db_sim.seed_source(out / "simulators" / name)  # keep the seed label
         fidelity_data[name] = result
 
 
