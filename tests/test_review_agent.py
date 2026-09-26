@@ -91,7 +91,8 @@ def test_open_statement_names_jobs_and_pass_count(tmp_path, conn):
     agent = ReviewAgent(None, conn, _room(conn), _settings(tmp_path))
     opening = agent.open_statement()
     assert "issue a refund" in opening
-    assert "2 tasks" in opening and "passes 1" in opening
+    # counted from the latest job (refund-1 0.75, refund-2 0.875) — both ran, neither passed
+    assert "2 tasks" in opening and "passes 0 of the 2 run" in opening
 
 
 def test_open_statement_flags_gated_tasks_the_baseline_never_ran(tmp_path, conn):
@@ -102,8 +103,26 @@ def test_open_statement_flags_gated_tasks_the_baseline_never_ran(tmp_path, conn)
     _task(dataset, "issue-a-refund-3")
     agent = ReviewAgent(None, conn, _room(conn), _settings(tmp_path))
     opening = agent.open_statement()
-    assert "3 tasks" in opening and "passes 1 of the 2 run" in opening
+    assert "3 tasks" in opening and "passes 0 of the 2 run" in opening
     assert "1 not run yet" in opening
+
+
+def test_open_statement_counts_run_tasks_from_the_latest_rewarded_job(tmp_path, conn):
+    """The live tau-bench miscount: a job of six rewarded trials (none passing) read as "0 of the 0
+    run (6 not run yet)" off an empty baseline. The opening must count run/passed from that job:
+    every task ran, none passed -> "0 of the 6 run", nothing "not run"."""
+    dataset = tmp_path / "touchstone"
+    _write(dataset / "groups.json",
+           {"groups": [{"label": "Exchange items", "slug": "exchange-items"}]})
+    job = dataset / "jobs" / "2026-09-26__02-18-03"
+    _write(job / "config.json", {})
+    for i in range(1, 7):
+        _task(dataset, f"exchange-items-{i}")
+        _trial(job, f"exchange-items-{i}", 0.75)
+    agent = ReviewAgent(None, conn, _room(conn), _settings(tmp_path))
+    opening = agent.open_statement()
+    assert "6 tasks" in opening and "passes 0 of the 6 run" in opening
+    assert "not run" not in opening
 
 
 def _errored_trial(job: Path, task: str, message: str):

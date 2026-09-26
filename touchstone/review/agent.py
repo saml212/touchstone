@@ -27,6 +27,7 @@ from .facts import (
     _shared_tasks,
     errored_sentence,
     latest_run_errors,
+    latest_run_sets,
 )
 from .prompt import SYSTEM, TOOLS
 from .scratch import _Scratch
@@ -78,15 +79,17 @@ class ReviewAgent:
         return f"Your agent handles {does}; {self._pass_tail(built)} {self._offer()}"
 
     def _pass_tail(self, built: list[str]) -> str:
-        """"N tasks, passes K [of the R run (U not run)]" — the same counting the first-five
-        sentence uses, so a baseline that ran only some gated tasks never reads "passes N of N"."""
-        sets = _baseline_sets(self.dataset_dir)
+        """"N tasks, passes K of the R run [(U not run)]" — run/passed counted from the latest
+        rewarded job (the run the room is about to review), so six scored trials read as "0 of the
+        6 run", never "0 of the 0 run (6 not run)" off a stale baseline. Falls back to the baseline
+        file, then the plain task count, when no rewarded job exists."""
+        sets = latest_run_sets(self.jobs_dir) or _baseline_sets(self.dataset_dir)
         if sets is None:
             return f"{len(built)} tasks."
         n, k, r, u = passes_counts(built, sets["ran"], sets["passed"])
         if u > 0:
             return f"{n} tasks, your current setup passes {k} of the {r} run ({u} not run yet)."
-        return f"{n} tasks, your current setup passes {k}."
+        return f"{n} tasks, your current setup passes {k} of the {r} run."
 
     def _offer(self) -> str:
         """The opening's offer, chosen from what is actually there to review."""

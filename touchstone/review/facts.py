@@ -117,6 +117,23 @@ def latest_run_errors(jobs_dir: Path) -> dict | None:
     return {"errored": len(errored), "total": len(job.trials), "reason": _errored_reason(errored)}
 
 
+def latest_run_sets(jobs_dir: Path) -> dict | None:
+    """{"ran", "passed"} from the latest non-gate job that produced rewards — the source of truth
+    for the opening's counts, so a run of six scored trials reads as "K of the 6 run", never
+    "0 of the 0 run (6 not run)" off a stale/empty baseline file. run = tasks with a trial that
+    scored and did not error; passed = tasks whose trials all scored 1.0. None when no rewarded run
+    exists (the caller then falls back to the baseline file, then to the plain task count)."""
+    job_dir = trials.latest_non_gate_job(jobs_dir)
+    if job_dir is None:
+        return None
+    job = _jobs.Job.read(job_dir)
+    ran = _jobs.ran_tasks(job)
+    if not ran:
+        return None
+    passed = [name for name, rate in _jobs.pass_rates(job).items() if name in ran and rate >= 1.0]
+    return {"ran": sorted(ran), "passed": sorted(passed)}
+
+
 def errored_sentence(errs: dict) -> str:
     """The opening when the latest run errored: name the count and reason, offer bench or a walk."""
     e, total = errs["errored"], errs["total"]
