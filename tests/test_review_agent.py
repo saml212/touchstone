@@ -255,6 +255,32 @@ def test_apply_always_hits_every_task_with_the_same_job(tmp_path, conn):
         assert doc["reward"][0]["weights"]["safety"] == 2.0
 
 
+def test_apply_change_names_the_cause_and_reverts_when_the_regrade_cannot_run(tmp_path, conn):
+    """The regrade itself fails (the host's build failed) — the read-out must name the cause and
+    say the files were put back, and the change must actually be rolled back on disk."""
+    dataset = _dataset(tmp_path)
+    room = _room(conn)
+    reward = dataset / "tasks" / "issue-a-refund-1" / "tests" / "reward.toml"
+    before = reward.read_text()
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("docker compose build failed on host mini (RC=1)\nline two")
+
+    change = {"op": "edit", "file": "tests/reward.toml", "criterion": "safety", "weight": 2}
+    provider = Seq([
+        _call("read_trial", {"task": "issue-a-refund-1", "trial": "src/issue-a-refund-1__x"}),
+        _call("propose_change", {"task": "issue-a-refund-1", "change": change}),
+        _call("apply_change", {"task": "issue-a-refund-1"}),
+        Reply(content="unused — the fixed read-out ends the turn"),
+    ])
+    agent = ReviewAgent(provider, conn, room, _settings(tmp_path), regrader=_boom)
+    turn = agent.respond([{"role": "user", "speaker": "sam", "text": "double safety weight"}])
+    assert "The regrade could not run: docker compose build failed on host mini" in turn.say
+    assert "line two" not in turn.say  # only the first line
+    assert "I put the files back as they were" in turn.say
+    assert reward.read_text() == before  # the change was rolled back on disk
+
+
 def test_apply_change_uses_the_proposed_change_not_a_model_supplied_one(tmp_path, conn):
     """The go-ahead applies the change that was read back, even if the model re-sends a different
     (wrong) change to apply_change — the classic 'file path doesn't exist' apply failure."""

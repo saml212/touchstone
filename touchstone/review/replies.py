@@ -10,6 +10,12 @@ import json
 FALLBACK = "Let me look at that."
 
 
+def first_line(text: str) -> str:
+    """The first non-empty line of a (possibly multi-line) message — a one-line read-out."""
+    stripped = (text or "").strip()
+    return stripped.splitlines()[0] if stripped else ""
+
+
 def error_of(result: str) -> str | None:
     """The first line of a tool result's `error`, or None when the call succeeded."""
     try:
@@ -78,22 +84,38 @@ def as_messages(history: list[dict]) -> list[dict]:
     return out
 
 
-def applied_reply(result: dict) -> str:
-    """The read-out after a successful apply, composed here so it never depends on the model
-    having a step left: what was applied where, what the regrade moved, what could not regrade."""
-    tasks = result.get("applied_to") or []
-    lines = [f"Applied to {', '.join(tasks)}." if tasks else "Applied."]
+def _regrade_error_reply(reason: str) -> str:
+    """The read-out when the regrade could not run: name the cause, say the files went back."""
+    tail = reason if reason.endswith((".", "!", "?")) else reason + "."
+    return (f"The regrade could not run: {tail} I put the files back as they were. "
+            "Want to look at the next trial?")
+
+
+def _moved_line(result: dict) -> str | None:
     deltas = result.get("deltas") or []
     if deltas:
         moved = "; ".join(f"{d['task']} {reward_pct(d['before'])} → {reward_pct(d['after'])}"
                           for d in deltas)
-        lines.append(f"Regraded: {moved}. Nothing else moved.")
-    elif result.get("job"):
-        lines.append("Regraded: no reward changed.")
+        return f"Regraded: {moved}. Nothing else moved."
+    return "Regraded: no reward changed." if result.get("job") else None
+
+
+def _failed_line(result: dict) -> str | None:
     failed = result.get("failed") or []
-    if failed:
-        broken = "; ".join(f"{f['task']} ({f['error']})" for f in failed)
-        lines.append(f"Could not regrade: {broken}")
+    if not failed:
+        return None
+    broken = "; ".join(f"{f['task']} ({f['error']})" for f in failed)
+    return f"Could not regrade: {broken}"
+
+
+def applied_reply(result: dict) -> str:
+    """The read-out after a successful apply, composed here so it never depends on the model
+    having a step left: what was applied where, what the regrade moved, what could not regrade."""
+    if result.get("regrade_error"):
+        return _regrade_error_reply(result["regrade_error"])
+    tasks = result.get("applied_to") or []
+    lines = [f"Applied to {', '.join(tasks)}." if tasks else "Applied."]
+    lines += [line for line in (_moved_line(result), _failed_line(result)) if line]
     if result.get("reverted"):
         lines.append("That change broke the verifier on every task it touched, so I put the files "
                      "back as they were.")

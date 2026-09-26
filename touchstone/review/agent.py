@@ -243,13 +243,26 @@ class ReviewAgent:
                    for name in targets}
         for name in targets:
             changes.apply(self.dataset_dir / "tasks" / name, change)
-        result = self._regrade_current()
-        if len(result.get("failed", [])) >= len(targets) > 0:  # broke the verifier everywhere
-            for name, files in backups.items():
-                snapshot.restore_tests(self.dataset_dir / "tasks" / name, files)
-            result["reverted"] = targets
+        result = self._regrade_and_revert(targets, backups)
         self._note_applied(change, targets, result)
         return {"applied_to": targets, **result}
+
+    def _regrade_and_revert(self, targets: list[str], backups: dict) -> dict:
+        """Regrade after the change; put the files back when the regrade could not run at all (the
+        host's build failed), or when it ran but broke the verifier on every task it touched."""
+        try:
+            result = self._regrade_current()
+        except (RuntimeError, OSError) as exc:  # the regrade itself never ran — name why, roll back
+            self._restore(targets, backups)
+            return {"regrade_error": replies.first_line(str(exc)), "reverted": targets}
+        if len(result.get("failed", [])) >= len(targets) > 0:  # broke the verifier everywhere
+            self._restore(targets, backups)
+            result["reverted"] = targets
+        return result
+
+    def _restore(self, targets: list[str], backups: dict) -> None:
+        for name, files in backups.items():
+            snapshot.restore_tests(self.dataset_dir / "tasks" / name, files)
 
     # ---- helpers -----------------------------------------------------------
 
