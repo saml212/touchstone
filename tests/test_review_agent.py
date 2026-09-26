@@ -106,6 +106,33 @@ def test_open_statement_flags_gated_tasks_the_baseline_never_ran(tmp_path, conn)
     assert "1 not run yet" in opening
 
 
+def _errored_trial(job: Path, task: str, message: str):
+    """A trial that raised inside Harbor: an exception_info, no verifier reward."""
+    d = job / f"{task}__x"
+    _write(d / "result.json", {"task_name": task,
+                               "agent_info": {"name": "TouchstoneAgent",
+                                              "model_info": {"name": "openai/gpt-4o-mini"}},
+                               "exception_info": {"exception_type": "RuntimeError",
+                                                  "exception_message": message}})
+
+
+def test_open_statement_reports_an_errored_run_not_everything_passes(tmp_path, conn):
+    """A bench run that errored on every task (Docker down) must not read as "everything passes":
+    errored trials (an exception, no reward) count as errors in the opening."""
+    dataset = tmp_path / "touchstone"
+    _write(dataset / "groups.json",
+           {"groups": [{"label": "Check order status", "slug": "check-order-status"}]})
+    job = dataset / "jobs" / "run1"
+    _write(job / "config.json", {})
+    for i in range(1, 4):
+        _errored_trial(job, f"check-order-status-{i}", "Docker daemon is not running.")
+    agent = ReviewAgent(None, conn, _room(conn), _settings(tmp_path))
+    opening = agent.open_statement()
+    assert "everything passes" not in opening and "passes" not in opening
+    assert "the last run errored on all 3 (Docker was not running)" in opening
+    assert "touchstone bench" in opening
+
+
 def test_present_a_trial_sets_current(tmp_path, conn):
     _dataset(tmp_path)
     room = _room(conn)

@@ -11,7 +11,8 @@ import json
 import tomllib
 from pathlib import Path
 
-from . import changes
+from ..harbor import jobs as _jobs
+from . import changes, trials
 
 
 def _read_toml(path: Path) -> dict:
@@ -90,6 +91,37 @@ def _join(items: list[str]) -> str:
     if len(items) <= 1:
         return items[0] if items else ""
     return ", ".join(items[:-1]) + f" and {items[-1]}"
+
+
+def _errored_reason(errored: list) -> str:
+    """A short human reason — 'Docker was not running' for a daemon failure, else the exc type."""
+    for t in errored:
+        blob = f"{t.exception} {t.error or ''}".lower()
+        if "docker" in blob and ("daemon" in blob or "connect" in blob or "socket" in blob):
+            return "Docker was not running"
+    return next((t.exception for t in errored if t.exception), "the run errored")
+
+
+def latest_run_errors(jobs_dir: Path) -> dict | None:
+    """{"errored", "total", "reason"} for the newest non-gate job, or None when none ran. A trial
+    errored when it raised and produced no reward — so the opening never reads a failed run as
+    "everything passes"."""
+    job_dir = trials.latest_non_gate_job(jobs_dir)
+    if job_dir is None:
+        return None
+    job = _jobs.Job.read(job_dir)
+    if not job.trials:
+        return None
+    errored = [t for t in job.trials if t.reward is None and t.exception]
+    return {"errored": len(errored), "total": len(job.trials), "reason": _errored_reason(errored)}
+
+
+def errored_sentence(errs: dict) -> str:
+    """The opening when the latest run errored: name the count and reason, offer bench or a walk."""
+    e, total = errs["errored"], errs["total"]
+    scope = f"all {e}" if e == total else f"{e} of {total}"
+    return (f"{total} tasks; the last run errored on {scope} ({errs['reason']}) — fix that and run "
+            "`touchstone bench` again, or walk through the tasks' criteria anyway?")
 
 
 def _shared_tasks(dataset_dir: Path, task: str) -> list[str]:

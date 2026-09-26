@@ -25,6 +25,8 @@ from .facts import (
     _job_labels,
     _join,
     _shared_tasks,
+    errored_sentence,
+    latest_run_errors,
 )
 from .prompt import SYSTEM, TOOLS
 from .scratch import _Scratch
@@ -65,16 +67,18 @@ class ReviewAgent:
     def open_statement(self) -> str:
         jobs_done = _job_labels(self.dataset_dir)
         built = _gated_tasks(self.dataset_dir)
-        if not jobs_done and not built:
+        errs = latest_run_errors(self.jobs_dir)
+        if not jobs_done and not built and not errs:
             return (f"Let's review “{self.room.topic}”. I couldn't find a benchmark here "
                     "yet — run `touchstone survey` first, then reopen this room.")
         does = _join(jobs_done) or "several jobs"
+        if errs and errs["errored"]:  # a failed run is never "everything passes"
+            return f"Your agent handles {does}; {errored_sentence(errs)}"
         return f"Your agent handles {does}; {self._pass_tail(built)} {self._offer()}"
 
     def _pass_tail(self, built: list[str]) -> str:
-        """"N tasks, your current setup passes K [of the R run (U not run yet)]" — the same shared
-        counting the first-five sentence uses, so a baseline that ran only some gated tasks never
-        reads as "passes N of N"."""
+        """"N tasks, passes K [of the R run (U not run)]" — the same counting the first-five
+        sentence uses, so a baseline that ran only some gated tasks never reads "passes N of N"."""
         sets = _baseline_sets(self.dataset_dir)
         if sets is None:
             return f"{len(built)} tasks."

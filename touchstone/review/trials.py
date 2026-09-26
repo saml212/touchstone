@@ -1,14 +1,11 @@
 """Read the Harbor job directories and decide which trial the room walks through next.
 
-A trial is addressed as ``<job>/<trial_dir>`` so a regrade knows its job. `scan` reads the
-review-worthy jobs into `TrialRef`s and orders them the way the design asks: verifier unsure
-(reward strictly between 0 and 1) first, then models disagree (a task that passed in one run and
-failed in another), then never reviewed, then already reviewed. Harbor's oracle/nop gate jobs are
-never review material, and only the latest job per (agent, model) is surfaced — older runs stay
-addressable by explicit job id through `read`. `read` returns one trial in plain words — the
-instruction, the trajectory as a readable transcript, and each criterion's description and score —
-for the agent to present. Needs-review tasks (gate failures) are read separately from
-``needs-review/<task>/gate.json``; they have no trials.
+A trial is addressed as ``<job>/<trial_dir>`` so a regrade knows its job. `scan` orders the
+review-worthy jobs the way the design asks: verifier unsure (reward strictly 0..1), then models
+disagree, then never reviewed, then reviewed. Oracle/nop gate jobs are never review material, and
+only the latest job per (agent, model) is surfaced (older runs stay addressable by job id via
+`read`). `read` returns one trial in plain words; needs-review gate failures are read separately
+from ``needs-review/<task>/gate.json`` and have no trials.
 """
 
 from __future__ import annotations
@@ -83,6 +80,12 @@ def _review_jobs(jobs_dir: Path) -> list[tuple[Path, str]]:
 def _has_rewards(job_dir: Path) -> bool:
     """A run that produced no reward at all (every trial raised) is broken, not review material."""
     return any(t.reward is not None for t in jobs.Job.read(job_dir).trials)
+
+
+def latest_non_gate_job(jobs_dir: Path) -> Path | None:
+    """The newest non-gate job dir, or None — the run the opening reports on (errors and all)."""
+    non_gate = [jd for jd in _job_dirs(jobs_dir) if not _is_gate(_agent_model(jd)[0])]
+    return non_gate[-1] if non_gate else None  # _job_dirs is ascending -> the last is newest
 
 
 def _trial_dirs(job_dir: Path) -> list[Path]:
