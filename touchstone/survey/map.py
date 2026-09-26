@@ -108,6 +108,11 @@ else. An API key, token, or secret env var (e.g. WEATHER_API_KEY, STRIPE_API_KEY
 a base_url_env — if only the key comes from the environment and the host is written into the source,
 set "base_url_env" to null and put the hard-coded host in "base_url_default".
 
+A tool that reaches a database in-process — a SQL driver or ORM, or an in-memory store loaded from
+JSON/dict files that is passed to every tool — is a "db" service, not "http". For a db service,
+"base_url_env" is the env var the code reads for the database path or URL (else null), and
+"base_url_default" is the literal it uses (":memory:", a file path, or a URL like postgresql://...).
+
 Report every tool and every service you find. Keep "text" to 200 characters. Return only the JSON
 object."""
 

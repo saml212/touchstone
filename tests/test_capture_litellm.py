@@ -24,8 +24,8 @@ def test_trace_registers_logger_and_records_one_span(traced):
     assert len(loggers) == 1  # registered exactly once, even across repeated trace() calls
 
     # A real litellm ModelResponse from mock_response, recorded through the registered logger.
-    # (litellm routes a *sync* completion's callbacks through the current event loop when one exists,
-    # e.g. pytest-asyncio's; the live smoke covers the auto-fire path in a plain agent process.)
+    # (litellm routes a *sync* completion's callbacks through the current event loop when one
+    # exists, e.g. pytest-asyncio's; the live smoke covers the auto-fire path in a plain process.)
     resp = litellm.completion(model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}],
                               tools=TOOLS, mock_response="ok")
     kwargs = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}],
