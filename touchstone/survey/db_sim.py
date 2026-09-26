@@ -193,6 +193,116 @@ def is_document_store(sim_dir: str | Path) -> bool:
     return (Path(sim_dir) / "collections.json").is_file()
 
 
+# ---- prompt materials + generation -----------------------------------------
+
+
+_SCHEMA_NEEDLES = ("create table", "sqlalchemy", "declarative_base", "table(", "column(")
+
+
+def _schema_py_blocks(repo: Path) -> list[str]:
+    from .simulate import _iter_py, _read
+
+    blocks: list[str] = []
+    for path in _iter_py(repo):
+        text = _read(path)
+        if text and any(n in text.lower() for n in _SCHEMA_NEEDLES):
+            blocks.append(f"### {path.relative_to(repo)}\n{text}")
+    return blocks
+
+
+def _schema_json_blocks(repo: Path) -> list[str]:
+    blocks: list[str] = []
+    for path in sorted(repo.rglob("*.json")):
+        rel = path.relative_to(repo)
+        parts = set(rel.parts)
+        if "data" in parts and not parts & {".git", "touchstone", ".touchstone"}:
+            blocks.append(f"### {rel}\n{path.read_text(encoding='utf-8', errors='replace')}")
+    return blocks
+
+
+def _schema_source(repo: Path) -> str:
+    """Files that describe the database shape: CREATE TABLE / ORM models / migrations, and small
+    JSON data files a document store loads. Capped like a service source block."""
+    from .simulate import _MAX_SOURCE
+
+    blocks = _schema_py_blocks(repo) + _schema_json_blocks(repo)
+    return "\n\n".join(blocks)[:_MAX_SOURCE] or "(no schema source found in repo)"
+
+
+def _db_prompt(repo: Path, service: dict, tool_source: str, examples: list[dict],
+               hint: str = "") -> str:
+    from .db_service import env_name
+
+    return DB_SIM_PROMPT.format(
+        name=service.get("name"), env=env_name(service), tool_source=tool_source,
+        schema_source=_schema_source(repo),
+        examples=json.dumps(examples, indent=2, ensure_ascii=False), hint=hint)
+
+
+_SNAPSHOT = ("schema.sql", "seed.json", "collections.json", "README.md", "UNSUPPORTED.md")
+
+
+def _snapshot(sim_dir: Path) -> dict:
+    return {n: (sim_dir / n).read_text(encoding="utf-8")
+            for n in _SNAPSHOT if (sim_dir / n).is_file()}
+
+
+def _restore(sim_dir: Path, snapshot: dict) -> None:
+    _clear(sim_dir)
+    for name, text in snapshot.items():
+        atomic_write(sim_dir / name, text)
+
+
+def _failure_hint(result: dict) -> str:
+    failures = result.get("failures", [])[:5]
+    return ("## Your previous db simulator failed these examples; fix the seed/schema so the tools "
+            "return the expected values:\n" + json.dumps(failures, indent=2, ensure_ascii=False))
+
+
+def _generate(provider, repo: Path, service: dict, tool_source: str, examples, hint=""):
+    return parse_files(provider.run(_db_prompt(repo, service, tool_source, examples, hint), repo))
+
+
+def generate_db_simulator(repo, provider, service: dict, tools: list[dict], events, sim_root: Path,
+                          scrub, settings, force: bool = False) -> dict:
+    """Write simulators/<name>/ for a db service and return its fidelity result (one retry)."""
+    from . import fidelity
+    from .simulate import _examples, _replay_ctx, _tool_source
+
+    sim_dir = sim_root / service["name"]
+    ctx = _replay_ctx(service, tools)
+    calls = [e for e in events if e.tool in {t["name"] for t in tools}]
+    if _has_files(sim_dir) and not force:
+        return fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
+    tool_source = _tool_source(repo, tools)
+    examples = _examples(calls, scrub)
+    write_sim(sim_dir, _generate(provider, repo, service, tool_source, examples))
+    result = fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
+    if unsupported(sim_dir) or result["score"] >= settings.survey_fidelity_threshold:
+        return result
+    return _retry(provider, repo, service, tools, examples, sim_dir, calls, ctx, settings, scrub,
+                  result)
+
+
+def _retry(provider, repo, service, tools, examples, sim_dir, calls, ctx, settings, scrub, prev):
+    from . import fidelity
+    from .simulate import _tool_source
+
+    snapshot = _snapshot(sim_dir)
+    write_sim(sim_dir, _generate(provider, repo, service, _tool_source(repo, tools), examples,
+                                 _failure_hint(prev)))
+    new = fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
+    if new["score"] >= prev["score"]:
+        return new
+    _restore(sim_dir, snapshot)  # keep the better (previous) simulator
+    return prev
+
+
+def _has_files(sim_dir: Path) -> bool:
+    return any((sim_dir / n).is_file()
+               for n in ("schema.sql", "collections.json", "UNSUPPORTED.md"))
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         raise SystemExit("usage: python -m touchstone.survey.db_sim <sim_dir>")

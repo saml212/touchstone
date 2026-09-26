@@ -1,10 +1,10 @@
 """Measure how faithfully a simulator reproduces the recorded calls.
 
-Start the simulator on a free port, seed it, replay every recorded call through the customer's real
-tool functions (pointed at the simulator), and compare each returned value with the recorded one —
-after masking volatile fields (ids, timestamps, tokens) so a fresh id is not a mismatch. The process
-is always killed; a simulator that never becomes healthy scores 0.0 with its log tail, so the survey
-continues and flags it.
+Start the simulator (an HTTP server on a free port, or a materialized state.db and no server for a
+db service), replay each recorded call through the customer's real tool functions pointed at it, and
+compare each returned value with the recorded one after masking volatile fields (ids, timestamps,
+tokens). The process is always killed; a simulator that never becomes healthy scores 0.0 with its
+log tail, so the survey continues and flags it.
 """
 
 from __future__ import annotations
@@ -133,15 +133,13 @@ def _external_host(host: str | None) -> bool:
 
 
 def _shim_host(host: str | None, base_url_env) -> bool:
-    """Shim the host when it is the only redirect (no base_url_env) or a real external host — so a
-    base_url_env the map got wrong (an API-key var) can't let replay reach the real service."""
+    """Shim the host when it is the only redirect (no base_url_env) or a real external host."""
     return bool(host) and (not base_url_env or _external_host(host))
 
 
 def _replay_spec(calls: list[ToolEvent], base: str, ctx: dict) -> dict:
     """A replay spec that repoints the service at `base`: by env var when the map has one, and/or by
-    rewriting the host with the net shim (simulators = {host: base}). `invoke` in ctx routes calls
-    through the generated agent/invoke.py."""
+    the net shim (simulators={host:base}); `invoke` in ctx routes calls through invoke.py."""
     spec = {"tools": ctx["tools"],
             "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
     if ctx.get("base_url_env"):
@@ -194,26 +192,37 @@ _NO_REDIRECT = (
 
 
 def _redirectable(ctx: dict) -> bool:
-    """True when replay can reach the simulator instead of the real service: either an env var
-    overrides the base URL, or the net shim can rewrite a constant http host."""
+    """True when replay can reach the simulator (an env var overrides the URL, or a shim host)."""
     return bool(ctx.get("base_url_env")) or bool(ctx.get("host") and ctx.get("kind") == "http")
 
 
 # ---- state capture (for task criteria) -------------------------------------
 
 
+def _start_db_mount(mount: dict) -> dict:
+    """A db mount has no server: (re)materialize state.db and point the env var at its path."""
+    from . import db_service, db_sim
+
+    db = db_sim.materialize(mount["sim_dir"])
+    base = db_service.value_for(str(db), url=mount.get("db_url", False)) if db else ""
+    return {"proc": None, "log": None, "base": base, "sim_dir": mount["sim_dir"],
+            "env": mount.get("env"), "host": mount.get("host")}
+
+
+def _start_http_mount(mount: dict) -> dict:
+    port = _free_port()
+    log_path = mount["sim_dir"] / ".sim.log"
+    proc, log = _start_sim(mount["sim_dir"], port, log_path)
+    base = f"http://127.0.0.1:{port}"
+    _await_health(proc, base, log_path)
+    _reset(base)
+    return {"proc": proc, "log": log, "base": base, "sim_dir": mount["sim_dir"],
+            "env": mount.get("env"), "host": mount.get("host")}
+
+
 def _start_mounts(mounts: list[dict]) -> list[dict]:
-    started: list[dict] = []
-    for mount in mounts:
-        port = _free_port()
-        log_path = mount["sim_dir"] / ".sim.log"
-        proc, log = _start_sim(mount["sim_dir"], port, log_path)
-        base = f"http://127.0.0.1:{port}"
-        _await_health(proc, base, log_path)
-        _reset(base)
-        started.append({"proc": proc, "log": log, "base": base, "sim_dir": mount["sim_dir"],
-                        "env": mount.get("env"), "host": mount.get("host")})
-    return started
+    return [_start_db_mount(m) if m.get("kind") == "db" else _start_http_mount(m)
+            for m in mounts]
 
 
 def _snapshots(started: list[dict]) -> dict:
@@ -225,18 +234,15 @@ def _base_urls(started: list[dict]) -> dict:
 
 
 def _sim_hosts(started: list[dict]) -> dict:
-    """host -> simulator base for the net-shim rewrite: services with no env var, plus a shield for
-    any real external host so a wrong base_url_env can never reach the real service."""
+    """host -> simulator base for the net-shim rewrite (no-env-var services + external hosts)."""
     return {s["host"]: s["base"] for s in started if _shim_host(s.get("host"), s["env"])}
 
 
 @contextlib.contextmanager
 def simulators_running(mounts: list[dict]):
-    """Start each simulator (`mounts` = [{"sim_dir", "env", "host"}]) and yield
-    ({base_url_env: base}, {host: base}), always killing the processes.
-
-    For a local check that needs the real services up (the packaged adapter check) rather than a
-    fidelity score. Ports are free ports, so the base urls are yielded for the caller to pass on."""
+    """Start each simulator (`mounts` = [{"sim_dir", "env", "host", "kind"}]) and yield
+    ({base_url_env: base}, {host: base}), always killing the processes. For a local check that needs
+    the services up (the packaged adapter check) rather than a fidelity score."""
     started = _start_mounts(mounts)
     try:
         yield _base_urls(started), _sim_hosts(started)
@@ -248,9 +254,7 @@ def simulators_running(mounts: list[dict]):
 def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolEvent],
                   settings: Settings, invoke: str | None = None) -> dict:
     """Start each simulator, seed it, dump state, replay `calls` (real tool functions), dump again.
-
-    `mounts` is [{"sim_dir", "env"}]. Returns {"initial", "final", "replayed"} keyed by simulator
-    name, or {"error": ...} if a simulator never became healthy or the replay failed."""
+    Returns {"initial", "final", "replayed"} keyed by simulator name, or {"error": ...}."""
     started: list[dict] = []
     try:
         started = _start_mounts(mounts)
@@ -268,15 +272,37 @@ def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolE
             _kill(s["proc"], s["log"])
 
 
+def _measure_db(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict,
+                settings: Settings, scrub: Scrubber, threshold: float) -> dict:
+    """Fidelity for a db service: materialize state.db, replay the real tools against it (no
+    server), compare returned values. An unsupported service is reported 0 with its reason."""
+    from . import db_service, db_sim
+
+    reason = db_sim.unsupported(sim_dir)
+    if reason:
+        result = _failed_result(calls, threshold, f"db service unsupported: {reason}")
+        result["unsupported"] = reason
+        return result
+    db = db_sim.materialize(sim_dir)
+    base = db_service.value_for(str(db), url=ctx.get("db_url", False))
+    try:
+        got_list = _run_replay(repo, calls, base, ctx, settings)
+    except _SimError as exc:
+        return _failed_result(calls, threshold, str(exc))
+    return _score(calls, got_list, threshold, scrub)
+
+
 def measure_service(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict,
                     settings: Settings, scrub: Scrubber, invoke: str | None = None) -> dict:
     """Fidelity of the simulator in `sim_dir` against `calls`. Always kills the process."""
     if invoke:
         ctx = {**ctx, "invoke": invoke}
     threshold = settings.survey_fidelity_threshold
+    if ctx.get("kind") == "db":
+        return _measure_db(sim_dir, repo, calls, ctx, settings, scrub, threshold)
     if calls and not _redirectable(ctx):
-        # Nothing can repoint the tool at the simulator, so the real (maybe prod) base URL would be
-        # hit. Never do that: flag the simulator below-threshold with an honest reason instead.
+        # Nothing can repoint the tool at the simulator, so the real base URL would be hit. Never do
+        # that: flag it below-threshold with an honest reason instead.
         return _failed_result(calls, threshold, _NO_REDIRECT)
     port = _free_port()
     log_path = sim_dir / ".sim.log"

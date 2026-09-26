@@ -34,10 +34,15 @@ def is_url(service: dict) -> bool:
     return "://" in (service.get("base_url_default") or "")
 
 
+def value_for(db_path: str | Path, *, url: bool) -> str:
+    """The env value for a state.db path: the bare path, or sqlite:///<path> for a URL tool."""
+    p = str(db_path)
+    return f"sqlite:///{p}" if url else p
+
+
 def env_value(db_path: str | Path, service: dict) -> str:
     """The value env_name is set to: the state.db path, or sqlite:///<path> for a URL tool."""
-    p = str(db_path)
-    return f"sqlite:///{p}" if is_url(service) else p
+    return value_for(db_path, url=is_url(service))
 
 
 def container_db_path(name: str) -> str:

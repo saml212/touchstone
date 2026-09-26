@@ -111,8 +111,12 @@ def service_host(service: dict) -> str | None:
 
 
 def _replay_ctx(service: dict, tools: list[dict]) -> dict:
-    return {"base_url_env": service.get("base_url_env"), "host": service_host(service),
-            "kind": service.get("kind"),
+    from . import db_service
+
+    is_db = db_service.is_db(service)
+    return {"base_url_env": db_service.env_name(service) if is_db else service.get("base_url_env"),
+            "host": service_host(service), "kind": service.get("kind"),
+            "db_url": db_service.is_url(service) if is_db else False,
             "tools": {t["name"]: t["import_path"] for t in tools}}
 
 
@@ -291,6 +295,13 @@ def generate_simulator(repo: Path, provider: SurveyProvider, service: dict, tool
                        events: list[ToolEvent], sim_root: Path, scrub: Scrubber,
                        settings: Settings, force: bool = False) -> dict:
     """Write simulators/<service>/ and return its fidelity result. Reuses files unless force."""
+    from . import db_service
+
+    if db_service.is_db(service):
+        from .db_sim import generate_db_simulator
+
+        return generate_db_simulator(repo, provider, service, tools, events, sim_root, scrub,
+                                     settings, force)
     sim_dir = sim_root / service["name"]
     ctx = _replay_ctx(service, tools)
     names = {t["name"] for t in tools}

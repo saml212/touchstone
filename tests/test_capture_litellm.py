@@ -23,11 +23,17 @@ def test_trace_registers_logger_and_records_one_span(traced):
     loggers = [cb for cb in litellm.callbacks if isinstance(cb, TouchstoneLogger)]
     assert len(loggers) == 1  # registered exactly once, even across repeated trace() calls
 
-    # A real litellm ModelResponse from mock_response, recorded through the registered logger.
-    # (litellm routes a *sync* completion's callbacks through the current event loop when one
-    # exists, e.g. pytest-asyncio's; the live smoke covers the auto-fire path in a plain process.)
-    resp = litellm.completion(model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}],
-                              tools=TOOLS, mock_response="ok")
+    # A real litellm ModelResponse from mock_response, recorded through the registered logger. The
+    # response is produced with callbacks off so only the explicit invocation records — litellm
+    # otherwise routes a sync completion's callbacks through the event loop pytest-asyncio installs;
+    # the live smoke covers the auto-fire path in a plain agent process.
+    saved = litellm.callbacks
+    litellm.callbacks = []
+    try:
+        resp = litellm.completion(model="gpt-4o-mini", messages=[{"role": "user", "content": "hi"}],
+                                  tools=TOOLS, mock_response="ok")
+    finally:
+        litellm.callbacks = saved
     kwargs = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}],
               "optional_params": {"tools": TOOLS}}
     loggers[0].log_pre_api_call("gpt-4o-mini", kwargs["messages"], kwargs)
