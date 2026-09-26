@@ -8,51 +8,60 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/room.css" />
 </head>
-<body>
-  <header>
-    <h1>Touchstone</h1>
-    <span class="topic" id="topic"></span>
+<body class="review-body">
+  <header class="topbar">
+    <span class="brand">Touchstone</span>
+    <span class="goal" id="topic"></span>
+    <span class="readout">
+      <span class="trust" id="trust">trust —</span>
+      <span class="queue" id="queue"></span>
+    </span>
     <span class="closed hidden" id="closed">closed</span>
   </header>
 
-  <main class="review">
+  <main class="review" id="room">
     <section id="trial">
-      <div id="trialEmpty" class="muted">No trial open yet — say “start” and I'll pull one up.</div>
+      <p id="trialEmpty" class="empty">Say “start” or click below and I’ll pull up the first trial.</p>
       <article id="trialCard" class="hidden">
         <h2 id="trialTask"></h2>
         <div id="trialReward" class="reward"></div>
-        <h3>What the customer asked</h3>
-        <p id="trialInstruction" class="instruction"></p>
-        <h3>What the agent did</h3>
-        <div id="trialTrajectory" class="trajectory"></div>
-        <h3>What the verifier checked</h3>
+        <p class="label">What the customer asked</p>
+        <blockquote id="trialInstruction" class="instruction"></blockquote>
+        <p class="label">What the agent did</p>
+        <ol id="trialTrajectory" class="trajectory"></ol>
+        <p class="label">What was checked</p>
         <ul id="trialCriteria" class="criteria"></ul>
         <div id="trialProposed" class="proposed hidden"></div>
       </article>
     </section>
 
     <section id="conversation">
-      <div class="reviewbar">
-        <span class="trust" id="trust">trust —</span>
-        <span class="chips" id="chips"></span>
-        <button id="next" class="ghost" title="Next trial">next trial ›</button>
-      </div>
-      <div id="messages"></div>
+      <div id="messages" class="captions" role="log" aria-live="polite" aria-label="Conversation"></div>
       <div id="notice" class="notice hidden" role="status"></div>
-      <div id="composer">
-        <textarea id="text" rows="2" placeholder="Agree? Or say what should have counted… (/done)"></textarea>
-        <span id="voiceState" class="voiceState hidden"></span>
-        <button id="talk" class="ghost" title="Mic">● talk</button>
-        <button id="send">Send</button>
-      </div>
     </section>
   </main>
 
-  <div id="startOverlay">
+  <div class="dock" id="dock">
+    <button id="talk" class="mic" aria-label="Microphone" aria-pressed="false">
+      <span class="ring" aria-hidden="true"></span>
+      <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" />
+        <path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+      </svg>
+    </button>
+    <span id="voiceState" class="voiceState">mic off</span>
+    <input id="text" class="composer" type="text" autocomplete="off"
+           placeholder="Or type — agree, or say what should have counted. Enter to send." />
+    <button id="next" class="ghost next" title="Next trial">next trial ›</button>
+  </div>
+
+  <div id="startOverlay" class="overlay">
     <div class="card">
-      <strong>Ready to review by voice</strong>
-      <button id="startBtn">▶ start</button>
+      <span class="brand">Touchstone</span>
+      <p class="tagline">Review your benchmark by voice.</p>
+      <button id="startBtn" class="startBtn">▶ start</button>
       <p id="startHint" class="startHint"></p>
     </div>
   </div>

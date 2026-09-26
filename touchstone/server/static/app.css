@@ -14,75 +14,9 @@ body {
   font-family: "Space Grotesk", system-ui, sans-serif;
   line-height: 1.5;
 }
-header {
-  border-bottom: 1px solid var(--hair);
-  padding: 16px 24px;
-  display: flex;
-  align-items: baseline;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-header h1 {
-  font-size: 18px;
-  margin: 0;
-  color: var(--brick);
-  letter-spacing: 0.02em;
-}
-header .topic { color: var(--muted); font-size: 14px; }
-header .closed { color: var(--brick); font-weight: 600; font-size: 13px; }
-main {
-  display: grid;
-  grid-template-columns: 1fr 340px;
-  gap: 0;
-  height: calc(100vh - 62px);
-}
-@media (max-width: 720px) {
-  main { grid-template-columns: 1fr; height: auto; }
-  #drafts { border-left: none; border-top: 1px solid var(--hair); }
-}
-#conversation {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: 0 16px;
-}
-#messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px 8px;
-  min-height: 240px;
-}
-.msg { margin-bottom: 14px; max-width: 680px; }
-.msg .who { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
-.msg .who b { color: var(--ink); }
-.msg.agent .who b { color: var(--brick); }
-.msg .body {
-  background: #fff;
-  border: 1px solid var(--hair);
-  border-radius: 10px;
-  padding: 8px 12px;
-  white-space: pre-wrap;
-}
-.msg.agent .body { background: var(--soft); }
-#composer {
-  border-top: 1px solid var(--hair);
-  padding: 12px 8px;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
 input, textarea, button {
   font-family: inherit;
   font-size: 14px;
-}
-#text {
-  flex: 1;
-  padding: 10px 12px;
-  border: 1px solid var(--hair);
-  border-radius: 8px;
-  background: #fff;
-  color: var(--ink);
-  resize: none;
 }
 button {
   background: var(--brick);
@@ -94,55 +28,6 @@ button {
 }
 button.ghost { background: transparent; color: var(--brick); border: 1px solid var(--brick); }
 button:disabled { opacity: 0.5; cursor: default; }
-#talk.recording { background: #b23a26; animation: pulse 1s infinite; }
-@keyframes pulse { 50% { opacity: 0.6; } }
-.voiceState { align-self: center; font: 500 12px var(--mono, monospace); color: var(--brick); animation: pulse 1s infinite; }
-.notice { margin: 0 16px 8px; padding: 8px 12px; font-size: 13px; color: var(--brick); background: #fff; border: 1px solid var(--brick); border-radius: 8px; }
-#drafts {
-  border-left: 1px solid var(--hair);
-  padding: 16px;
-  overflow-y: auto;
-}
-#drafts h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.check {
-  border: 1px solid var(--hair);
-  border-radius: 10px;
-  padding: 10px 12px;
-  margin-bottom: 10px;
-  background: #fff;
-}
-.check.committed { background: var(--soft); border-color: var(--brick); }
-.check .kind { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--brick); }
-.check .name { font-weight: 600; }
-.check .params {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.check .rationale { font-size: 13px; color: var(--muted); margin-top: 4px; }
-.check button { margin-top: 8px; padding: 6px 10px; font-size: 13px; }
-.badge { font-size: 11px; color: var(--muted); }
-#startOverlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(43, 38, 34, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-#startOverlay .card {
-  background: var(--cream);
-  border: 1px solid var(--hair);
-  border-radius: 12px;
-  padding: 28px;
-  width: 320px;
-  text-align: center;
-}
-#startOverlay strong { display: block; font-size: 16px; margin-bottom: 16px; color: var(--ink); }
-#startBtn { width: 100%; font-size: 18px; padding: 14px; }
-.startHint { margin: 14px 0 0; font-size: 13px; color: var(--muted); }
 .hidden { display: none !important; }
 
 /* ---- single-page review app (body.app) ---- */
@@ -232,22 +117,7 @@ td .cmeta { font-size: 12px; color: var(--muted); margin-top: 4px; font-family: 
 body.app pre { background: #fff; border: 1px solid var(--hair); border-radius: 8px; padding: 10px; font-family: "JetBrains Mono", monospace; font-size: 12px; overflow-x: auto; }
 .check { background: #fff; border: 1px solid var(--hair); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
 
-/* ---- review room (two columns: the trial, then the conversation) ---- */
-main.review { grid-template-columns: minmax(0, 1fr) minmax(340px, 460px); }
-@media (max-width: 820px) {
-  main.review { grid-template-columns: 1fr; height: auto; }
-  main.review #trial { border-right: none; border-bottom: 1px solid var(--hair); }
-}
-#trial {
-  border-right: 1px solid var(--hair);
-  padding: 16px 20px;
-  overflow-y: auto;
-  min-height: 0;
-}
-#trial h2 { color: var(--brick); font-size: 18px; margin: 0 0 2px; }
-#trial h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 18px 0 6px; }
-#trial .reward { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--muted); }
-#trial .instruction { background: #fff; border: 1px solid var(--hair); border-radius: 8px; padding: 10px 12px; margin: 0; }
+/* ---- trial views shared by the five-page shell (the review room overrides these in room.css) ---- */
 .trajectory .step {
   font-size: 13px;
   border-left: 2px solid var(--hair);
@@ -269,20 +139,6 @@ main.review { grid-template-columns: minmax(0, 1fr) minmax(340px, 460px); }
 .criteria .crit .mark { font-family: "JetBrains Mono", monospace; font-size: 12px; white-space: nowrap; }
 .criteria .crit.pass .mark { color: #3f7a2f; }
 .criteria .crit.fail .mark { color: var(--brick); }
-.proposed { margin-top: 18px; padding: 12px 14px; background: var(--soft); border: 1px solid var(--brick); border-radius: 8px; font-size: 14px; }
-.proposed .hint { margin-top: 6px; padding: 0; background: none; border: none; font-size: 12px; color: var(--muted); }
-.reviewbar {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 12px 8px 8px; border-bottom: 1px solid var(--hair);
-}
-.reviewbar .trust { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--brick); margin-right: auto; }
-.reviewbar .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.reviewbar .chip {
-  background: transparent; color: var(--muted); border: 1px solid var(--hair);
-  border-radius: 12px; padding: 3px 10px; font-size: 12px;
-}
-.reviewbar .chip:hover { color: var(--brick); border-color: var(--brick); }
-.reviewbar #next { padding: 4px 10px; font-size: 12px; }
 
 /* ---- five-page shell content (body.app main) ---- */
 .lede { font-size: 22px; line-height: 1.35; color: var(--ink); margin: 8px 0 14px; max-width: 720px; }
