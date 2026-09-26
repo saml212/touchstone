@@ -137,6 +137,44 @@ def test_adapter_check_passes_with_auth_placeholder(tmp_path, monkeypatch):
     assert "DEMO_API_KEY" in doc["agent"]["auth_env"]  # persisted for the packaged sandbox run
 
 
+def test_adapter_check_runs_with_real_provider_key_not_placeholder(tmp_path, monkeypatch):
+    # A Keychain-only operator (OPENAI_API_KEY unset in the env) must still reach packaged mode:
+    # the adapter check resolves the real provider key the way bench does and passes it into the
+    # subprocess, instead of the placeholder that would shadow the code's own key lookup and 401.
+    from touchstone.harbor import keys
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(keys, "resolve_key", lambda var, settings: "sk-real-key")
+    (tmp_path / "svc.py").write_text('import os\nos.environ["OPENAI_API_KEY"]\n', encoding="utf-8")
+    key_entry = ('import os\n'
+                 'assert os.environ["OPENAI_API_KEY"] == "sk-real-key", '
+                 'os.environ.get("OPENAI_API_KEY")\n') + PASS_ENTRY
+    conn = _conn(tmp_path)
+    out = tmp_path / "touchstone"
+    result = package.build_package(tmp_path, conn, _no_service_map(), {"services": [], "ports": {},
+                                   "base_url_envs": {}}, ScriptedSurveyProvider([key_entry]), out,
+                                   _settings())
+    conn.close()
+    assert result["mode"] == "packaged" and result["adapter_ok"] is True
+
+
+def test_packaged_not_verified_when_provider_key_missing(tmp_path, monkeypatch):
+    # No key resolves anywhere -> don't run a doomed check that 401s; report it honestly so the
+    # user knows packaged mode was skipped for a missing key, not that their agent failed.
+    from touchstone.harbor import keys
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(keys, "resolve_key", lambda var, settings: None)
+    (tmp_path / "svc.py").write_text('import os\nos.environ["OPENAI_API_KEY"]\n', encoding="utf-8")
+    conn = _conn(tmp_path)
+    out = tmp_path / "touchstone"
+    provider = ScriptedSurveyProvider([PASS_ENTRY])
+    result = package.build_package(tmp_path, conn, _no_service_map(), {"services": [], "ports": {},
+                                   "base_url_envs": {}}, provider, out, _settings())
+    conn.close()
+    assert result["mode"] == "replica" and result["adapter_ok"] is False
+    assert result["flag"] == "packaged mode not verified: no OPENAI_API_KEY"
+    assert provider.calls == []  # never even generated entry.py
+
+
 def test_build_package_replica_when_no_entrypoint(tmp_path):
     conn = _conn(tmp_path)
     out = tmp_path / "touchstone"

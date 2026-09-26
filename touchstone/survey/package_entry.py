@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .. import store
 from ..config import Settings
+from ..harbor import keys
 from . import fidelity
 from .envs import auth_env_names, placeholder_auth
 from .package_spans import first_user_turn
@@ -144,13 +145,27 @@ def _sim_mounts(map_data: dict, env_result: dict, out: Path) -> list[dict]:
             for s in crossing_services(map_data)]
 
 
+def _resolve_provider_keys(repo: Path, settings: Settings) -> tuple[dict, set]:
+    """Resolve the real provider keys the customer's code reads, the way bench does. Returns
+    (resolved {var: value}, missing {var}); a missing provider key means packaged mode cannot be
+    verified without a misleading 401, so the caller flags it and stays on replica."""
+    resolved, missing = {}, set()
+    for var in keys.provider_key_vars(auth_env_names(repo)):
+        value = keys.resolve_key(var, settings)
+        (resolved.__setitem__(var, value) if value else missing.add(var))
+    return resolved, missing
+
+
 def _run_and_check(agent_dir: Path, repo: Path, base_urls: dict, sim_hosts: dict, message: str,
-                   settings: Settings) -> tuple[bool, str]:
+                   settings: Settings, provider_keys: dict) -> tuple[bool, str]:
     # Placeholder-fill unset auth env the repo names, so entry.py can build a token-needing client.
-    auth = {n: v for n, v in placeholder_auth(auth_env_names(repo)).items() if n not in os.environ}
+    # A provider key (OPENAI_API_KEY/…) is filled with the operator's REAL key, resolved like bench,
+    # never a placeholder — a placeholder would shadow the code's own key lookup and 401.
+    auth = {n: v for n, v in placeholder_auth(auth_env_names(repo)).items()
+            if n not in os.environ and n not in provider_keys}
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "touchstone.db"
-        env = {**auth, **base_urls, "TOUCHSTONE_DB": str(db),
+        env = {**auth, **provider_keys, **base_urls, "TOUCHSTONE_DB": str(db),
                "TOUCHSTONE_OUTPUT": str(Path(tmp) / "out.json")}
         if sim_hosts:  # constant-host services: entry.py's trace() installs the net shim
             env["TOUCHSTONE_SIMULATORS"] = json.dumps(sim_hosts)
@@ -163,11 +178,12 @@ def _run_and_check(agent_dir: Path, repo: Path, base_urls: dict, sim_hosts: dict
 
 
 def _adapter_check(agent_dir: Path, repo: Path, map_data: dict, env_result: dict, out: Path,
-                   message: str, settings: Settings) -> tuple[bool, str]:
+                   message: str, settings: Settings, provider_keys: dict) -> tuple[bool, str]:
     try:
         with fidelity.simulators_running(_sim_mounts(map_data, env_result, out)) as (base_urls,
                                                                                      sim_hosts):
-            return _run_and_check(agent_dir, repo, base_urls, sim_hosts, message, settings)
+            return _run_and_check(agent_dir, repo, base_urls, sim_hosts, message, settings,
+                                  provider_keys)
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         return False, f"adapter check error: {str(exc)[:400]}"
 
@@ -186,12 +202,17 @@ def try_packaged(agent_dir: Path, repo: Path, conn, map_data: dict, env_result: 
     message = first_user_turn(conn)
     if not map_data.get("entrypoints") or not message:
         return {"mode": "replica", "ok": False, "flag": "no runnable entrypoint or recorded turn"}
+    provider_keys, missing = _resolve_provider_keys(repo, settings)
+    if missing:  # without the real key the check 401s; say so honestly instead of "adapter failed"
+        return {"mode": "replica", "ok": False,
+                "flag": "packaged mode not verified: no " + ", ".join(sorted(missing))}
     prompt = ENTRY_PROMPT.format(map=_map_digest(map_data))
     error: str | None = None
     for _ in range(2):
         atomic_write(agent_dir / "entry.py", _generate_entry(provider, repo, prompt, error))
         atomic_write(agent_dir / "run.sh", RUN_SH)
-        ok, reason = _adapter_check(agent_dir, repo, map_data, env_result, out, message, settings)
+        ok, reason = _adapter_check(agent_dir, repo, map_data, env_result, out, message, settings,
+                                    provider_keys)
         if ok:
             return {"mode": "packaged", "ok": True, "flag": None}
         error = reason
