@@ -58,8 +58,8 @@ class Scrubber:
 
         Dict KEYS are scrubbed as well as values: a store keyed by a document's id (a product keyed
         by its 10-digit id) must map that key to the same fake as the id where it appears as a field
-        or a tool argument, so replaying a recorded call against the scrubbed state.db still resolves
-        it. A non-string key is left unchanged."""
+        or a tool argument, so replaying a recorded call against the scrubbed state.db still
+        resolves it. A non-string key is left unchanged."""
         if isinstance(value, str):
             return self.text(value)
         if isinstance(value, dict):
