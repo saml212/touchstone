@@ -66,6 +66,7 @@ def test_run_regrade_local_builds_command_and_returns_new_job(tmp_path, monkeypa
         seen["cmd"] = cmd
         _job(jobs_dir, "src-regraded", {"refund": 1.0})  # regrade writes a new job dir
 
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: True)  # local daemon present
     monkeypatch.setattr(run_mod, "_call", fake_call)
     new_dir = run_mod.regrade(src, tasks, settings=Settings())
     assert new_dir.name == "src-regraded"

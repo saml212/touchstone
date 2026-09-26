@@ -1,10 +1,9 @@
 """Run `harbor run` over a dataset or a single task, locally or on a remote Docker host.
 
-Harbor bind-mounts local directories, so a remote Docker daemon alone is not enough: when the local
-machine has no Docker daemon and `settings.harbor_host` is set, this rsyncs the dataset to the host,
-runs Harbor there over SSH, and rsyncs the job directory back. Datasets always run as the implicit
-dataset (`harbor run -p <root>/tasks`); `dataset.toml` is metadata only and is never passed to `-p`.
-The exact command run is printed.
+Harbor bind-mounts local directories, so when the local machine has no Docker daemon and
+`settings.harbor_host` is set, this rsyncs the dataset to the host, runs Harbor there over SSH, and
+rsyncs the job directory back. Datasets run as the implicit dataset (`harbor run -p <root>/tasks`);
+`dataset.toml` is metadata only. The exact command run is printed.
 """
 
 from __future__ import annotations
@@ -50,9 +49,7 @@ def _run_path(path: Path) -> Path:
 
 
 def docker_daemon() -> tuple[bool, str]:
-    """(daemon up?, server version) for the local Docker daemon — the one local probe. `docker info`
-    (not just the binary on PATH) with a 3 s timeout, so a dead daemon or a stuck socket fails fast
-    instead of hanging. Version is '' when the daemon is down or the binary is missing."""
+    """(daemon up?, server version) for the local daemon via `docker info` (3 s timeout)."""
     if not shutil.which("docker"):
         return False, ""
     try:
@@ -64,8 +61,7 @@ def docker_daemon() -> tuple[bool, str]:
 
 
 def remote_docker_daemon(settings: Settings) -> tuple[bool, str]:
-    """(daemon up?, server version) on the harbor host — the same `docker info` probe over ssh,
-    connect-timeout bounded. Version '' when the host is unreachable or its daemon is down."""
+    """(daemon up?, server version) on the harbor host — the same `docker info` probe over ssh."""
     cmd = _ssh_cmd(settings.harbor_host, f"{_REMOTE_PATH}; docker info -f '{{{{.ServerVersion}}}}'")
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
@@ -78,12 +74,26 @@ def _has_docker() -> bool:
     return docker_daemon()[0]
 
 
-def _call(cmd: list[str], env: dict | None = None, stdin_data: str | None = None) -> None:
-    """Run `cmd`, echo its combined output, and on failure raise a RuntimeError whose message is the
-    last lines of that output, so a gate failure records what Harbor said, not just an exit code.
+class DockerDaemonError(RuntimeError):
+    """No Docker daemon is answering (local or harbor host); carries the one CLI-ready sentence."""
 
-    `stdin_data` is fed on stdin (never argv, never printed) — the channel that forwards an API key
-    to the remote shell. `env` replaces the child environment when given."""
+
+def _require_target(settings: Settings) -> str:
+    """'local' or 'remote' — where a Docker-needing run executes, proving that daemon first."""
+    if _has_docker():
+        return "local"
+    if settings.harbor_host and remote_docker_daemon(settings)[0]:
+        return "remote"
+    where = f"host {settings.harbor_host}" if settings.harbor_host else "local"
+    raise DockerDaemonError(
+        f"Docker daemon not running on {where}. Start Docker (colima start / Docker Desktop) "
+        "or set [harbor] host in touchstone.toml.")
+
+
+def _call(cmd: list[str], env: dict | None = None, stdin_data: str | None = None) -> None:
+    """Run `cmd`, echo its output, and on failure raise a RuntimeError whose message is the last
+    lines of that output. `stdin_data` is fed on stdin (never argv/printed) — how an API key reaches
+    the remote shell; `env` replaces the child environment when given."""
     print("$ " + " ".join(cmd))
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, env=env, input=stdin_data)
@@ -117,8 +127,7 @@ def _is_custom_agent(agent: str) -> bool:
 
 
 def _provider_key(model: str | None, settings: Settings) -> tuple[str, str] | None:
-    """Resolve `(env var, value)` for the model provider's API key, or None when none is needed or
-    found. Read on the laptop (env or Keychain); forwarded to harbor over stdin, never argv."""
+    """`(env var, value)` for the provider's API key, else None; sent to harbor over stdin."""
     var = keys.provider_key_var(model)
     if not var:
         return None
@@ -161,8 +170,7 @@ def _remote_dataset_path(remote_root: str, sync_root: Path) -> str:
 
 
 def _remote_key_prefix(key: tuple[str, str] | None) -> tuple[str, str | None]:
-    """Shell prefix that reads the key from stdin into the provider's env var, plus the stdin data.
-    The value never appears in the command string (only `$TS_KEY`, expanded on the remote host)."""
+    """Shell prefix reading the key from stdin into the env var (only `$TS_KEY` in the cmd)."""
     if not key:
         return "", None
     return f'read -r TS_KEY; export {key[0]}="$TS_KEY"; ', key[1] + "\n"
@@ -206,11 +214,11 @@ def _build_remote(context_dir: Path, tag: str, settings: Settings) -> None:
 
 
 def build_image(context_dir: str | Path, tag: str, settings: Settings | None = None) -> None:
-    """Build the environment image `tag` from `context_dir`. Builds on the SSH host when there is no
-    local Docker daemon — the same host `harbor run` uses, so its daemon has the image."""
+    """Build the environment image `tag` from `context_dir`, on the SSH host when there is no local
+    Docker daemon (the same host `harbor run` uses, so its daemon has the image)."""
     context_dir = Path(context_dir)
     settings = settings or load_settings()
-    if settings.harbor_host and not _has_docker():
+    if _require_target(settings) == "remote":
         _build_remote(context_dir, tag, settings)
     else:
         _call(["docker", "build", "-t", tag, str(context_dir)])
@@ -251,13 +259,11 @@ def _regrade_remote(job_dir: Path, tasks_path: Path, settings: Settings) -> Path
 def regrade(job_dir: str | Path, tasks_path: str | Path, *,
             settings: Settings | None = None) -> Path:
     """Run `harbor job regrade` over `job_dir` with the updated tasks and return the new job dir.
-
-    Regrades from recorded artifacts (no agent, no key). Runs on the SSH host — syncing the tasks
-    and the one source job up, then the result back — when the local machine has no Docker daemon.
-    """
+    Regrades from recorded artifacts (no agent, no key); runs on the SSH host when the local machine
+    has no Docker daemon."""
     job_dir, tasks_path = Path(job_dir), Path(tasks_path)
     settings = settings or load_settings()
-    if settings.harbor_host and not _has_docker():
+    if _require_target(settings) == "remote":
         return _regrade_remote(job_dir, tasks_path, settings)
     return _regrade_local(job_dir, tasks_path)
 
@@ -275,9 +281,8 @@ def _task_multi_turn(task_dir: Path) -> bool:
 
 
 def dataset_is_multi_turn(path: str | Path) -> bool:
-    """True when the target task, or any task in the dataset, is multi-turn, so the run needs
-    Harbor's simulated user: a conversational agent asks for details across turns rather than acting
-    on one message. Accepts a single task dir or a dataset root; a single-turn dataset is False."""
+    """True when the target task, or any task in the dataset, is multi-turn — so the run needs
+    Harbor's simulated user. Accepts a single task dir or a dataset root."""
     p = Path(path)
     if (p / "task.toml").is_file():
         return _task_multi_turn(p)
@@ -286,9 +291,9 @@ def dataset_is_multi_turn(path: str | Path) -> bool:
 
 
 def user_agent_for(model: str) -> str:
-    """The Harbor simulated-user agent that can sign in with the model's provider key: codex for
-    an OpenAI model, claude-code for an Anthropic one. A wrong pairing fails authentication inside
-    the sandbox and every trial scores 0."""
+    """The Harbor simulated-user agent that signs in with the model's provider key: codex for an
+    OpenAI model, claude-code for an Anthropic one (a wrong pairing fails auth, scoring every
+    trial 0)."""
     return "claude-code" if model.split("/", 1)[0] == "anthropic" else "codex"
 
 
@@ -310,6 +315,6 @@ def run(path: str | Path, agent: str, *, model: str | None = None, jobs_dir: str
     extra_args = extra_args or []
     settings = settings or load_settings()
     key = _provider_key(model, settings) if _is_custom_agent(agent) else None
-    if settings.harbor_host and not _has_docker():
+    if _require_target(settings) == "remote":
         return _run_remote(path, agent, model, jobs_dir, n_concurrent, extra_args, settings, key)
     return _run_local(path, agent, model, jobs_dir, n_concurrent, extra_args, key)

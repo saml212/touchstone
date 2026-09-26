@@ -64,6 +64,26 @@ def test_summary_gate_skipped_clause():
     assert line.endswith("Built 1 task from 3 conversations (gate skipped).")
 
 
+def test_summary_names_why_gate_and_baseline_were_skipped():
+    # A Docker-daemon failure moved every task to needs-review; the summary must say so, not just
+    # "0 gated, 7 needs review" (the stranger's false-green class).
+    stats = {"tasks": 7, "conversations": 12, "gated": 0, "needs_review": 7,
+             "skipped_reason": "Docker daemon not running on local. Start Docker."}
+    line = summary(MAP, FIDELITY, stats)
+    assert line.endswith("Gate and baseline skipped: Docker daemon not running on local. "
+                         "Start Docker.")
+
+
+def test_gate_infra_note_only_fires_on_harbor_failures_with_nothing_gated():
+    from touchstone.survey.survey import _gate_infra_note
+
+    down = {"gated": [], "needs_review": [{"failed_side": "harbor", "reason": "Docker down.\nx"}]}
+    assert _gate_infra_note(down) == "Docker down."
+    # a real gate result (oracle/nop failures, some gated) is not an infra skip
+    assert _gate_infra_note({"gated": ["t1"], "needs_review": []}) == ""
+    assert _gate_infra_note({"gated": [], "needs_review": [{"failed_side": "oracle"}]}) == ""
+
+
 def test_summary_baseline_sentence_is_the_design_line():
     stats = {"tasks": 7, "built_names": [f"t{i}" for i in range(7)],
              "conversations": 12, "gated": 7, "needs_review": 0}

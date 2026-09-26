@@ -143,12 +143,23 @@ def _gate_and_baseline(repo, env_result, settings, force, skip_gate, skip_baseli
     return gate, baseline
 
 
+def _gate_infra_note(gate: dict | None) -> str:
+    """When the gate produced no gated task and every failure was a Harbor/daemon error, the first
+    such reason — so the summary explains why gate + baseline were skipped, not just '0 gated'."""
+    if not gate or gate.get("gated"):
+        return ""
+    reasons = [r.get("reason", "") for r in gate.get("needs_review", [])
+               if r.get("failed_side") == "harbor" and r.get("reason")]
+    return reasons[0].splitlines()[0] if reasons else ""
+
+
 def _stats(conn, tasks, gate, skip_gate) -> dict:
     built = set((tasks or {}).get("written", []) + (tasks or {}).get("reused", []))
     return {"tasks": len(built), "built_names": sorted(built),
             "conversations": len(store.list_episodes(conn)) if conn else 0,
             "gated": len((gate or {}).get("gated", [])),
             "needs_review": len((gate or {}).get("needs_review", [])),
+            "skipped_reason": _gate_infra_note(gate),
             "gate_skipped": skip_gate or (gate is None and bool(built))}
 
 

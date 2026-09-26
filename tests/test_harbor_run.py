@@ -99,6 +99,7 @@ def test_run_local_includes_model_when_given(tmp_path, monkeypatch):
 def test_remote_when_no_docker_rsyncs_runs_over_ssh_and_syncs_back(tmp_path, monkeypatch):
     calls = _record_calls(monkeypatch)
     monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (True, "27"))
     ds = _dataset(tmp_path)
     settings = Settings(harbor_host="mini", harbor_remote_root="/remote")
     job = run_mod.run(ds, "oracle", jobs_dir=tmp_path / "jobs", settings=settings)
@@ -119,6 +120,7 @@ def test_remote_when_no_docker_rsyncs_runs_over_ssh_and_syncs_back(tmp_path, mon
 def test_remote_custom_agent_also_ships_touchstone_and_uses_uvx(tmp_path, monkeypatch):
     calls = _record_calls(monkeypatch)
     monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (True, "27"))
     ds = _dataset(tmp_path)
     settings = Settings(harbor_host="mini", harbor_remote_root="/remote")
     run_mod.run(ds, "touchstone.harbor.agent:TouchstoneAgent",
@@ -146,6 +148,7 @@ def test_local_custom_agent_forwards_key_via_env_not_argv(tmp_path, monkeypatch)
 def test_remote_custom_agent_forwards_key_on_stdin_not_argv(tmp_path, monkeypatch):
     calls = _record_calls(monkeypatch)
     monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (True, "27"))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
     settings = Settings(harbor_host="mini", harbor_remote_root="/remote")
     run_mod.run(_dataset(tmp_path), AGENT, model="openai/gpt-4o-mini",
@@ -178,6 +181,7 @@ def test_remote_ssh_and_rsync_bound_connect_timeout_so_unreachable_host_never_ha
     # TCP connect or a password/passphrase prompt.
     calls = _record_calls(monkeypatch)
     monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (True, "27"))
     settings = Settings(harbor_host="mini", harbor_remote_root="/remote")
     run_mod.run(_dataset(tmp_path), "oracle", jobs_dir=tmp_path / "jobs", settings=settings)
     for cmd in calls:
@@ -253,3 +257,32 @@ def test_simulated_user_agent_follows_the_model_provider():
     assert run_mod.simulated_user_args("", "openai/gpt-4o-mini")[:2] == ["--user-agent", "codex"]
     assert run_mod.simulated_user_args("", "anthropic/claude-sonnet-4-5")[1] == "claude-code"
     assert run_mod.simulated_user_args("aider", "openai/x")[1] == "aider"
+
+
+def test_require_target_local_when_local_docker_up(monkeypatch):
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: True)
+    assert run_mod._require_target(Settings(harbor_host="mini")) == "local"
+
+
+def test_require_target_remote_when_only_host_docker_up(monkeypatch):
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (True, "27.0"))
+    assert run_mod._require_target(Settings(harbor_host="mini")) == "remote"
+
+
+def test_require_target_raises_one_sentence_when_no_daemon(monkeypatch):
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    with pytest.raises(run_mod.DockerDaemonError) as exc:
+        run_mod._require_target(Settings())  # no local docker, no host
+    msg = str(exc.value)
+    assert msg == ("Docker daemon not running on local. Start Docker (colima start / Docker "
+                   "Desktop) or set [harbor] host in touchstone.toml.")
+    assert "\n" not in msg  # one line, no traceback
+
+
+def test_require_target_names_the_host_when_its_daemon_is_down(monkeypatch):
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (False, ""))
+    with pytest.raises(run_mod.DockerDaemonError) as exc:
+        run_mod._require_target(Settings(harbor_host="mini"))
+    assert "on host mini" in str(exc.value)

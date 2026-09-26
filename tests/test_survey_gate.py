@@ -160,6 +160,7 @@ def test_build_image_remote(monkeypatch, tmp_path):
     from touchstone.harbor import run as run_mod
     seen = []
     monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (True, "27"))
     monkeypatch.setattr(run_mod, "_call", lambda cmd: seen.append(cmd))
     run_mod.build_image(tmp_path, "img:1", Settings(harbor_host="h", harbor_remote_root="/r"))
     assert any(c[0] == "rsync" for c in seen)

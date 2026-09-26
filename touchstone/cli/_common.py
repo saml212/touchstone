@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sqlite3
 from contextlib import contextmanager
 
@@ -15,6 +16,25 @@ from ..config import load_settings
 def _fail(message: str) -> None:
     typer.echo(message, err=True)
     raise typer.Exit(1)
+
+
+def _debug() -> bool:
+    """Tracebacks are opt-in: --debug (which sets this) or TOUCHSTONE_DEBUG=1."""
+    return bool(os.environ.get("TOUCHSTONE_DEBUG"))
+
+
+@contextmanager
+def _daemon_guard():
+    """Turn a missing Docker daemon into one clear line + exit 1, never a traceback (unless
+    --debug). The single place the CLI renders the shared DockerDaemonError."""
+    from ..harbor.run import DockerDaemonError
+
+    try:
+        yield
+    except DockerDaemonError as exc:
+        if _debug():
+            raise
+        _fail(str(exc))
 
 
 @contextmanager

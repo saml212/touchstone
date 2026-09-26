@@ -184,6 +184,8 @@ def _task_clause(stats: dict) -> str:
     if not convos:
         return ""
     head = f" Built {_plural(tasks, 'task')} from {_plural(convos, 'conversation')}"
+    if stats.get("skipped_reason"):
+        return head + f". Gate and baseline skipped: {stats['skipped_reason']}"
     if stats.get("gate_skipped"):
         return head + " (gate skipped)."
     return head + f" ({stats.get('gated', 0)} gated, {stats.get('needs_review', 0)} needs review)."

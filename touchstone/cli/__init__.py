@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -58,8 +59,11 @@ def main(
     version: bool = typer.Option(  # noqa: ARG001 — consumed eagerly by the callback
         None, "--version", callback=_version_callback, is_eager=True,
         help="Print the version and exit."),
+    debug: bool = typer.Option(False, "--debug", help="Show full tracebacks on error."),
 ) -> None:
     """Touchstone — turn your running agent into a benchmark, review it, train on it."""
+    if debug:
+        os.environ["TOUCHSTONE_DEBUG"] = "1"
     if ctx.invoked_subcommand is not None:
         return
     typer.echo("Touchstone — the loop:")

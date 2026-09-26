@@ -112,3 +112,35 @@ def test_bench_adds_simulated_user_flags_for_a_multi_turn_dataset(tmp_path, monk
     extra = seen["extra_args"]
     assert "--bridge" in extra and "acp" in extra and "--user-agent" in extra
     assert "openai/gpt-4o-mini" in extra  # user model defaults to the agent-under-test's model
+
+
+def test_bench_prints_one_line_when_docker_daemon_is_down(tmp_path, monkeypatch):
+    # The stranger's blocker: bench dumped a raw traceback. It must print one sentence + exit 1.
+    import touchstone.harbor.run as run_mod
+
+    def _no_daemon(*_a, **_k):
+        raise run_mod.DockerDaemonError(
+            "Docker daemon not running on local. Start Docker (colima start / Docker Desktop) "
+            "or set [harbor] host in touchstone.toml.")
+
+    monkeypatch.delenv("TOUCHSTONE_DEBUG", raising=False)
+    monkeypatch.setattr(run_mod, "run", _no_daemon)
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["bench", "-m", "openai/gpt-4o-mini"])
+    assert result.exit_code == 1
+    assert "Docker daemon not running on local" in result.output
+    assert "Traceback" not in result.output and "run.py" not in result.output
+
+
+def test_bench_debug_flag_lets_the_traceback_through(tmp_path, monkeypatch):
+    import touchstone.harbor.run as run_mod
+
+    def _no_daemon(*_a, **_k):
+        raise run_mod.DockerDaemonError("Docker daemon not running on local. ...")
+
+    monkeypatch.delenv("TOUCHSTONE_DEBUG", raising=False)
+    monkeypatch.setattr(run_mod, "run", _no_daemon)
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["--debug", "bench", "-m", "openai/gpt-4o-mini"])
+    assert result.exit_code != 0
+    assert isinstance(result.exception, run_mod.DockerDaemonError)

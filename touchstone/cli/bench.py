@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 
 from . import app
+from ._common import _daemon_guard
 
 AGENT_PATH = "touchstone.harbor.agent:TouchstoneAgent"
 _MODES = ("packaged", "replica")
@@ -54,8 +55,10 @@ def bench(
     if run_mod.dataset_is_multi_turn(dataset):  # conversational tasks need Harbor's simulated user
         extra += run_mod.simulated_user_args(settings.survey_user_agent,
                                              settings.survey_user_model or model)
-    job_dir = run_mod.run(dataset, AGENT_PATH, model=model, jobs_dir=jobs_dir or f"{dataset}/jobs",
-                          n_concurrent=n_concurrent, extra_args=extra, settings=settings)
+    with _daemon_guard():
+        job_dir = run_mod.run(dataset, AGENT_PATH, model=model,
+                              jobs_dir=jobs_dir or f"{dataset}/jobs",
+                              n_concurrent=n_concurrent, extra_args=extra, settings=settings)
     job = jobs_mod.Job.read(job_dir)
     typer.echo(f"\n{job_dir}")
     _print_rates(jobs_mod.pass_rates(job))
