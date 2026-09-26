@@ -63,3 +63,22 @@ def test_card_fake_is_not_rescrubbed_into_a_phone():
     out = s.text("card 4111 1111 1111 1111")
     assert "4111" not in out
     assert "4000-0000-0000-0001" in out
+
+
+def test_scrub_scrubs_dict_keys_consistently_with_values():
+    # A store keyed by a 10-digit id: the key and the same id as a field value and as an argument
+    # must all map to the SAME fake, or a replay can't resolve it against the scrubbed state.db.
+    s = Scrubber()
+    data = {"9523456873": {"product_id": "9523456873", "name": "Keyboard"}}
+    scrubbed = s.scrub(data)
+    key = next(iter(scrubbed))
+    assert "9523456873" not in key
+    assert scrubbed[key]["product_id"] == key  # key and field value share one fake
+    arg = s.scrub({"product_id": "9523456873"})
+    assert arg["product_id"] == key  # a tool argument maps to the same fake
+
+
+def test_scrub_keeps_non_pii_keys():
+    s = Scrubber()
+    scrubbed = s.scrub({"user_id": "u1", "email": "x@y.com"})
+    assert "user_id" in scrubbed and "email" in scrubbed  # ordinary field names untouched

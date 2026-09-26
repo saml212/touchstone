@@ -54,11 +54,17 @@ class Scrubber:
         return self._sub_names(_PII.sub(self._replace, value))
 
     def scrub(self, value):
-        """Return a scrubbed copy of any JSON-like value (str / dict / list / scalar)."""
+        """Return a scrubbed copy of any JSON-like value (str / dict / list / scalar).
+
+        Dict KEYS are scrubbed as well as values: a store keyed by a document's id (a product keyed
+        by its 10-digit id) must map that key to the same fake as the id where it appears as a field
+        or a tool argument, so replaying a recorded call against the scrubbed state.db still resolves
+        it. A non-string key is left unchanged."""
         if isinstance(value, str):
             return self.text(value)
         if isinstance(value, dict):
-            return {k: self.scrub(v) for k, v in value.items()}
+            return {(self.text(k) if isinstance(k, str) else k): self.scrub(v)
+                    for k, v in value.items()}
         if isinstance(value, list):
             return [self.scrub(v) for v in value]
         return value
