@@ -12,7 +12,8 @@ def _describe_one(change: dict) -> str:
     op = change.get("op", "edit")
     file = change.get("file", "?")
     if op == "text":
-        return f"rewrite {Path(file).stem}"
+        return (f"rewrite the {Path(file).stem} — this changes what the customer asks, not how it "
+                "is scored, so rewards will not move until the tasks are re-run")
     if Path(file).name == "reward.toml":
         return f"set the {change.get('criterion')} weight to {change.get('weight')}"
     if op == "add":

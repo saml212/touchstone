@@ -73,6 +73,19 @@ def wants_everywhere(history: list[dict]) -> bool:
     return any(word in f" {said} " for word in _EVERYWHERE)
 
 
+_WORDING = ("wording", "reword", "re-word", "rephrase", "phras", "the instruction",
+            "instruction is", "what the customer asks", "what it asks", "the ask",
+            "the prompt", "typo", "grammar", "worded")
+
+
+def wants_wording_change(history: list[dict]) -> bool:
+    """Did the person, since the agent last spoke, say the task's WORDING is wrong (not the check)?
+    Only then may the reviewer touch the instruction; a plain check disagreement never does."""
+    idx = max((i for i, m in enumerate(history) if m.get("role") == "assistant"), default=-1)
+    said = " ".join(m.get("text", "").lower() for m in history[idx + 1:] if m.get("role") == "user")
+    return any(word in said for word in _WORDING)
+
+
 def as_messages(history: list[dict]) -> list[dict]:
     """Room messages -> chat messages: participants are users, the agent is the assistant."""
     out = []

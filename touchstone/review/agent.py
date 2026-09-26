@@ -68,6 +68,7 @@ class ReviewAgent:
         if self.provider is None:
             return AgentTurn(say="Tell me when to start and I'll pull up the first trial.")
         self._scope_all = replies.wants_everywhere(history)
+        self._wording = replies.wants_wording_change(history)
         say = self._ground(self._run_loop(history))
         self._save_scratch()
         return AgentTurn(say=say, draft=self.draft(), commit=self.committed())
@@ -188,10 +189,23 @@ class ReviewAgent:
 
     def _propose_change(self, args: dict) -> dict:
         task, change = self._task_arg(args), args.get("change")
+        self._guard_instruction_change(change)
         changes.validate(self.dataset_dir / "tasks" / task, change)  # bad shape -> re-draft
         self.scratch.proposed = change
         self.scratch.readback = readback.describe(change)
         return {"readback": self.scratch.readback}
+
+    def _guard_instruction_change(self, change) -> None:
+        """A disagreement about a CHECK changes a criterion, never the instruction wording — an
+        instruction edit moves no reward on the recorded trials, so it only reads as broken. The
+        instruction is editable only when the person said the wording itself is wrong."""
+        if getattr(self, "_wording", False):
+            return
+        if any(c.get("op") == "text" for c in changes.as_list(change)):
+            raise changes.ChangeError(
+                "this is a disagreement about a check — change a criterion (edit, add, remove, or "
+                "a weight), not the instruction. Rewrite the instruction only if they say the "
+                "wording itself is wrong.")
 
     def _apply_change(self, args: dict) -> dict:
         # Apply ONLY the proposal that was read back (self.scratch.proposed) — never a change the

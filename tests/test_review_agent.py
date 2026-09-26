@@ -522,3 +522,36 @@ def test_apply_scope_comes_from_the_persons_words(tmp_path):
     assert replies.wants_everywhere(history) is False
     history.append({"role": "user", "speaker": "sam", "text": "Actually, everywhere, always."})
     assert replies.wants_everywhere(history) is True
+
+
+def test_wording_change_signal_read_from_the_persons_words():
+    from touchstone.review import replies
+
+    check = [{"role": "assistant", "text": "agree?"},
+             {"role": "user", "speaker": "sam", "text": "the delivery date should count too"}]
+    assert replies.wants_wording_change(check) is False
+    wording = [{"role": "assistant", "text": "agree?"},
+               {"role": "user", "speaker": "sam", "text": "the instruction is worded wrong"}]
+    assert replies.wants_wording_change(wording) is True
+
+
+def test_check_disagreement_refuses_an_instruction_change(tmp_path, conn):
+    """A disagreement about a CHECK must steer to a criterion change; an instruction rewrite is
+    refused (it would move no reward) unless the person said the wording itself is wrong."""
+    import pytest
+
+    from touchstone.review import changes
+
+    _dataset(tmp_path)
+    agent = ReviewAgent(None, conn, _room(conn), _settings(tmp_path))
+    agent.scratch.current = {"task": "issue-a-refund-1", "trial": "src/issue-a-refund-1__x"}
+    text_change = {"op": "text", "file": "instruction.md", "text": "Refund order B6991 now."}
+    agent._wording = False
+    with pytest.raises(changes.ChangeError, match="not the instruction"):
+        agent._propose_change({"task": "issue-a-refund-1", "change": text_change})
+    assert agent.scratch.proposed is None  # nothing was drafted
+
+    # when the person said the wording is wrong, the rewrite is allowed and reads back the caveat
+    agent._wording = True
+    out = agent._propose_change({"task": "issue-a-refund-1", "change": text_change})
+    assert "rewards will not move until the tasks are re-run" in out["readback"]
