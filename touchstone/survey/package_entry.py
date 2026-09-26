@@ -133,11 +133,15 @@ def _has_tool_call(db_path: Path) -> bool:
 
 
 def _sim_mounts(map_data: dict, env_result: dict, out: Path) -> list[dict]:
+    from . import db_service
     from .simulate import service_host
 
     envs = env_result.get("base_url_envs", {})
+    # `kind`/`db_url` let a db service start from its materialized state.db (no app.py, no port);
+    # without them fidelity.simulators_running tries to `python app.py` and the db sim never starts.
     return [{"sim_dir": out / "simulators" / s["name"], "env": envs.get(s["name"]),
-             "host": service_host(s)} for s in crossing_services(map_data)]
+             "host": service_host(s), "kind": s.get("kind"), "db_url": db_service.is_url(s)}
+            for s in crossing_services(map_data)]
 
 
 def _run_and_check(agent_dir: Path, repo: Path, base_urls: dict, sim_hosts: dict, message: str,

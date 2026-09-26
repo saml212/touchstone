@@ -6,6 +6,7 @@ interpreter) with no crossing services, so it stays hermetic — no uv, no model
 
 import sys
 import tomllib
+from pathlib import Path
 
 from touchstone import store
 from touchstone.config import Settings
@@ -166,3 +167,17 @@ def test_build_package_idempotent(tmp_path):
                                   ScriptedSurveyProvider([]), out, _settings())
     conn.close()
     assert again["mode"] == "packaged"  # read back from agent.toml, no provider call
+
+
+def test_sim_mounts_marks_db_service_so_it_starts_without_app_py():
+    # A db service has no app.py; the mount must carry kind="db" (and db_url) or the packaged
+    # adapter check tries to `python app.py` and the simulator never starts.
+    from touchstone.survey.package_entry import _sim_mounts
+
+    map_data = {"tools": [{"name": "t", "import_path": "m:t", "calls": ["store"]}],
+                "services": [{"name": "store", "kind": "db", "base_url_env": None,
+                              "base_url_default": ":memory:", "calls": []}]}
+    env_result = {"base_url_envs": {"store": "TOUCHSTONE_DB_STORE"}}
+    mounts = _sim_mounts(map_data, env_result, Path("/tmp/out"))
+    assert mounts[0]["kind"] == "db"
+    assert mounts[0]["db_url"] is False
