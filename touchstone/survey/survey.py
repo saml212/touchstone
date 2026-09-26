@@ -110,13 +110,15 @@ def _invoke_step(repo, map_data, prov, events, out, scrub, settings, fidelity_da
 
 
 def _remeasure(repo, prov, map_data, events, out, scrub, settings, invoke, fidelity_data) -> None:
-    from . import db_service
+    from . import db_seed, db_service
 
     threshold = settings.survey_fidelity_threshold
     for service in crossing_services(map_data):
         name = service["name"]
         if fidelity_data.get(name, {}).get("score", 1.0) >= threshold:
             continue
+        if db_service.is_db(service):
+            db_seed.prime_scrubber(repo, service, scrub)  # scrub recordings like the source
         tools = service_tools(map_data, service)
         ctx = _replay_ctx(service, tools)
         calls = service_calls(map_data, events, name)

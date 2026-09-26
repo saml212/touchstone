@@ -265,6 +265,7 @@ def generate_db_simulator(repo, provider, service: dict, tools: list[dict], even
     sim_dir = sim_root / service["name"]
     ctx = _replay_ctx(service, tools)
     calls = resolve_service_calls(service, tools, events, calls)
+    db_seed.prime_scrubber(repo, service, scrub)  # keep reuse scrubbing consistent with the source
     if _has_files(sim_dir) and not force:
         result = fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
     else:

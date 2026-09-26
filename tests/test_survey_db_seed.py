@@ -96,3 +96,20 @@ def test_data_files_for_prefers_explicit_and_skips_urls(tmp_path):
     rel = _repo_with(tmp_path, "store.json", "{}")
     assert db_seed.data_files_for(tmp_path, {"data_files": [rel]}) == [rel]
     assert db_seed.data_files_for(tmp_path, {"base_url_default": "postgresql://h/db"}) == []
+
+
+def test_prime_scrubber_makes_reuse_scrubbing_consistent(tmp_path):
+    # Seed once (scrubber A writes scrubbed source), then a FRESH scrubber B must, after priming,
+    # scrub a recorded id to the same fake the source holds — else a reused sim can't be replayed.
+    rel = _repo_with(tmp_path, "users.json",
+                     json.dumps({"9612497925": {"id": "9612497925", "email": "a@b.com"},
+                                 "1008292230": {"id": "1008292230", "email": "c@d.com"}}))
+    sim = tmp_path / "sim"
+    from touchstone.survey.scrub import Scrubber
+    a = Scrubber()
+    db_seed.copy_data_files(sim, tmp_path, [rel], a)
+    b = Scrubber()
+    db_seed.prime_scrubber(tmp_path, {"data_files": [rel]}, b)
+    # both scrubbers map the same raw id to the same fake
+    assert a.scrub({"id": "9612497925"}) == b.scrub({"id": "9612497925"})
+    assert a.text("a@b.com") == b.text("a@b.com")

@@ -59,6 +59,20 @@ def data_files_for(repo: Path, service: dict) -> list[str]:
     return [c for c in _expand_braces(default) if (repo / c).is_file()]
 
 
+def prime_scrubber(repo: Path, service: dict, scrub) -> None:
+    """Populate the shared scrubber's fake map from the raw data files, in the order and manner
+    copy_data_files scrubbed them. A fidelity run that REUSES an existing scrubbed `source/` (no
+    re-seed) then scrubs the recordings to the identical fakes the state.db holds — without this, a
+    fresh scrubber numbers the recordings differently and the replay never matches."""
+    for rel in data_files_for(repo, service):
+        src = repo / rel
+        ext = src.suffix.lower()
+        if ext == ".json":
+            scrub.scrub(json.loads(src.read_text(encoding="utf-8")))
+        elif ext == ".csv":
+            scrub.text(src.read_text(encoding="utf-8", errors="replace"))
+
+
 def _expand_braces(pattern: str) -> list[str]:
     match = _BRACE.search(pattern)
     if not match:
