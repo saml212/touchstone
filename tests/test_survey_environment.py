@@ -136,6 +136,18 @@ def test_trace_installs_net_shim_from_env(monkeypatch, tmp_path):
     netshim._MAPPING.clear()
 
 
+def test_environment_bakes_acp_server_deps(tmp_path):
+    # The ACP server runs inside the image on a simulated-user trial; its deps must be baked at
+    # build time so no fragile runtime pip install can leave a trial silently unscored.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("httpx>=0.27\n", encoding="utf-8")
+    out = tmp_path / "touchstone"
+    build_environment(repo, MAP, out)
+    reqs = (out / "environment" / "requirements.txt").read_text()
+    assert "agent-client-protocol" in reqs and "httpx" in reqs
+
+
 def test_environment_flags_missing_deps(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

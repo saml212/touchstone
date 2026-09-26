@@ -30,6 +30,11 @@ from .writes import atomic_write
 _SKIP_DIRS = {".git", ".touchstone", "touchstone", ".venv", "node_modules", "__pycache__"}
 _SECRET_RE = re.compile(r"(^\.env$|^\.env\.|\.pem$|\.key$|^id_rsa|secret)", re.IGNORECASE)
 _SIM_RUNTIME = ["fastapi", "uvicorn", "pydantic"]
+# The ACP server (touchstone.harbor.acp_server) runs the loop inside the sandbox on a simulated-user
+# trial; it needs the acp package and the providers' httpx client. Baking them here means the image
+# carries them at build time, so no fragile runtime `pip install` (which fails on an
+# externally-managed Python, offline, or without uv) can leave a trial silently unscored.
+_ACP_RUNTIME = ["agent-client-protocol", "httpx"]
 _SIM_SKIP = {"state.db", ".sim.log"}
 
 DOCKERFILE = """\
@@ -189,7 +194,7 @@ def _touchstone_deps() -> list[str]:
 
 
 def _requirements_text(deps: list[str]) -> str:
-    merged = list(dict.fromkeys([*deps, *_SIM_RUNTIME, *_touchstone_deps()]))
+    merged = list(dict.fromkeys([*deps, *_SIM_RUNTIME, *_ACP_RUNTIME, *_touchstone_deps()]))
     return "\n".join(merged) + "\n"
 
 
