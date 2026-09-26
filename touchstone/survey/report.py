@@ -49,9 +49,11 @@ def simulators_section(fidelity: dict) -> str:
     if not fidelity:
         return "## Simulators\n\nNo network-crossing services; no simulators needed."
     rows = [[name, f"{r.get('score', 0):.2f}",
-             f"{r.get('reproduced', 0)}/{r.get('calls', 0)}", _sim_status(r)]
+             f"{r.get('reproduced', 0)}/{r.get('calls', 0)}", r.get("source") or "—",
+             _sim_status(r)]
             for name, r in sorted(fidelity.items())]
-    return "## Simulators\n\n" + _table(["service", "fidelity", "reproduced", "status"], rows)
+    return "## Simulators\n\n" + _table(
+        ["service", "fidelity", "reproduced", "seed", "status"], rows)
 
 
 def _below_threshold(fidelity: dict) -> list[str]:

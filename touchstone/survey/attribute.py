@@ -89,6 +89,16 @@ def service_calls(map_data: dict, events: list[ToolEvent], name: str) -> list[To
     return attribute(map_data, events).get(name, [])
 
 
+def resolve_service_calls(service: dict, tools: list[dict], events: list[ToolEvent],
+                          calls: list[ToolEvent] | None) -> list[ToolEvent]:
+    """The recorded calls a service served: the already-attributed `calls` when the caller resolved
+    shared names, else `events` filtered by this service's tool names (fine when no name clash)."""
+    if calls is not None:
+        return calls
+    names = {t["name"] for t in tools}
+    return [e for e in events if e.tool in names]
+
+
 def effective_crossing_services(map_data: dict, events: list[ToolEvent]) -> list[dict]:
     """Crossing services with at least one attributed call — the rest are dropped as noise."""
     attributed = attribute(map_data, events)

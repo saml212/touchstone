@@ -11,13 +11,15 @@ touchstone.survey.db_sim <sim_dir>` rebuilds state.db; `start.sh` runs it before
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
 from ..llm.prompt import extract_json
+from . import db_seed
 from .db_service import state_db
 from .writes import atomic_write, atomic_write_json
+
+_SEED_MARK = ".seed-source"
 
 DB_SIM_PROMPT = """You are generating a SIMULATOR of a DATABASE so an AI agent can be tested
 offline.
@@ -107,77 +109,43 @@ def unsupported(sim_dir: Path) -> str | None:
     return path.read_text(encoding="utf-8").strip() if path.is_file() else None
 
 
-_ARTIFACTS = ("schema.sql", "seed.json", "collections.json", "UNSUPPORTED.md", "state.db")
+_ARTIFACTS = ("schema.sql", "seed.json", "collections.json", "UNSUPPORTED.md", "state.db",
+              _SEED_MARK)
 
 
 def _clear(sim_dir: Path) -> None:
+    import shutil
+
     for name in _ARTIFACTS:
         (sim_dir / name).unlink(missing_ok=True)
+    src = db_seed.source_dir(sim_dir)
+    if src.is_dir():
+        shutil.rmtree(src)
+
+
+def _mark_source(sim_dir: Path, label: str) -> None:
+    atomic_write(sim_dir / _SEED_MARK, label + "\n")
+
+
+def seed_source(sim_dir: str | Path) -> str | None:
+    """The seed source used for this simulator: data_files | recorded | synthetic (or None)."""
+    path = Path(sim_dir) / _SEED_MARK
+    return path.read_text(encoding="utf-8").strip() if path.is_file() else None
 
 
 
 
 def materialize(sim_dir: str | Path) -> Path | None:
-    """Build a fresh state.db from the written files. Returns its path, or None when unsupported."""
+    """Build a fresh state.db from the written source (db_seed owns every shape). Returns its path,
+    or None when the service is unsupported."""
     sim_dir = Path(sim_dir)
     db = state_db(sim_dir)
-    if unsupported(sim_dir):
-        db.unlink(missing_ok=True)
-        return None
     db.unlink(missing_ok=True)
-    conn = sqlite3.connect(str(db))
-    try:
-        if (sim_dir / "collections.json").is_file():
-            _materialize_collections(conn, _read_json(sim_dir / "collections.json"))
-        else:
-            _materialize_relational(conn, sim_dir)
-        conn.commit()
-    finally:
-        conn.close()
-    return db
-
-
-def _read_json(path: Path):
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _materialize_relational(conn, sim_dir: Path) -> None:
-    schema = (sim_dir / "schema.sql").read_text(encoding="utf-8")
-    conn.executescript(schema)
-    seed = _read_json(sim_dir / "seed.json") if (sim_dir / "seed.json").is_file() else {}
-    for table, rows in seed.items():
-        for row in rows or []:
-            _insert_row(conn, table, row)
-
-
-def _insert_row(conn, table: str, row: dict) -> None:
-    cols = list(row.keys())
-    placeholders = ", ".join("?" for _ in cols)
-    columns = ", ".join(cols)
-    values = [_scalar(row[c]) for c in cols]
-    conn.execute(f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", values)
-
-
-def _scalar(value):
-    """SQLite stores scalars; a nested object/array is stored as its JSON text."""
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False, sort_keys=True)
-    return value
-
-
-def _materialize_collections(conn, collections: dict) -> None:
-    for name, docs in collections.items():
-        conn.execute(f"CREATE TABLE {name} (id TEXT PRIMARY KEY, doc TEXT)")
-        for doc_id, doc in _doc_items(docs):
-            conn.execute(f"INSERT INTO {name} (id, doc) VALUES (?, ?)",
-                         [str(doc_id), json.dumps(doc, ensure_ascii=False, sort_keys=True)])
-
-
-def _doc_items(docs):
-    """A collection as (id, document) pairs, accepting {id: doc} or a list of documents."""
-    if isinstance(docs, dict):
-        return list(docs.items())
-    return [(d.get("id") if isinstance(d, dict) else i, d) for i, d in enumerate(docs or [])]
+    if unsupported(sim_dir):
+        return None
+    if db_seed.has_source(sim_dir):
+        return db_seed.materialize_source(sim_dir, db)
+    return db_seed.materialize_files(sim_dir, db)
 
 
 def is_document_store(sim_dir: str | Path) -> bool:
@@ -264,34 +232,60 @@ def _generate_or_unsupported(provider, repo, service, sim_dir, tool_source, exam
         return False
 
 
+def _seed(repo, provider, service, tools, sim_dir, scrub, calls) -> str:
+    """Seed the simulator from the first source that applies and return its label. Data files and
+    recorded reads never call the model; only `synthetic` (path c) does."""
+    from .simulate import _examples, _tool_source
+
+    _clear(sim_dir)
+    sim_dir.mkdir(parents=True, exist_ok=True)
+    data_files = service.get("data_files") or []
+    if data_files and db_seed.copy_data_files(sim_dir, repo, data_files, scrub):
+        atomic_write(sim_dir / "README.md",
+                     f"Seeded from repo data files: {', '.join(data_files)} (scrubbed).\n")
+        _mark_source(sim_dir, "data_files")
+        return "data_files"
+    if calls and db_seed.seed_recorded(sim_dir, calls, scrub, service["name"]):
+        atomic_write(sim_dir / "README.md", "Seeded from the recorded tool reads (scrubbed).\n")
+        _mark_source(sim_dir, "recorded")
+        return "recorded"
+    _generate_or_unsupported(provider, repo, service, sim_dir, _tool_source(repo, tools),
+                             _examples(calls, scrub))
+    _mark_source(sim_dir, "synthetic")
+    return "synthetic"
+
+
 def generate_db_simulator(repo, provider, service: dict, tools: list[dict], events, sim_root: Path,
                           scrub, settings, force: bool = False, calls=None) -> dict:
     """Write simulators/<name>/ for a db service; low-score regen is deferred to regenerate()."""
     from . import fidelity
-    from .simulate import _examples, _replay_ctx, _service_calls, _tool_source
+    from .attribute import resolve_service_calls
+    from .simulate import _replay_ctx
 
     sim_dir = sim_root / service["name"]
     ctx = _replay_ctx(service, tools)
-    calls = _service_calls(service, tools, events, calls)
+    calls = resolve_service_calls(service, tools, events, calls)
     if _has_files(sim_dir) and not force:
-        return fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
-    tool_source = _tool_source(repo, tools)
-    examples = _examples(calls, scrub)
-    _generate_or_unsupported(provider, repo, service, sim_dir, tool_source, examples)
-    return fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
+        result = fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
+    else:
+        _seed(repo, provider, service, tools, sim_dir, scrub, calls)
+        result = fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
+    result["source"] = seed_source(sim_dir)
+    return result
 
 
 def regenerate(repo, provider, service: dict, tools: list[dict], events, sim_root: Path, scrub,
                settings, invoke, prev: dict, calls=None) -> dict:
     """Regenerate a below-threshold db sim with the invoke-driven failures as a hint; keeps best."""
     from . import fidelity
-    from .simulate import _examples, _replay_ctx, _service_calls, _tool_source
+    from .attribute import resolve_service_calls
+    from .simulate import _examples, _replay_ctx, _tool_source
 
     sim_dir = sim_root / service["name"]
-    if unsupported(sim_dir):
-        return prev
+    if unsupported(sim_dir) or db_seed.has_source(sim_dir):
+        return prev  # data-file / recorded seeds are deterministic — never re-ask the model
     ctx = _replay_ctx(service, tools)
-    calls = _service_calls(service, tools, events, calls)
+    calls = resolve_service_calls(service, tools, events, calls)
     examples = _examples(calls, scrub)
     snapshot = _snapshot(sim_dir)
     if not _generate_or_unsupported(provider, repo, service, sim_dir, _tool_source(repo, tools),
@@ -306,8 +300,8 @@ def regenerate(repo, provider, service: dict, tools: list[dict], events, sim_roo
 
 
 def _has_files(sim_dir: Path) -> bool:
-    return any((sim_dir / n).is_file()
-               for n in ("schema.sql", "collections.json", "UNSUPPORTED.md"))
+    return db_seed.has_source(sim_dir) or any(
+        (sim_dir / n).is_file() for n in ("schema.sql", "collections.json", "UNSUPPORTED.md"))
 
 
 def main() -> None:

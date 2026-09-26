@@ -1,10 +1,8 @@
 """Measure how faithfully a simulator reproduces the recorded calls.
 
-Start the simulator (an HTTP server on a free port, or a materialized state.db and no server for a
-db service), replay each recorded call through the customer's real tool functions pointed at it, and
-compare each returned value with the recorded one after masking volatile fields (ids, timestamps,
-tokens). The process is always killed; a simulator that never becomes healthy scores 0.0 with its
-log tail, so the survey continues and flags it.
+Start the simulator (an HTTP server, or a materialized state.db and no server for a db service),
+replay each recorded call through the customer's real tools pointed at it, and compare each returned
+value with the recorded one after masking. A sim that never becomes healthy scores 0.0 with its log.
 """
 
 from __future__ import annotations
@@ -138,8 +136,7 @@ def _shim_host(host: str | None, base_url_env) -> bool:
 
 
 def _replay_spec(calls: list[ToolEvent], base: str, ctx: dict) -> dict:
-    """A replay spec that repoints the service at `base`: by env var when the map has one, and/or by
-    the net shim (simulators={host:base}); `invoke` in ctx routes calls through invoke.py."""
+    """A replay spec repointing the service at `base` (env var and/or net shim; `invoke` routes)."""
     spec = {"tools": ctx["tools"],
             "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
     if ctx.get("base_url_env"):
@@ -168,7 +165,6 @@ def _score(calls: list[ToolEvent], got_list: list[dict], threshold: float,
     masked: set = set()
     reproduced = 0
     for call, got in zip(calls, got_list, strict=False):
-        # Recorded outputs are stored JSON-decoded; decode a JSON-string result the same way first.
         ok, m = _compare(call.output, decode_output(got.get("got")))
         masked |= m
         if ok:
@@ -186,10 +182,8 @@ def _failed_result(calls: list[ToolEvent], threshold: float, detail: str) -> dic
             "masked_keys": [], "failures": [{"error": detail[-1500:]}]}
 
 
-_NO_REDIRECT = (
-    "service base URL is a constant the net shim cannot rewrite (no base_url_env and no http host "
-    "to redirect), so fidelity was not measured — survey never calls the real service"
-)
+_NO_REDIRECT = ("service base URL is a constant the net shim cannot rewrite (no base_url_env, no "
+                "http host to redirect), so fidelity was not measured — survey never calls it")
 
 
 def _redirectable(ctx: dict) -> bool:
@@ -241,9 +235,8 @@ def _sim_hosts(started: list[dict]) -> dict:
 
 @contextlib.contextmanager
 def simulators_running(mounts: list[dict]):
-    """Start each simulator (`mounts` = [{"sim_dir", "env", "host", "kind"}]) and yield
-    ({base_url_env: base}, {host: base}), always killing the processes. For a local check that needs
-    the services up (the packaged adapter check) rather than a fidelity score."""
+    """Start each simulator and yield ({base_url_env: base}, {host: base}), always killing the
+    processes — for the packaged adapter check that needs the services up, not a fidelity score."""
     started = _start_mounts(mounts)
     try:
         yield _base_urls(started), _sim_hosts(started)
@@ -272,10 +265,17 @@ def capture_state(mounts: list[dict], repo: Path, tools: dict, calls: list[ToolE
             _kill(s["proc"], s["log"])
 
 
+def _scrub_calls(calls: list[ToolEvent], scrub: Scrubber) -> list[ToolEvent]:
+    """state.db is seeded from scrubbed data, so the recorded calls are scrubbed the same way before
+    replay + compare — one namespace, so an id in an argument resolves the document it seeded."""
+    return [ToolEvent(tool=c.tool, arguments=scrub.scrub(c.arguments), output=scrub.scrub(c.output),
+                      episode=c.episode, module=c.module) for c in calls]
+
+
 def _measure_db(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict,
                 settings: Settings, scrub: Scrubber, threshold: float) -> dict:
-    """Fidelity for a db service: materialize state.db, replay real tools against it (no server),
-    compare returned. An unsupported service is reported 0 with its reason."""
+    """Fidelity for a db service: materialize state.db, replay real tools against it, compare
+    returned. An unsupported service is reported 0 with its reason."""
     from . import db_service, db_sim
 
     reason = db_sim.unsupported(sim_dir)
@@ -285,11 +285,12 @@ def _measure_db(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict,
         return result
     db = db_sim.materialize(sim_dir)
     base = db_service.value_for(str(db), url=ctx.get("db_url", False))
+    scrubbed = _scrub_calls(calls, scrub)
     try:
-        got_list = _run_replay(repo, calls, base, ctx, settings)
+        got_list = _run_replay(repo, scrubbed, base, ctx, settings)
     except _SimError as exc:
         return _failed_result(calls, threshold, str(exc))
-    return _score(calls, got_list, threshold, scrub)
+    return _score(scrubbed, got_list, threshold, scrub)
 
 
 def measure_service(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict,
@@ -301,8 +302,7 @@ def measure_service(sim_dir: Path, repo: Path, calls: list[ToolEvent], ctx: dict
     if ctx.get("kind") == "db":
         return _measure_db(sim_dir, repo, calls, ctx, settings, scrub, threshold)
     if calls and not _redirectable(ctx):
-        # Nothing can repoint the tool at the simulator, so the real base URL would be hit. Never do
-        # that: flag it below-threshold with an honest reason instead.
+        # Nothing can repoint the tool, so the real base URL would be hit: flag it below-threshold.
         return _failed_result(calls, threshold, _NO_REDIRECT)
     port = _free_port()
     log_path = sim_dir / ".sim.log"

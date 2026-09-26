@@ -61,6 +61,7 @@ MAP_SCHEMA = {
                     "name": {"type": "string"},
                     "kind": {"enum": ["http", "sdk", "db"]},
                     "base_url_env": _STR_OR_NULL, "base_url_default": _STR_OR_NULL,
+                    "data_files": {"type": "array", "items": {"type": "string"}},
                     "calls": {
                         "type": "array",
                         "items": {
@@ -112,6 +113,11 @@ A tool that reaches a database in-process — a SQL driver or ORM, or an in-memo
 JSON/dict files that is passed to every tool — is a "db" service, not "http". For a db service,
 "base_url_env" is the env var the code reads for the database path or URL (else null), and
 "base_url_default" is the literal it uses (":memory:", a file path, or a URL like postgresql://...).
+
+For a db service, also set "data_files" to the repo-relative paths of the files the code LOADS
+as its store (the JSON/CSV/SQLite files a load_data()-style function reads, e.g.
+"app/data/orders.json") when such files exist in the repo, else omit it or use []; these are copied
+verbatim as the seed, so the simulator never has to invent the data.
 
 Report every tool and every service you find. Keep "text" to 200 characters. Return only the JSON
 object."""

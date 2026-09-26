@@ -1,9 +1,8 @@
 """Generate a simulator for each service a tool reaches over the network.
 
-Per service: gather the tool source that calls it, the real service source when it lives in the
-repo, any OpenAPI docs, and up to 30 scrubbed recorded calls; ask the survey provider for a FastAPI
-`app.py`, a `seed.json`, and a `README.md`; write them; measure fidelity. If fidelity is below the
-threshold, regenerate once with the failing examples appended and keep whichever scored higher.
+Per service: gather the tool source, the real service source when it lives in the repo, any OpenAPI
+docs, and up to 30 scrubbed recorded calls; ask the survey provider for a FastAPI `app.py`, a
+`seed.json`, and a `README.md`; write them; measure fidelity, regenerating once below threshold.
 Services sharing a base-url env var collapse to one simulator.
 """
 
@@ -80,9 +79,7 @@ Return only the JSON object."""
 
 def crossing_services(map_data: dict) -> list[dict]:
     """Services a tool actually reaches over the network, one per base-url env var (else per name).
-
-    A service no tool calls (commonly the model SDK the agent thinks with) is not a boundary to
-    simulate — the model is swapped by setting — so it is dropped rather than given an empty sim."""
+    A service no tool calls (e.g. the model SDK) is dropped rather than given an empty sim."""
     called = {c for t in map_data.get("tools", []) for c in (t.get("calls") or [])}
     seen: set = set()
     out: list[dict] = []
@@ -103,7 +100,7 @@ def service_tools(map_data: dict, service: dict) -> list[dict]:
 
 def service_host(service: dict) -> str | None:
     """The host in the service's constant base URL, so the net shim can rewrite it when there is no
-    base_url_env to override (e.g. `http://api.weatherapi.com/v1` -> `api.weatherapi.com`)."""
+    base_url_env to override (e.g. `api.weatherapi.com`)."""
     from urllib.parse import urlsplit
 
     default = service.get("base_url_default")
@@ -168,11 +165,9 @@ def _openapi(repo: Path) -> str:
 
 
 def _base_path(service: dict) -> str:
-    """The path prefix the simulator must serve under. A constant-base-URL service is reached by the
-    net shim, which rewrites only scheme+host and keeps the path, so the base URL's own path (e.g.
-    /v1) is part of every request and the routes must include it. An env-configurable service is
-    repointed by replacing the whole base URL (path included), so its routes are the templates.
-    """
+    """The path prefix the simulator serves under: a constant-base-URL service is shimmed by
+    scheme+host only, so its base path (/v1) stays in every route; an env-configurable one is
+    repointed whole, so its routes are the templates."""
     from urllib.parse import urlsplit
 
     if service.get("base_url_env"):
@@ -230,10 +225,9 @@ _LOOPBACK = "127.0.0.1"
 
 
 def _force_loopback(app_source: str) -> str:
-    """A generated simulator must bind loopback only: during fidelity/capture it runs on the host as
-    a plain subprocess, so a model-emitted `host="0.0.0.0"` would expose the seeded service on the
-    LAN. Rewrite any bind-all address to 127.0.0.1 — the literal 0.0.0.0 and a quoted "::" have no
-    other use in this generated FastAPI app (a `[::2]` slice is unquoted, so it survives)."""
+    """A generated simulator must bind loopback only: it runs as a plain subprocess, so a
+    model-emitted `host="0.0.0.0"` would expose the seeded service on the LAN. Rewrite any bind-all
+    address to 127.0.0.1 (0.0.0.0 and a quoted "::" have no other use here)."""
     src = app_source.replace("0.0.0.0", _LOOPBACK)
     return re.sub(r"""(host\s*=\s*)(['"])::\2""", rf"\1\g<2>{_LOOPBACK}\2", src)
 
@@ -291,17 +285,6 @@ def _retry(provider, repo, service, tools, examples, sim_dir, calls, ctx, settin
     return prev
 
 
-def _service_calls(service: dict, tools: list[dict], events: list[ToolEvent],
-                   calls: list[ToolEvent] | None) -> list[ToolEvent]:
-    """The recorded calls this service served. `calls` is the attributed list when the caller
-    resolved shared tool names; otherwise fall back to filtering `events` by this service's tool
-    names (correct whenever no other crossing service shares a name)."""
-    if calls is not None:
-        return calls
-    names = {t["name"] for t in tools}
-    return [e for e in events if e.tool in names]
-
-
 def generate_simulator(repo: Path, provider: SurveyProvider, service: dict, tools: list[dict],
                        events: list[ToolEvent], sim_root: Path, scrub: Scrubber,
                        settings: Settings, force: bool = False,
@@ -314,11 +297,13 @@ def generate_simulator(repo: Path, provider: SurveyProvider, service: dict, tool
 
         return generate_db_simulator(repo, provider, service, tools, events, sim_root, scrub,
                                      settings, force, calls)
+    from .attribute import resolve_service_calls
+
     sim_dir = sim_root / service["name"]
     ctx = _replay_ctx(service, tools)
-    # `events` is in recorded order (tool_events), so a create-then-use pair replays in that order
-    # within its episode and the minted id is resolvable when the dependent call runs.
-    calls = _service_calls(service, tools, events, calls)
+    # `events` is in recorded order, so a create-then-use pair replays in order and the minted id
+    # is resolvable when the dependent call runs.
+    calls = resolve_service_calls(service, tools, events, calls)
     if (sim_dir / "app.py").exists() and not force:
         return _measure(sim_dir, repo, calls, ctx, settings, scrub)
     examples = _examples(calls, scrub)
