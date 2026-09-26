@@ -141,11 +141,20 @@ class TouchstoneAgent(*_BASES):
                 "python", "-m", "touchstone.harbor.acp_server"]
 
     async def acp_install(self, environment) -> None:
-        # The ACP server runs the loop in the sandbox, so it needs acp + the provider's HTTP client
-        # (touchstone's openai/anthropic providers are httpx-based) that the base image lacks.
+        # The environment image already carries acp + httpx (baked into its requirements). This
+        # install is a best-effort fallback for an older image; either way we then VERIFY the import
+        # and RAISE on failure, so a missing dependency can never leave the ACP server to crash on
+        # start and silently score the trial 0.
         await environment.exec(
             "uv pip install --system --quiet agent-client-protocol httpx 2>/dev/null || "
-            "pip install --quiet agent-client-protocol httpx")
+            "pip install --quiet --break-system-packages agent-client-protocol httpx 2>/dev/null "
+            "|| true")
+        check = await environment.exec('python -c "import acp, httpx"')
+        if getattr(check, "return_code", 0) != 0:
+            detail = (getattr(check, "stderr", "") or getattr(check, "stdout", "") or "").strip()
+            raise RuntimeError(
+                "ACP server dependencies missing after install (`import acp, httpx` failed): "
+                + detail)
         await environment.upload_dir(_host_agent_dir(), AGENT_SANDBOX)
         # Overlay the running touchstone over the image's survey-time copy, which predates the ACP
         # server module, so `python -m touchstone.harbor.acp_server` resolves in the sandbox.
