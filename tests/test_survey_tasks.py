@@ -298,6 +298,21 @@ def test_task_solution_replays_recorded_calls(tmp_path, conn):
     assert "/logs/agent/trajectory.json" in solve
     traj = json.loads((sol / "trajectory.json").read_text())
     assert traj["steps"]
+    assert "invoke" not in spec  # no invoke.py generated -> replay uses the import path
+
+
+def test_task_solution_routes_through_invoke_when_present(tmp_path, conn):
+    # When the survey generated an agent/invoke.py, the oracle's replay must drive the tools THROUGH
+    # it (load + write the db back), else db mutations never persist and oracle scores 0 at gate.
+    _paint_episode(conn)
+    repo = _repo(tmp_path)
+    provider = ScriptedSurveyProvider([TEXT])
+    write_tasks(repo, conn, MAP, _groups("paint1"), tool_events(conn), {**ENV, "invoke": True},
+                provider, Scrubber(), _settings())
+    spec = json.loads((repo / "touchstone" / "tasks" / "recolour-1" / "solution"
+                       / "spec.json").read_text())
+    # the container path baked into the image, not the host path in env_result
+    assert spec["invoke"] == "/app/_touchstone/invoke.py"
 
 
 def _paint_episode_multiturn(conn, ep_id="paint-mt"):

@@ -146,7 +146,8 @@ def _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub,
     atomic_write(task_dir / "environment" / "Dockerfile", f"FROM {ctx['image_tag']}\n")
     atomic_write(task_dir / "tests" / "Dockerfile",
                  f"FROM {ctx['image_tag']}\nCOPY . /tests/\n")
-    spec = _replay_spec(calls, ctx["tools"], ctx["services"], ctx["ports"], ctx["base_url_envs"])
+    spec = _replay_spec(calls, ctx["tools"], ctx["services"], ctx["ports"], ctx["base_url_envs"],
+                        ctx.get("invoke"))
     trajectory = scrub.scrub(to_atif(conn, ep_id))
     _write_solution(task_dir, spec, trajectory, answer, ctx["services"], ctx["ports"],
                    ctx["base_url_envs"])
@@ -195,9 +196,11 @@ def _build_task(task_dir, name, dataset, group, ep_id, conn, map_data, env_resul
     state, tool = _apply_authored(state, tool, text.get("criteria"))
     state = _knowable_state(state, literals, text)
     user_turns = _user_turns(conn, ep_id, scrub)
+    from .environment import IMAGE_INVOKE
     ctx = {"image_tag": env_result["image_tag"], "tools": tools, "services": services,
            "ports": env_result["ports"], "base_url_envs": env_result["base_url_envs"],
-           "state": state, "tool": tool, "turns": len(user_turns), "user_turns": user_turns}
+           "state": state, "tool": tool, "turns": len(user_turns), "user_turns": user_turns,
+           "invoke": IMAGE_INVOKE if env_result.get("invoke") else None}
     _write_task_files(task_dir, text, group, ep_id, dataset, conn, calls, scrub, ctx)
     return {"written": name}
 

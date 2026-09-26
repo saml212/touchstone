@@ -158,9 +158,12 @@ def _write_task_toml(task_dir: Path, doc: dict) -> None:
 
 
 def _replay_spec(calls: list[ToolEvent], tools: dict, services: list[dict],
-                ports: dict, base_url_envs: dict) -> dict:
+                ports: dict, base_url_envs: dict, invoke: str | None = None) -> dict:
     base_urls = {base_url_envs[s["name"]]: _service_base(s, ports)
                  for s in services if base_url_envs.get(s["name"])}
     used = {c.tool for c in calls}
-    return {"base_urls": base_urls, "tools": {k: v for k, v in tools.items() if k in used},
+    spec = {"base_urls": base_urls, "tools": {k: v for k, v in tools.items() if k in used},
             "calls": [{"tool": c.tool, "arguments": c.arguments} for c in calls]}
+    if invoke:  # route the oracle replay through invoke.py so db tools load + write back state.db;
+        spec["invoke"] = invoke  # the import path alone can't drive a tool needing a `data` store
+    return spec
