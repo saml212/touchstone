@@ -52,8 +52,9 @@ def _preflight_docker(settings: Settings, skip_gate: bool) -> None:
         _require_target(settings)
     except DockerDaemonError as exc:
         raise DockerDaemonError(
-            f"{exc} Survey needs it for the gate and baseline. Start Docker, or set [harbor] host, "
-            "then run again — or survey without Docker with --skip-gate --skip-baseline.") from exc
+            f"{exc} Survey needs it for the gate and baseline. Start Docker, or set [harbor] host "
+            "(see the README, \"Where the benchmark runs\"), then run again — or survey without "
+            "Docker with --skip-gate --skip-baseline.") from exc
 
 
 def _open_db(repo: Path):

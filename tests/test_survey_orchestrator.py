@@ -146,6 +146,7 @@ def test_preflight_stops_fast_without_docker(monkeypatch):
     assert "Docker daemon not running" in msg  # the original one-line message is preserved
     assert "Survey needs it for the gate and baseline" in msg
     assert "--skip-gate --skip-baseline" in msg  # the escape hatch is named on the same line
+    assert "Where the benchmark runs" in msg  # points at the README section that documents [harbor]
     # --skip-gate bypasses the preflight entirely: a Docker-less survey is still allowed
     _preflight_docker(Settings(), skip_gate=True)
 
