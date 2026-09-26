@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "touchstone-bench"
-version = "0.1.11"
+version = "0.1.12"
 description = "Turn a company's running AI agent into a Harbor benchmark of its own work — capture, survey, review, train."
 readme = "README.md"
 requires-python = ">=3.12"
