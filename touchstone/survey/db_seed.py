@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import shutil
 import sqlite3
 from pathlib import Path
@@ -40,6 +41,30 @@ def has_source(sim_dir: str | Path) -> bool:
 
 
 # ---- seeding (parent side, with the shared scrubber) ------------------------
+
+
+_BRACE = re.compile(r"\{([^{}]*)\}")
+
+
+def data_files_for(repo: Path, service: dict) -> list[str]:
+    """The repo-relative data files to seed from: the map's explicit `data_files`, else derived from
+    a `base_url_default` naming local files (one path, or a `{a,b,c}` brace list) that exist in the
+    repo. A URL default yields nothing (there are no files to copy)."""
+    explicit = [f for f in (service.get("data_files") or []) if (repo / f).is_file()]
+    if explicit:
+        return explicit
+    default = service.get("base_url_default") or ""
+    if "://" in default:
+        return []
+    return [c for c in _expand_braces(default) if (repo / c).is_file()]
+
+
+def _expand_braces(pattern: str) -> list[str]:
+    match = _BRACE.search(pattern)
+    if not match:
+        return [pattern]
+    prefix, suffix = pattern[:match.start()], pattern[match.end():]
+    return [f"{prefix}{option.strip()}{suffix}" for option in match.group(1).split(",")]
 
 
 def copy_data_files(sim_dir: Path, repo: Path, data_files: list[str], scrub) -> list[str]:

@@ -82,3 +82,17 @@ def test_seed_from_recorded_reads(tmp_path):
     db = db_sim.materialize(sim)
     assert _rows(db, "SELECT json_extract(doc,'$.status') FROM orders WHERE id='#W1'") \
         == [("pending",)]
+
+
+def test_data_files_for_derives_from_brace_default(tmp_path):
+    _repo_with(tmp_path, "orders.json", "{}")
+    _repo_with(tmp_path, "users.json", "{}")
+    svc = {"name": "s", "kind": "db",
+           "base_url_default": "data/{orders,users}.json"}
+    assert db_seed.data_files_for(tmp_path, svc) == ["data/orders.json", "data/users.json"]
+
+
+def test_data_files_for_prefers_explicit_and_skips_urls(tmp_path):
+    rel = _repo_with(tmp_path, "store.json", "{}")
+    assert db_seed.data_files_for(tmp_path, {"data_files": [rel]}) == [rel]
+    assert db_seed.data_files_for(tmp_path, {"base_url_default": "postgresql://h/db"}) == []

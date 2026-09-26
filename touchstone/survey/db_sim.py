@@ -239,7 +239,7 @@ def _seed(repo, provider, service, tools, sim_dir, scrub, calls) -> str:
 
     _clear(sim_dir)
     sim_dir.mkdir(parents=True, exist_ok=True)
-    data_files = service.get("data_files") or []
+    data_files = db_seed.data_files_for(repo, service)
     if data_files and db_seed.copy_data_files(sim_dir, repo, data_files, scrub):
         atomic_write(sim_dir / "README.md",
                      f"Seeded from repo data files: {', '.join(data_files)} (scrubbed).\n")
