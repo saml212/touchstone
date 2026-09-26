@@ -100,7 +100,29 @@ def test_train_fails_when_no_student_available(tmp_path, seed_task):
     jobs.mkdir(parents=True)
     result = runner.invoke(app, ["train", "--jobs-dir", str(jobs), "--out", str(tmp_path / "o")])
     assert result.exit_code != 0
-    assert "no student job dir" in result.output
+    assert "no job with rewards — run touchstone bench first" in result.output
+    assert not (tmp_path / "o" / "manifest.json").exists()  # never writes empty files silently
+
+
+def test_train_skips_a_latest_job_that_only_errored(tmp_path, seed_task):
+    # The newest job errored on every trial (no reward). train must fall back to the older job that
+    # has rewards, never pick the broken one and write empty datasets.
+    jobs = tmp_path / "touchstone" / "jobs"
+    seed_task(tmp_path / "touchstone")
+    good = _job(jobs, "2026-01-01__00-00-00", {"agents": [{"name": "replica"}]})
+    _trial(good, "s1", "ds/refund", 1.0, traj={"a": 1})
+    broken = _job(jobs, "2026-01-02__00-00-00", {"agents": [{"name": "replica"}]})
+    d = broken / "e1"
+    (d / "verifier").mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps(
+        {"task_name": "ds/refund", "agent_info": {"name": "replica"},
+         "exception_info": {"exception_type": "RuntimeError", "exception_message": "boom"}}))
+    import os
+    os.utime(broken, (broken.stat().st_atime, good.stat().st_mtime + 10))
+    out = tmp_path / "train"
+    result = runner.invoke(app, ["train", "--jobs-dir", str(jobs), "--out", str(out)])
+    assert result.exit_code == 0, result.output
+    assert "training from job 2026-01-01__00-00-00 (1 passing trials)" in result.output
 
 
 def test_train_student_spec_runs_harbor_with_attempts(tmp_path, monkeypatch, seed_task):

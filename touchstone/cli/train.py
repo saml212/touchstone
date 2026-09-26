@@ -22,10 +22,15 @@ from ._common import _daemon_guard, _fail, _require_tasks
 AGENT_PATH = "touchstone.harbor.agent:TouchstoneAgent"
 
 
-def _newest_dir(jobs_dir: Path, exclude: set[Path]) -> Path | None:
+def _newest_rewarded_dir(jobs_dir: Path, exclude: set[Path]) -> Path | None:
+    """The most recent job dir that actually produced rewards — a job where every trial errored is
+    no training signal, so it is never silently chosen as the student."""
+    from ..harbor.jobs import Job, ran_tasks
+
     if not jobs_dir.is_dir():
         return None
-    dirs = [d for d in jobs_dir.iterdir() if d.is_dir() and d.resolve() not in exclude]
+    dirs = [d for d in jobs_dir.iterdir() if d.is_dir() and d.resolve() not in exclude
+            and ran_tasks(Job.read(d))]
     return max(dirs, key=lambda d: d.stat().st_mtime) if dirs else None
 
 
@@ -53,9 +58,9 @@ def _student_dirs(student: str, jobs_dir: Path, teacher_dirs: list[Path], attemp
     """The student job dirs: what `--student` names, else the newest job that is not the teacher."""
     if student:
         return _resolve(student, jobs_dir, attempts, n_concurrent)
-    newest = _newest_dir(jobs_dir, {d.resolve() for d in teacher_dirs})
+    newest = _newest_rewarded_dir(jobs_dir, {d.resolve() for d in teacher_dirs})
     if newest is None:
-        _fail(f"no student job dir: pass --student or add jobs under {jobs_dir}")
+        _fail("no job with rewards — run touchstone bench first")
     return [newest]
 
 
@@ -74,7 +79,7 @@ def train(
     n_concurrent: int = typer.Option(4, "-n", "--n-concurrent", help="Concurrent trials."),
 ) -> None:
     """Read Harbor jobs and write distillation + RL datasets a training stack consumes."""
-    from ..harbor.jobs import Job
+    from ..harbor.jobs import Job, passing_trials
     from ..train.write import write_datasets
 
     jobs_path = Path(jobs_dir)
@@ -83,7 +88,10 @@ def train(
         teacher_dirs = _resolve(teacher, jobs_path, attempts, n_concurrent) if teacher else []
         student_dirs = _student_dirs(student, jobs_path, teacher_dirs, attempts, n_concurrent)
 
+    student_jobs = [Job.read(d) for d in student_dirs]
+    passing = sum(passing_trials(j) for j in student_jobs)
+    typer.echo(f"training from job {student_dirs[-1].name} ({passing} passing trials)")
     out_path = Path(out) if out else jobs_path.parent / "train"
     written = write_datasets(out_path, [Job.read(d) for d in teacher_dirs],
-                             [Job.read(d) for d in student_dirs], threshold=threshold)
+                             student_jobs, threshold=threshold)
     typer.echo(written.sentence())

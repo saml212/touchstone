@@ -14,14 +14,17 @@ AGENT_PATH = "touchstone.harbor.agent:TouchstoneAgent"
 _MODES = ("packaged", "replica")
 
 
-def _print_rates(rates: dict[str, float | str]) -> None:
+def _print_rates(rates: dict[str, float | str], errors: dict[str, int] | None = None) -> None:
     if not rates:
         typer.echo("(no trials)")
         return
     width = max(len(t) for t in rates)
+    if errors:
+        typer.echo(f"  {'task'.ljust(width)}  rate    errors")
     for task, rate in rates.items():
         cell = f"{rate * 100:5.1f}%" if isinstance(rate, (int, float)) else rate
-        typer.echo(f"  {task.ljust(width)}  {cell}")
+        suffix = f"   {errors.get(task, 0)}" if errors else ""
+        typer.echo(f"  {task.ljust(width)}  {cell}{suffix}")
     numeric = [v for v in rates.values() if isinstance(v, (int, float))]
     if numeric:
         typer.echo(f"  {'overall'.ljust(width)}  {sum(numeric) / len(numeric) * 100:5.1f}%")
@@ -65,9 +68,20 @@ def bench(
                               n_concurrent=n_concurrent, extra_args=extra, settings=settings)
     job = jobs_mod.Job.read(job_dir)
     typer.echo(f"\n{job_dir}")
-    _print_rates(jobs_mod.task_outcomes(job))
+    _report(job, jobs_mod)
     if against:
         _print_compare(jobs_mod.compare(job, jobs_mod.Job.read(against)))
+
+
+def _report(job, jobs_mod) -> None:
+    """Print the scoreboard — or, when every trial errored, scream the reason and exit 1 so a run
+    that produced nothing can never read as a clean 0%."""
+    if jobs_mod.all_errored(job):
+        n = len(job.trials)
+        typer.echo(f"{n} of {n} trials errored — first: {jobs_mod.first_error(job)}", err=True)
+        raise typer.Exit(1)
+    errors = jobs_mod.task_error_counts(job)
+    _print_rates(jobs_mod.task_outcomes(job), errors or None)
 
 
 @app.command()
@@ -86,4 +100,5 @@ def jobs(
         return
     for d in dirs:
         typer.echo(f"\n{d.name}")
-        _print_rates(jobs_mod.task_outcomes(jobs_mod.Job.read(d)))
+        job = jobs_mod.Job.read(d)
+        _print_rates(jobs_mod.task_outcomes(job), jobs_mod.task_error_counts(job) or None)

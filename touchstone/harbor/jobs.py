@@ -17,6 +17,11 @@ _GATE_AGENTS = ("oracle", "nop")
 _TRAJECTORY_SUFFIX = "agent/trajectory.json"
 
 
+def _first_line(text: str | None) -> str:
+    """The first non-empty line of a (possibly multi-line) error, for a one-line read-out."""
+    return text.splitlines()[0].strip() if text and text.strip() else ""
+
+
 def _load_json(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -152,10 +157,47 @@ def ran_tasks(job: Job) -> set[str]:
 
 def _task_error(trials: list[Trial]) -> str:
     """The error to print for a task whose every trial errored: the no-trajectory sentence when
-    that is why, else the first exception/message, else a generic one."""
+    that is why, else the first line of the first exception/message, else a generic one."""
     if any(t.error == NO_TRAJECTORY for t in trials):
         return NO_TRAJECTORY
-    return next((t.error or t.exception for t in trials if t.error or t.exception), "errored")
+    first = next((t.error or t.exception for t in trials if t.error or t.exception), "")
+    return _first_line(first) or "errored"
+
+
+def _errored(trial: Trial) -> bool:
+    """The trial produced no reward and carries a reason — it raised, or the agent never ran."""
+    return trial.reward is None and bool(trial.error or trial.exception)
+
+
+def errored_trials(job: Job) -> list[Trial]:
+    """Every trial that errored (no reward, a reason recorded)."""
+    return [t for t in job.trials if _errored(t)]
+
+
+def all_errored(job: Job) -> bool:
+    """Every trial of a non-empty job errored — the run produced no score at all."""
+    return bool(job.trials) and len(errored_trials(job)) == len(job.trials)
+
+
+def first_error(job: Job) -> str:
+    """The first errored trial's message (kept whole, so a build tail survives) — for the scream
+    a caller prints when every trial errored."""
+    for trial in errored_trials(job):
+        return (trial.error or trial.exception or "errored").strip()
+    return "errored"
+
+
+def task_error_counts(job: Job) -> dict[str, int]:
+    """How many trials of each task errored — the `errors` column when only some trials errored."""
+    counts: dict[str, int] = {}
+    for trial in errored_trials(job):
+        counts[trial.task_name] = counts.get(trial.task_name, 0) + 1
+    return counts
+
+
+def passing_trials(job: Job) -> int:
+    """Trials that fully passed (reward >= 1.0) — what `train` reports it is learning from."""
+    return sum(t.passed for t in job.trials)
 
 
 def task_outcomes(job: Job) -> dict[str, float | str]:

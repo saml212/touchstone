@@ -66,6 +66,6 @@ def _split_failed(job: jobs.Job) -> tuple[jobs.Job, list[dict]]:
     """Trials Harbor refused to regrade (a RegradeError, a missing artifact) are not 0%: they are
     reported apart with Harbor's reason, so the room says "could not regrade", not "dropped"."""
     ok = [t for t in job.trials if not t.exception]
-    failed = [{"task": t.task_name, "error": f"{t.exception}: {(t.error or '')[:200]}"}
+    failed = [{"task": t.task_name, "error": jobs._first_line(f"{t.exception}: {t.error or ''}")}
               for t in job.trials if t.exception]
     return jobs.Job(dir=job.dir, config=job.config, trials=ok), failed

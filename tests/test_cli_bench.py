@@ -15,6 +15,15 @@ def _trial(job_dir, name, task_name, reward):
     (d / "verifier" / "reward.txt").write_text(f"{reward}\n")
 
 
+def _errored(job_dir, name, task_name, message):
+    """A trial that raised inside Harbor: exception_info, no verifier reward (else a false 0)."""
+    d = job_dir / name
+    d.mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps(
+        {"task_name": task_name, "agent_info": {"name": "TouchstoneAgent"},
+         "exception_info": {"exception_type": "RuntimeError", "exception_message": message}}))
+
+
 def _job(jobs_dir, name):
     d = jobs_dir / name
     d.mkdir(parents=True)
@@ -75,6 +84,35 @@ def test_bench_runs_and_prints_scoreboard(tmp_path, monkeypatch, seed_task):
     assert result.exit_code == 0, result.output
     assert seen["jobs_dir"] == f"{tmp_path}/jobs"  # job dirs default under the dataset root
     assert "ds/t1" in result.output and "100.0%" in result.output and "overall" in result.output
+
+
+def test_bench_screams_and_exits_1_when_every_trial_errored(tmp_path, monkeypatch, seed_task):
+    import touchstone.harbor.run as run_mod
+
+    seed_task(tmp_path)
+    jobs = tmp_path / "jobs"
+    job_dir = _job(jobs, "2026-01-01__00-00-00")
+    for i in range(1, 8):
+        _errored(job_dir, f"t{i}__a", f"ds/t{i}", "docker compose build RC=1\nlast build line")
+    monkeypatch.setattr(run_mod, "run", lambda *a, **k: job_dir)
+    result = runner.invoke(app, ["bench", "-m", "openai/gpt-4o-mini", "--dataset", str(tmp_path)])
+    assert result.exit_code == 1, result.output
+    assert "7 of 7 trials errored — first: docker compose build RC=1" in result.output
+    assert "0.0%" not in result.output
+
+
+def test_bench_shows_an_errors_column_when_some_trials_errored(tmp_path, monkeypatch, seed_task):
+    import touchstone.harbor.run as run_mod
+
+    seed_task(tmp_path)
+    jobs = tmp_path / "jobs"
+    job_dir = _job(jobs, "2026-01-01__00-00-00")
+    _trial(job_dir, "t1a__a", "ds/t1", 1.0)
+    _errored(job_dir, "t1b__a", "ds/t1", "RuntimeError: boom")
+    monkeypatch.setattr(run_mod, "run", lambda *a, **k: job_dir)
+    result = runner.invoke(app, ["bench", "-m", "m", "--dataset", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "errors" in result.output and "ds/t1" in result.output
 
 
 def test_bench_against_prints_comparison(tmp_path, monkeypatch, seed_task):
