@@ -42,6 +42,10 @@ def trace(db: str | None = None, otel: bool = False) -> dict:
         patched.append("openai")
     if _patch_anthropic():
         patched.append("anthropic")
+    from .capture.litellm import install as _install_litellm
+
+    if _install_litellm():
+        patched.append("litellm")
     if otel:
         from .capture.openinference import register
 

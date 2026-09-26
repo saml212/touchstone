@@ -131,6 +131,7 @@ def _recorder(default_name, model, messages, tools, params, started):
         try:
             result = produce() if callable(produce) else produce
             record(default_name, model, messages, tools, params, result, error, started)
+            context.note_sdk_span()  # tells the litellm logger this call is already recorded
         except Exception as exc:  # capture must never break the caller's request
             _log.warning("touchstone capture failed: %r", exc)
     return rec

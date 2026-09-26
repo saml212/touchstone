@@ -6,7 +6,7 @@ from __future__ import annotations
 import functools
 from datetime import datetime
 
-from . import spans
+from . import context, spans
 from .patch_openai import _extract  # litellm ModelResponse is OpenAI-shaped
 
 
@@ -28,7 +28,12 @@ def _iso(t) -> str:
 
 
 class TouchstoneLogger(_base()):
+    def log_pre_api_call(self, model, messages, kwargs):
+        context.reset_sdk_span()  # start of a litellm call: no patched-SDK span for it yet
+
     def _record(self, kwargs, response_obj, start_time, error):
+        if context.saw_sdk_span():
+            return  # a patched openai/anthropic SDK already recorded this call; don't double-record
         model = kwargs.get("model")
         messages = kwargs.get("messages") or []
         opt = kwargs.get("optional_params") or {}
@@ -89,7 +94,8 @@ def install() -> bool:
         import litellm
     except Exception:
         return False
-    logger = TouchstoneLogger()
-    litellm.callbacks = list(getattr(litellm, "callbacks", []) or []) + [logger]
+    callbacks = list(getattr(litellm, "callbacks", []) or [])
+    if not any(isinstance(cb, TouchstoneLogger) for cb in callbacks):  # idempotent: trace() re-runs
+        litellm.callbacks = callbacks + [TouchstoneLogger()]
     _patch_model_override(litellm)
     return True

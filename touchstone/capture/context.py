@@ -24,12 +24,27 @@ _db_path: str | None = None
 _local = threading.local()
 _current: ContextVar[EpisodeHandle | None] = ContextVar("touchstone_episode", default=None)
 _paused: ContextVar[bool] = ContextVar("touchstone_paused", default=False)
+_sdk_span: ContextVar[bool] = ContextVar("touchstone_sdk_span", default=False)
 _untracked_lock = threading.Lock()
 _untracked_ids: dict[str, str] = {}
 
 
 def is_paused() -> bool:
     return _paused.get()
+
+
+def reset_sdk_span() -> None:
+    """Called by the litellm logger before a call: clears the "a patched SDK already recorded this
+    call" flag so the logger can tell whether to record it itself (dedupe)."""
+    _sdk_span.set(False)
+
+
+def note_sdk_span() -> None:
+    _sdk_span.set(True)
+
+
+def saw_sdk_span() -> bool:
+    return _sdk_span.get()
 
 
 @contextmanager
