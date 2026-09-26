@@ -1,9 +1,7 @@
 """Run `harbor run` over a dataset or a single task, locally or on a remote Docker host.
 
-Harbor bind-mounts local directories, so when the local machine has no Docker daemon and
-`settings.harbor_host` is set, this rsyncs the dataset to the host, runs Harbor there over SSH, and
-rsyncs the job directory back. Datasets run as the implicit dataset (`harbor run -p <root>/tasks`);
-`dataset.toml` is metadata only. The exact command run is printed.
+When the local machine has no Docker daemon and `settings.harbor_host` is set, this rsyncs the
+dataset to the host, runs Harbor over SSH (`harbor run -p <root>/tasks`), and rsyncs jobs back.
 """
 
 from __future__ import annotations
@@ -20,14 +18,11 @@ from ..config import Settings, load_settings
 from ..llm.keychain import secret
 from . import keys, remote
 
-# API-key env var -> the Settings attribute holding its Keychain service name.
 _KEYCHAIN_ATTR = {"OPENAI_API_KEY": "keychain_openai", "ANTHROPIC_API_KEY": "keychain_anthropic"}
 
-# A generic login PATH so a non-interactive SSH shell finds harbor and docker on common hosts.
 _REMOTE_PATH = 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"'
 
-# ssh/rsync options so an unreachable harbor host fails fast instead of hanging: bound the TCP
-# connect, and BatchMode=yes so a missing key never blocks on a password/passphrase prompt.
+# ssh/rsync options: bound the TCP connect and BatchMode=yes so an unreachable host fails fast.
 _SSH_OPTS = ["-o", "ConnectTimeout=10", "-o", "BatchMode=yes"]
 
 
@@ -91,9 +86,8 @@ def _require_target(settings: Settings) -> str:
 
 
 def _call(cmd: list[str], env: dict | None = None, stdin_data: str | None = None) -> None:
-    """Run `cmd`, echo its output, and on failure raise a RuntimeError whose message is the last
-    lines of that output. `stdin_data` is fed on stdin (never argv/printed) — how an API key reaches
-    the remote shell; `env` replaces the child environment when given."""
+    """Run `cmd`, echo output, raise on failure. `stdin_data` feeds stdin (never argv) — how an
+    API key reaches the remote shell; `env` replaces the child environment when given."""
     print("$ " + " ".join(cmd))
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, env=env, input=stdin_data)
@@ -135,8 +129,17 @@ def _provider_key(model: str | None, settings: Settings) -> tuple[str, str] | No
     return (var, value) if value else None
 
 
+def _provider_keys(models: list[str | None], settings: Settings) -> list[tuple[str, str]]:
+    """`(env var, value)` per model, deduped by var, valueless dropped: agent key plus user key."""
+    found: dict[str, str] = {}
+    for model in models:
+        pair = _provider_key(model, settings)
+        if pair and pair[0] not in found:
+            found[pair[0]] = pair[1]
+    return list(found.items())
+
+
 def _sync_src(host: str, with_path: str) -> None:
-    """Ship touchstone to the host so harbor can import the custom agent, from either layout."""
     with tempfile.TemporaryDirectory() as tmp:
         local = remote._stage_src(Path(tmp))
         _call(_rsync_cmd(["-az", "--delete", f"{local}/", f"{host}:{with_path}/"]))
@@ -153,13 +156,12 @@ def _harbor_cmd(run_path: str, agent: str, model: str | None, jobs_dir: str, n_c
 
 
 def _run_local(path: Path, agent: str, model: str | None, jobs_dir: Path, n_concurrent: int,
-               extra_args: list[str], key: tuple[str, str] | None = None) -> Path:
-    # A custom agent must already be importable in the local `harbor` env; built-ins always work.
+               extra_args: list[str], keys_: list[tuple[str, str]] | None = None) -> Path:
     jobs_dir.mkdir(parents=True, exist_ok=True)
     before = _job_dirs(jobs_dir)
     cmd = _harbor_cmd(str(_run_path(path).resolve()), agent, model, str(jobs_dir.resolve()),
                       n_concurrent, extra_args)
-    _call(cmd, env={**os.environ, key[0]: key[1]} if key else None)
+    _call(cmd, env={**os.environ, **dict(keys_)} if keys_ else None)
     return _newest_job(jobs_dir, before)
 
 
@@ -169,16 +171,17 @@ def _remote_dataset_path(remote_root: str, sync_root: Path) -> str:
     return f"{remote_root}/datasets/{sync_root.name}-{digest}"
 
 
-def _remote_key_prefix(key: tuple[str, str] | None) -> tuple[str, str | None]:
-    """Shell prefix reading the key from stdin into the env var (only `$TS_KEY` in the cmd)."""
-    if not key:
+def _remote_key_prefix(keys_: list[tuple[str, str]] | None) -> tuple[str, str | None]:
+    """Read each key from stdin (one line per key, in order) into its env var; no value on argv."""
+    if not keys_:
         return "", None
-    return f'read -r TS_KEY; export {key[0]}="$TS_KEY"; ', key[1] + "\n"
+    prefix = "".join(f'IFS= read -r _tsk; export {var}="$_tsk"; ' for var, _ in keys_)
+    return prefix, "".join(value + "\n" for _, value in keys_)
 
 
 def _run_remote(path: Path, agent: str, model: str | None, jobs_dir: Path, n_concurrent: int,
                 extra_args: list[str], settings: Settings,
-                key: tuple[str, str] | None = None) -> Path:
+                keys_: list[tuple[str, str]] | None = None) -> Path:
     host, remote_root = settings.harbor_host, settings.harbor_remote_root
     sync_root = path.parent if path.name == "tasks" else path
     rel_run = _run_path(path).relative_to(sync_root).as_posix() or "."
@@ -191,12 +194,11 @@ def _run_remote(path: Path, agent: str, model: str | None, jobs_dir: Path, n_con
     if _is_custom_agent(agent):  # ship touchstone so harbor can import the custom agent
         with_path = f"{remote_root}/touchstone-src"
         _sync_src(host, with_path)
-    # -o must be an ABSOLUTE remote path: a separate verifier's `docker compose cp` resolves a
-    # relative artifact/host path against the task's tests dir, not the dataset root, and fails.
+    # -o must be ABSOLUTE: a verifier's `docker compose cp` resolves a relative path wrong.
     remote_cmd = " ".join(
         _harbor_cmd(rel_run, agent, model, f"{remote_path}/jobs", n_concurrent,
                     extra_args, with_path))
-    prefix, stdin_data = _remote_key_prefix(key)
+    prefix, stdin_data = _remote_key_prefix(keys_)
     _call(_ssh_cmd(host, f"{prefix}{_REMOTE_PATH}; cd {remote_path} && {remote_cmd}"),
           stdin_data=stdin_data)
 
@@ -214,8 +216,7 @@ def _build_remote(context_dir: Path, tag: str, settings: Settings) -> None:
 
 
 def build_image(context_dir: str | Path, tag: str, settings: Settings | None = None) -> None:
-    """Build the environment image `tag` from `context_dir`, on the SSH host when there is no local
-    Docker daemon (the same host `harbor run` uses, so its daemon has the image)."""
+    """Build the image `tag` from `context_dir`, on the SSH host when there is no local Docker."""
     context_dir = Path(context_dir)
     settings = settings or load_settings()
     if _require_target(settings) == "remote":
@@ -258,9 +259,8 @@ def _regrade_remote(job_dir: Path, tasks_path: Path, settings: Settings) -> Path
 
 def regrade(job_dir: str | Path, tasks_path: str | Path, *,
             settings: Settings | None = None) -> Path:
-    """Run `harbor job regrade` over `job_dir` with the updated tasks and return the new job dir.
-    Regrades from recorded artifacts (no agent, no key); runs on the SSH host when the local machine
-    has no Docker daemon."""
+    """Run `harbor job regrade` over `job_dir` and return the new job dir. From recorded
+    artifacts (no agent, no key); runs on the SSH host when there is no local Docker."""
     job_dir, tasks_path = Path(job_dir), Path(tasks_path)
     settings = settings or load_settings()
     if _require_target(settings) == "remote":
@@ -281,8 +281,7 @@ def _task_multi_turn(task_dir: Path) -> bool:
 
 
 def dataset_is_multi_turn(path: str | Path) -> bool:
-    """True when the target task, or any task in the dataset, is multi-turn — so the run needs
-    Harbor's simulated user. Accepts a single task dir or a dataset root."""
+    """True when the target task or any dataset task is multi-turn (needs the simulated user)."""
     p = Path(path)
     if (p / "task.toml").is_file():
         return _task_multi_turn(p)
@@ -291,9 +290,7 @@ def dataset_is_multi_turn(path: str | Path) -> bool:
 
 
 def user_agent_for(model: str) -> str:
-    """The Harbor simulated-user agent that signs in with the model's provider key: codex for an
-    OpenAI model, claude-code for an Anthropic one (a wrong pairing fails auth, scoring every
-    trial 0)."""
+    """The simulated-user agent for the provider: codex for OpenAI, claude-code for Anthropic."""
     return "claude-code" if model.split("/", 1)[0] == "anthropic" else "codex"
 
 
@@ -307,14 +304,17 @@ def simulated_user_args(user_agent: str, user_model: str,
     return args
 
 
-def run(path: str | Path, agent: str, *, model: str | None = None, jobs_dir: str | Path = "jobs",
+def run(path: str | Path, agent: str, *, model: str | None = None,
+        user_model: str | None = None, jobs_dir: str | Path = "jobs",
         n_concurrent: int = 4, extra_args: list[str] | None = None,
         settings: Settings | None = None) -> Path:
-    """Run Harbor over `path` (a task dir or dataset root) and return the created job directory."""
+    """Run Harbor over `path` (a task dir or dataset root) and return the created job directory.
+    `user_model` is the multi-turn simulated user's model; its key is forwarded with the agent's."""
     path, jobs_dir = Path(path), Path(jobs_dir)
     extra_args = extra_args or []
     settings = settings or load_settings()
-    key = _provider_key(model, settings) if _is_custom_agent(agent) else None
+    want = ([model] if _is_custom_agent(agent) else []) + ([user_model] if user_model else [])
+    keys_ = _provider_keys(want, settings)
     if _require_target(settings) == "remote":
-        return _run_remote(path, agent, model, jobs_dir, n_concurrent, extra_args, settings, key)
-    return _run_local(path, agent, model, jobs_dir, n_concurrent, extra_args, key)
+        return _run_remote(path, agent, model, jobs_dir, n_concurrent, extra_args, settings, keys_)
+    return _run_local(path, agent, model, jobs_dir, n_concurrent, extra_args, keys_)

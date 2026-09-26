@@ -58,6 +58,10 @@ read the same `OPENAI_API_KEY`, or a macOS Keychain item `<keychain_prefix>opena
 prefix defaults to `touchstone-` (so `touchstone-openai-api-key`); set `keychain_prefix` in
 `touchstone.toml` to point at an item you already have. `touchstone doctor` prints which keys resolve.
 
+On a multi-turn dataset the simulated customer's model is `[survey] user_model` (Harbor picks its
+agent by provider — `codex` for OpenAI, `claude-code` for Anthropic); its key is forwarded like the
+agent's, so a mixed pairing (OpenAI agent, Anthropic user) forwards both keys.
+
 ### Capture
 
 Add two lines to your own app — one to start recording, one to mark each conversation:

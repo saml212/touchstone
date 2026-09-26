@@ -55,11 +55,12 @@ def bench(
     _require_tasks(dataset)
     settings = load_settings()
     extra = ["--ak", f"mode={agent}"]
+    user_model = None
     if run_mod.dataset_is_multi_turn(dataset):  # conversational tasks need Harbor's simulated user
-        extra += run_mod.simulated_user_args(settings.survey_user_agent,
-                                             settings.survey_user_model or model)
+        user_model = settings.survey_user_model or model
+        extra += run_mod.simulated_user_args(settings.survey_user_agent, user_model)
     with _daemon_guard():
-        job_dir = run_mod.run(dataset, AGENT_PATH, model=model,
+        job_dir = run_mod.run(dataset, AGENT_PATH, model=model, user_model=user_model,
                               jobs_dir=jobs_dir or f"{dataset}/jobs",
                               n_concurrent=n_concurrent, extra_args=extra, settings=settings)
     job = jobs_mod.Job.read(job_dir)

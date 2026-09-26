@@ -155,8 +155,37 @@ def test_remote_custom_agent_forwards_key_on_stdin_not_argv(tmp_path, monkeypatc
                 jobs_dir=tmp_path / "jobs", settings=settings)
     ssh = next(c for c in calls if c[0] == "ssh")
     assert ssh.stdin == "sk-secret\n"  # fed on stdin
-    assert 'read -r TS_KEY; export OPENAI_API_KEY="$TS_KEY";' in ssh[-1]
+    assert 'IFS= read -r _tsk; export OPENAI_API_KEY="$_tsk";' in ssh[-1]
     assert "sk-secret" not in " ".join(ssh)  # never on argv
+
+
+def test_remote_forwards_both_agent_and_user_keys_on_stdin(tmp_path, monkeypatch):
+    calls = _record_calls(monkeypatch)
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (True, "27"))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-anthropic")
+    settings = Settings(harbor_host="mini", harbor_remote_root="/remote")
+    run_mod.run(_dataset(tmp_path), AGENT, model="openai/gpt-4.1-mini",
+                user_model="anthropic/claude-haiku-4-5", jobs_dir=tmp_path / "jobs",
+                settings=settings)
+    ssh = next(c for c in calls if c[0] == "ssh")
+    assert ssh.stdin == "sk-openai\nsk-anthropic\n"  # one line per key, agent then user
+    assert 'export OPENAI_API_KEY="$_tsk";' in ssh[-1]
+    assert 'export ANTHROPIC_API_KEY="$_tsk";' in ssh[-1]
+    assert "sk-openai" not in " ".join(ssh) and "sk-anthropic" not in " ".join(ssh)
+
+
+def test_same_provider_agent_and_user_forward_one_key(tmp_path, monkeypatch):
+    calls = _record_calls(monkeypatch)
+    monkeypatch.setattr(run_mod, "_has_docker", lambda: False)
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (True, "27"))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    settings = Settings(harbor_host="mini", harbor_remote_root="/remote")
+    run_mod.run(_dataset(tmp_path), AGENT, model="openai/gpt-4.1-mini",
+                user_model="openai/gpt-4.1-mini", jobs_dir=tmp_path / "jobs", settings=settings)
+    ssh = next(c for c in calls if c[0] == "ssh")
+    assert ssh.stdin == "sk-openai\n"  # deduped to a single OPENAI_API_KEY line
 
 
 def test_builtin_agent_forwards_no_key(tmp_path, monkeypatch):

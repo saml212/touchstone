@@ -65,11 +65,18 @@ def _reusable(existing: Path, out: Path, force: bool) -> dict | None:
     return data if not (_current_tasks(out) - set(data.get("pass_rates", {}))) else None
 
 
+def _baseline_user_model(out: Path, model: str, settings) -> str | None:
+    """The simulated user's model on a multi-turn dataset (its key is forwarded too), else None."""
+    if run_mod.dataset_is_multi_turn(out):  # conversational tasks need Harbor's simulated user
+        return settings.survey_user_model or model
+    return None
+
+
 def _baseline_extra(cfg: dict, model: str, out: Path, settings) -> list[str]:
     extra = ["--ak", f"mode={cfg['mode']}"]
-    if run_mod.dataset_is_multi_turn(out):  # conversational tasks need Harbor's simulated user
-        extra += run_mod.simulated_user_args(settings.survey_user_agent,
-                                             settings.survey_user_model or model)
+    user_model = _baseline_user_model(out, model, settings)
+    if user_model:
+        extra += run_mod.simulated_user_args(settings.survey_user_agent, user_model)
     return extra
 
 
@@ -88,6 +95,7 @@ def run_baseline(repo, env_result: dict, settings, force: bool = False,
     model = _model_ref(cfg)
     try:
         job_dir = run_mod.run(out, AGENT_PATH, model=model, jobs_dir=out / "jobs",
+                              user_model=_baseline_user_model(out, model, settings),
                               extra_args=_baseline_extra(cfg, model, out, settings),
                               settings=settings)
     except (subprocess.SubprocessError, OSError, RuntimeError) as exc:
