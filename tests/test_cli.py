@@ -127,6 +127,43 @@ def test_version_flag_and_command_print_the_package_version(monkeypatch):
     assert cmd.exit_code == 0 and "9.9.9" in cmd.output
 
 
+def _write_lock(tmp_path, name, version, source='source = { git = "ssh://x/y" }'):
+    (tmp_path / "uv.lock").write_text(
+        f'[[package]]\nname = "{name}"\nversion = "{version}"\n{source}\n', encoding="utf-8")
+
+
+def test_version_skew_warns_when_project_pins_a_different_touchstone(tmp_path, monkeypatch):
+    import touchstone.cli as cli_mod
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.2")
+    _write_lock(tmp_path, "touchstone", "0.1.0")  # the stranger's exact skew (old dist name)
+    result = runner.invoke(app, [])
+    assert result.exit_code == 0
+    assert ("Note: this project pins touchstone-bench 0.1.0; you are running 0.1.2 "
+            "(uv sync --upgrade-package touchstone-bench).") in result.output
+
+
+def test_version_skew_silent_when_versions_match_or_no_lock(tmp_path, monkeypatch):
+    import touchstone.cli as cli_mod
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.2")
+    assert "Note: this project pins" not in runner.invoke(app, []).output  # no uv.lock
+    _write_lock(tmp_path, "touchstone-bench", "0.1.2")
+    assert "Note: this project pins" not in runner.invoke(app, []).output  # same version
+
+
+def test_version_skew_silent_in_the_touchstone_checkout_itself(tmp_path, monkeypatch):
+    import touchstone.cli as cli_mod
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_mod, "_package_version", lambda: "0.1.3")
+    # the checkout's own package entry is a virtual/editable root, not a dependency pin
+    _write_lock(tmp_path, "touchstone-bench", "0.1.0", source='source = { virtual = "." }')
+    assert "Note: this project pins" not in runner.invoke(app, []).output
+
+
 def test_doctor_exits_zero_with_all_tools_missing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     import shutil
