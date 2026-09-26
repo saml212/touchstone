@@ -3,9 +3,8 @@
 A trial is addressed as ``<job>/<trial_dir>`` so a regrade knows its job. `scan` orders the
 review-worthy jobs the way the design asks: verifier unsure (reward strictly 0..1), then models
 disagree, then never reviewed, then reviewed. Oracle/nop gate jobs are never review material, and
-only the latest job per (agent, model) is surfaced (older runs stay addressable by job id via
-`read`). `read` returns one trial in plain words; needs-review gate failures are read separately
-from ``needs-review/<task>/gate.json`` and have no trials.
+only the latest job per (agent, model) is surfaced. `read` returns one trial in plain words;
+needs-review gate failures are read from ``needs-review/<task>/gate.json`` and have no trials.
 """
 
 from __future__ import annotations
@@ -65,21 +64,30 @@ def _label(agent: str | None, model: str | None, job: str) -> str:
     return f"{(agent or 'agent').split(':')[-1]}/{model or '?'} · {job}"
 
 
+def _review_material(agent: str | None, job_dir: Path) -> bool:
+    """A real agent-under-test run: not an oracle/nop gate job, and not errored-only."""
+    return not _is_gate(agent) and _has_rewards(job_dir)
+
+
 def _review_jobs(jobs_dir: Path) -> list[tuple[Path, str]]:
-    """Review-worthy jobs: gate jobs dropped, only the latest job per (agent, model) kept (older
-    jobs stay addressable by explicit job id via `read`). Returns (job_dir, label)."""
+    """Review-worthy jobs: gate/errored-only dropped, only the latest job per (agent, model) kept
+    (older jobs stay addressable by explicit job id via `read`). Returns (job_dir, label)."""
     latest: dict[tuple, Path] = {}
     for job_dir in _job_dirs(jobs_dir):  # ascending by timestamped name -> last write wins
         agent, model = _agent_model(job_dir)
-        if _is_gate(agent) or not _has_rewards(job_dir):
-            continue
-        latest[(agent, model)] = job_dir
+        if _review_material(agent, job_dir):
+            latest[(agent, model)] = job_dir
     return [(jd, _label(*_agent_model(jd), jd.name)) for jd in latest.values()]
 
 
 def _has_rewards(job_dir: Path) -> bool:
     """A run that produced no reward at all (every trial raised) is broken, not review material."""
     return any(t.reward is not None for t in jobs.Job.read(job_dir).trials)
+
+
+def reviewable_jobs(jobs_dir: Path) -> list[Path]:
+    """Review-material job dirs, ascending by name — same gate+rewards filter, shared with train."""
+    return [jd for jd in _job_dirs(jobs_dir) if _review_material(_agent_model(jd)[0], jd)]
 
 
 def latest_non_gate_job(jobs_dir: Path) -> Path | None:
@@ -128,8 +136,7 @@ def _task_exists(dataset_dir: Path | None, task: str) -> bool:
 
 def scan(jobs_dir: Path, conn=None, dataset_dir: Path | None = None) -> list[TrialRef]:
     """Review trials across the latest non-gate job per (agent, model), ordered unsure -> disagree
-    -> unreviewed -> reviewed. Oracle/nop gate jobs, superseded runs, and trials whose task dir no
-    longer exists (stale) are excluded."""
+    -> unreviewed -> reviewed. Gate jobs, superseded runs, and stale (task-gone) trials excluded."""
     review_jobs = _review_jobs(jobs_dir)
     disagree = _disagreeing_tasks([jd for jd, _ in review_jobs])
     reviewed_keys = _reviewed_keys(conn) if conn is not None else set()
@@ -194,7 +201,7 @@ def _load_json(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {}
+        data = {}
     return data if isinstance(data, dict) else {}
 
 
@@ -260,12 +267,6 @@ def _crit_view(crit: dict, dimension: str, rel: str, index: int, descs: dict) ->
     return {"dimension": dimension, "description": plain, "raw": raw, "score": crit.get("value")}
 
 
-def _component_file(dimension: str, component: dict, crit: dict) -> str:
-    """The criteria file a reward-details criterion came from, to look up its description."""
-    name = component.get("name") or crit.get("name", "")
-    return f"tests/{dimension}/{name}.py"
-
-
 def _flatten_criteria(details: dict, descs: dict) -> list[dict]:
     """reward-details.json -> a flat [{dimension, description, raw, score}] list, in file order,
     each with the product-readable description from descriptions.toml when one exists."""
@@ -274,11 +275,10 @@ def _flatten_criteria(details: dict, descs: dict) -> list[dict]:
         if not isinstance(block, dict):
             continue
         for component in block.get("components", [block]):
-            detail = component.get("detail", component)
-            crits = detail.get("criteria", [])
+            crits = component.get("detail", component).get("criteria", [])
             for i, crit in enumerate(crits, 1):
-                rel = _component_file(dimension, component, crit)
-                out.append(_crit_view(crit, dimension, rel, i, descs))
+                name = component.get("name") or crit.get("name", "")
+                out.append(_crit_view(crit, dimension, f"tests/{dimension}/{name}.py", i, descs))
     return out
 
 

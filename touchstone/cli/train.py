@@ -6,8 +6,9 @@ stuck), and writes `distill.jsonl`, `rl_tasks.toml`, `manifest.json` under `<dat
 `--teacher` and `--student` each accept a job dir, a comma-separated list of job dirs (pooled — the
 routing reads pass rates across all of them), or a `provider/model` spec. A spec runs a Harbor job
 first with the replica agent and `--attempts` per task, so a re-run model's pass rates are real
-fractions (the 0 < rate < 1 band the routing turns on). `--student` defaults to the newest job dir
-that is not the teacher. Stops at the GPU line — no training here.
+fractions (the 0 < rate < 1 band the routing turns on). `--student` defaults to the newest job the
+review treats as material (gate jobs and errored-only jobs excluded, the same filter as review),
+never the nop/oracle gate job. Stops at the GPU line — no training here.
 """
 
 from __future__ import annotations
@@ -22,16 +23,14 @@ from ._common import _daemon_guard, _fail, _require_tasks
 AGENT_PATH = "touchstone.harbor.agent:TouchstoneAgent"
 
 
-def _newest_rewarded_dir(jobs_dir: Path, exclude: set[Path]) -> Path | None:
-    """The most recent job dir that actually produced rewards — a job where every trial errored is
-    no training signal, so it is never silently chosen as the student."""
-    from ..harbor.jobs import Job, ran_tasks
+def _newest_reviewable_dir(jobs_dir: Path, exclude: set[Path]) -> Path | None:
+    """The most recent job the review would treat as material, reusing the review's own filter:
+    oracle/nop gate jobs dropped (a gate job is no training signal), errored-only jobs dropped,
+    latest per (agent, model). So train never silently picks the nop gate job as its student."""
+    from ..review.trials import reviewable_jobs
 
-    if not jobs_dir.is_dir():
-        return None
-    dirs = [d for d in jobs_dir.iterdir() if d.is_dir() and d.resolve() not in exclude
-            and ran_tasks(Job.read(d))]
-    return max(dirs, key=lambda d: d.stat().st_mtime) if dirs else None
+    dirs = [d for d in reviewable_jobs(jobs_dir) if d.resolve() not in exclude]
+    return dirs[-1] if dirs else None  # reviewable_jobs is ascending by name -> last is newest
 
 
 def _run_spec(spec: str, jobs_dir: Path, attempts: int, n_concurrent: int) -> Path:
@@ -58,9 +57,9 @@ def _student_dirs(student: str, jobs_dir: Path, teacher_dirs: list[Path], attemp
     """The student job dirs: what `--student` names, else the newest job that is not the teacher."""
     if student:
         return _resolve(student, jobs_dir, attempts, n_concurrent)
-    newest = _newest_rewarded_dir(jobs_dir, {d.resolve() for d in teacher_dirs})
+    newest = _newest_reviewable_dir(jobs_dir, {d.resolve() for d in teacher_dirs})
     if newest is None:
-        _fail("no job with rewards — run touchstone bench first")
+        _fail("no reviewable job (non-gate, with rewards) — run touchstone bench first")
     return [newest]
 
 

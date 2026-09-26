@@ -100,8 +100,30 @@ def test_train_fails_when_no_student_available(tmp_path, seed_task):
     jobs.mkdir(parents=True)
     result = runner.invoke(app, ["train", "--jobs-dir", str(jobs), "--out", str(tmp_path / "o")])
     assert result.exit_code != 0
-    assert "no job with rewards — run touchstone bench first" in result.output
+    assert "no reviewable job (non-gate, with rewards)" in result.output
+    assert "run touchstone bench first" in result.output
     assert not (tmp_path / "o" / "manifest.json").exists()  # never writes empty files silently
+
+
+def test_train_skips_the_nop_gate_job_and_picks_the_model_job(tmp_path, seed_task):
+    # The regression: train auto-selected the nop gate job as its student. The gate job is newer and
+    # "ran" (it produces a 0.0 reward), but it is not training signal. Train must reuse the review's
+    # filter, drop oracle/nop gate jobs, and pick the real model job — and say which one it used.
+    jobs = tmp_path / "touchstone" / "jobs"
+    seed_task(tmp_path / "touchstone")
+    model_job = _job(jobs, "2026-01-01__00-00-00", {"agents": [{"name": "replica"}]})
+    _trial(model_job, "s1", "ds/refund", 1.0, traj={"a": 1})
+    gate = _job(jobs, "2026-01-02__00-00-00", {"agents": [{"name": "nop"}]})
+    gd = gate / "g1"
+    (gd / "verifier").mkdir(parents=True)
+    (gd / "result.json").write_text(json.dumps({"task_name": "ds/refund",
+                                                 "agent_info": {"name": "nop"}}))
+    (gd / "verifier" / "reward.txt").write_text("0.0\n")
+    out = tmp_path / "train"
+    result = runner.invoke(app, ["train", "--jobs-dir", str(jobs), "--out", str(out)])
+    assert result.exit_code == 0, result.output
+    assert "training from job 2026-01-01__00-00-00 (1 passing trials)" in result.output
+    assert "2026-01-02" not in result.output  # the nop gate job was never chosen
 
 
 def test_train_skips_a_latest_job_that_only_errored(tmp_path, seed_task):
