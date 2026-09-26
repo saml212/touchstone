@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 
 from . import app
-from ._common import _fail, _fail_on
+from ._common import _daemon_guard, _fail, _fail_on
 
 
 @app.command()
@@ -24,12 +24,13 @@ def survey(
     """Read a repo's recordings and code and build its touchstone/ survey outputs."""
     from ..survey.survey import run_survey
 
-    try:
-        line = run_survey(repo, force=force, provider=provider or None, model=model or None,
-                          skip_gate=skip_gate, skip_baseline=skip_baseline,
-                         rebaseline=rebaseline)
-    except (ValueError, FileNotFoundError) as exc:
-        _fail(f"survey failed: {exc}")
+    with _daemon_guard():  # no Docker (local or [harbor]) -> one line + exit 1, before the map step
+        try:
+            line = run_survey(repo, force=force, provider=provider or None, model=model or None,
+                              skip_gate=skip_gate, skip_baseline=skip_baseline,
+                              rebaseline=rebaseline)
+        except (ValueError, FileNotFoundError) as exc:
+            _fail(f"survey failed: {exc}")
     typer.echo(line)
 
 

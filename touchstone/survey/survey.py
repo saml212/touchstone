@@ -40,6 +40,22 @@ def _log(message: str) -> None:
     print(f"survey: {message}", file=sys.stderr, flush=True)
 
 
+def _preflight_docker(settings: Settings, skip_gate: bool) -> None:
+    """Resolve where Docker will run (local daemon or [harbor] host) before the multi-minute map
+    step. With neither, stop in seconds with one clear line instead of running to completion and
+    silently parking every task. Skipped when --skip-gate (then no Docker-needing step runs)."""
+    if skip_gate:
+        return
+    from ..harbor.run import DockerDaemonError, _require_target
+
+    try:
+        _require_target(settings)
+    except DockerDaemonError as exc:
+        raise DockerDaemonError(
+            f"{exc} Survey needs it for the gate and baseline. Start Docker, or set [harbor] host, "
+            "then run again — or survey without Docker with --skip-gate --skip-baseline.") from exc
+
+
 def _open_db(repo: Path):
     db = repo / ".touchstone" / "touchstone.db"
     return store.connect(db) if db.exists() else None
@@ -205,6 +221,7 @@ def run_survey(repo: str | Path, force: bool = False, provider: str | None = Non
                skip_gate: bool = False, skip_baseline: bool = False,
                rebaseline: bool = False) -> str:
     settings = settings or load_settings()
+    _preflight_docker(settings, skip_gate)
     repo = Path(repo).expanduser().resolve()
     out = repo / "touchstone"
     out.mkdir(parents=True, exist_ok=True)

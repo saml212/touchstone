@@ -128,6 +128,28 @@ def test_survey_idempotent_then_force(tmp_path, monkeypatch):
     assert len(provider.calls) == 12  # force reruns every step
 
 
+def test_preflight_stops_fast_without_docker(monkeypatch):
+    import pytest
+
+    from touchstone.harbor import run as run_mod
+    from touchstone.survey.survey import _preflight_docker
+
+    def _no_docker(_s):
+        raise run_mod.DockerDaemonError(
+            "Docker daemon not running on local. Start Docker or set [harbor] host in "
+            "touchstone.toml.")
+
+    monkeypatch.setattr(run_mod, "_require_target", _no_docker)
+    with pytest.raises(run_mod.DockerDaemonError) as exc:
+        _preflight_docker(Settings(), skip_gate=False)
+    msg = str(exc.value)
+    assert "Docker daemon not running" in msg  # the original one-line message is preserved
+    assert "Survey needs it for the gate and baseline" in msg
+    assert "--skip-gate --skip-baseline" in msg  # the escape hatch is named on the same line
+    # --skip-gate bypasses the preflight entirely: a Docker-less survey is still allowed
+    _preflight_docker(Settings(), skip_gate=True)
+
+
 def test_survey_no_network_tools(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
