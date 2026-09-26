@@ -87,6 +87,46 @@ def test_doctor_reports_harbor_host_reachability(monkeypatch):
     assert status == "unreachable" and "mini" in detail
 
 
+def test_doctor_docker_row_probes_the_daemon_not_the_binary(monkeypatch):
+    # The stranger's false-green: doctor said docker "ok" on binary presence while the daemon was
+    # down. The row must reflect a real `docker info` probe.
+    import touchstone.cli as cli_mod
+    import touchstone.harbor.run as run_mod
+
+    monkeypatch.setattr(run_mod, "docker_daemon", lambda: (True, "27.1.1"))
+    assert cli_mod._docker_row() == ("tool: docker", "ok", "27.1.1")
+
+    monkeypatch.setattr(run_mod, "docker_daemon", lambda: (False, ""))
+    comp, status, detail = cli_mod._docker_row()
+    assert comp == "tool: docker" and status == "missing"
+    assert "not running" in detail and "colima start" in detail
+
+
+def test_doctor_probes_harbor_host_docker_over_ssh(monkeypatch):
+    import touchstone.cli as cli_mod
+    import touchstone.harbor.run as run_mod
+    from touchstone.config import Settings
+
+    monkeypatch.setattr(run_mod, "remote_docker_daemon", lambda _s: (False, ""))
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    # No host configured by default -> no host-docker row.
+    assert "harbor host docker" not in result.output
+
+    comp, status, detail = cli_mod._harbor_host_docker_row(Settings(harbor_host="mini"))
+    assert comp == "harbor host docker" and status == "missing" and "mini" in detail
+
+
+def test_version_flag_and_command_print_the_package_version(monkeypatch):
+    import touchstone.cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "_package_version", lambda: "9.9.9")
+    flag = runner.invoke(app, ["--version"])
+    assert flag.exit_code == 0 and "9.9.9" in flag.output
+    cmd = runner.invoke(app, ["version"])
+    assert cmd.exit_code == 0 and "9.9.9" in cmd.output
+
+
 def test_doctor_exits_zero_with_all_tools_missing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     import shutil

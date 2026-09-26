@@ -36,8 +36,29 @@ def _next_step() -> str:
         conn.close()
 
 
+def _package_version() -> str:
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _v
+
+    try:
+        return _v("touchstone-bench")
+    except PackageNotFoundError:
+        return "0.0.0"
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(_package_version())
+        raise typer.Exit()
+
+
 @app.callback(invoke_without_command=True)
-def main(ctx: typer.Context) -> None:
+def main(
+    ctx: typer.Context,
+    version: bool = typer.Option(  # noqa: ARG001 — consumed eagerly by the callback
+        None, "--version", callback=_version_callback, is_eager=True,
+        help="Print the version and exit."),
+) -> None:
     """Touchstone — turn your running agent into a benchmark, review it, train on it."""
     if ctx.invoked_subcommand is not None:
         return
@@ -131,12 +152,38 @@ def _doctor_rows(settings) -> list[tuple[str, str, str]]:
         rows.append((f"provider: {st.name}", "ok" if st.ok else "missing", st.detail))
     for r in speech_status(settings):
         rows.append((f"speech: {r.kind}", "ok", f"{r.name} — {r.detail}"))
-    for tool in ("harbor", "docker", "ffmpeg"):
+    for tool in ("harbor", "ffmpeg"):
         path = shutil.which(tool)
         rows.append((f"tool: {tool}", "ok" if path else "missing",
                      path or "not on PATH"))
+    rows.append(_docker_row())
     rows.append(_harbor_host_row(settings))
+    if settings.harbor_host:
+        rows.append(_harbor_host_docker_row(settings))
     return rows
+
+
+def _docker_row() -> tuple[str, str, str]:
+    """Probe the local Docker daemon, not just the binary — a false-green here sent the stranger
+    into raw tracebacks (their daemon was down while doctor said docker was 'ok')."""
+    from ..harbor.run import docker_daemon
+
+    up, version = docker_daemon()
+    if up:
+        return ("tool: docker", "ok", version or "daemon running")
+    return ("tool: docker", "missing",
+            "not running — start Docker (Docker Desktop / colima start)")
+
+
+def _harbor_host_docker_row(settings) -> tuple[str, str, str]:
+    """The harbor host's Docker daemon, probed over ssh with the same `docker info`."""
+    from ..harbor.run import remote_docker_daemon
+
+    up, version = remote_docker_daemon(settings)
+    if up:
+        return ("harbor host docker", "ok", version or "daemon running")
+    return ("harbor host docker", "missing",
+            f"not running on {settings.harbor_host} — start Docker there")
 
 
 @app.command()
@@ -149,6 +196,12 @@ def doctor() -> None:
     typer.echo("  ".join("-" * widths[i] for i in range(3)))
     for comp, status, detail in rows:
         typer.echo(f"{comp.ljust(widths[0])}  {status.ljust(widths[1])}  {detail}")
+
+
+@app.command()
+def version() -> None:
+    """Print the installed Touchstone version."""
+    typer.echo(_package_version())
 
 
 @app.command()

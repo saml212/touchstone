@@ -49,13 +49,33 @@ def _run_path(path: Path) -> Path:
     return path
 
 
-def _has_docker() -> bool:
+def docker_daemon() -> tuple[bool, str]:
+    """(daemon up?, server version) for the local Docker daemon — the one local probe. `docker info`
+    (not just the binary on PATH) with a 3 s timeout, so a dead daemon or a stuck socket fails fast
+    instead of hanging. Version is '' when the daemon is down or the binary is missing."""
     if not shutil.which("docker"):
-        return False
+        return False, ""
     try:
-        return subprocess.run(["docker", "info"], capture_output=True).returncode == 0
-    except OSError:
-        return False
+        proc = subprocess.run(["docker", "info", "-f", "{{.ServerVersion}}"],
+                              capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return False, ""
+    return proc.returncode == 0, proc.stdout.strip()
+
+
+def remote_docker_daemon(settings: Settings) -> tuple[bool, str]:
+    """(daemon up?, server version) on the harbor host — the same `docker info` probe over ssh,
+    connect-timeout bounded. Version '' when the host is unreachable or its daemon is down."""
+    cmd = _ssh_cmd(settings.harbor_host, f"{_REMOTE_PATH}; docker info -f '{{{{.ServerVersion}}}}'")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return False, ""
+    return proc.returncode == 0, proc.stdout.strip()
+
+
+def _has_docker() -> bool:
+    return docker_daemon()[0]
 
 
 def _call(cmd: list[str], env: dict | None = None, stdin_data: str | None = None) -> None:
