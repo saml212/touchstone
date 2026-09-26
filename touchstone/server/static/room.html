@@ -43,20 +43,21 @@
       <div id="composer">
         <textarea id="text" rows="2" placeholder="Agree? Or say what should have counted… (/done)"></textarea>
         <span id="voiceState" class="voiceState hidden"></span>
-        <button id="talk" class="ghost" title="Push to talk">● talk</button>
+        <button id="talk" class="ghost" title="Mic">● talk</button>
         <button id="send">Send</button>
       </div>
     </section>
   </main>
 
-  <div id="join">
+  <div id="startOverlay">
     <div class="card">
-      <strong>Join the review</strong>
-      <input id="name" placeholder="Your display name" />
-      <button id="joinBtn">Join</button>
+      <strong>Ready to review by voice</strong>
+      <button id="startBtn">▶ start</button>
+      <p id="startHint" class="startHint"></p>
     </div>
   </div>
 
+  <script src="/static/voice.js"></script>
   <script src="/static/room.js"></script>
 </body>
 </html>

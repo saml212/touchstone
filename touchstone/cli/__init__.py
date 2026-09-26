@@ -181,17 +181,10 @@ def serve(
     port: int = typer.Option(8765, help="Bind port."),
 ) -> None:
     """Run the local UI: overview, tasks, trials, review room, train."""
-    import logging
-
-    import uvicorn
-
-    # Touchstone's own INFO lines (review tool calls, regrades) must reach the server log.
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-
-    from ..server import create_app
+    from ._common import _build_server
 
     typer.echo(f"Touchstone UI on http://{host}:{port}")
-    uvicorn.run(create_app(load_settings()), host=host, port=port)
+    _build_server(host, port).run()
 
 
 # Register the remaining top-level commands. Imported last so `app` and the shared helpers above

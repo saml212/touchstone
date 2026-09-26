@@ -50,3 +50,22 @@ def _db():
 
 def _installed(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
+
+
+def _configure_logging() -> None:
+    """Touchstone's own INFO lines (review tool calls, regrades) must reach the server log."""
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+
+def _build_server(host: str, port: int):
+    """A uvicorn Server for the Touchstone app, shared by `serve` (foreground) and `review`
+    (a daemon thread). Its `should_exit` flag is how the caller stops it."""
+    import uvicorn
+
+    from ..server import create_app
+
+    _configure_logging()
+    config = uvicorn.Config(create_app(load_settings()), host=host, port=port, log_level="info")
+    return uvicorn.Server(config)

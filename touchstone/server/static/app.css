@@ -6,9 +6,7 @@
   --muted: #7c7364;
   --soft: #f2ead6;
 }
-
 * { box-sizing: border-box; }
-
 body {
   margin: 0;
   background: var(--cream);
@@ -16,7 +14,6 @@ body {
   font-family: "Space Grotesk", system-ui, sans-serif;
   line-height: 1.5;
 }
-
 header {
   border-bottom: 1px solid var(--hair);
   padding: 16px 24px;
@@ -25,43 +22,36 @@ header {
   gap: 16px;
   flex-wrap: wrap;
 }
-
 header h1 {
   font-size: 18px;
   margin: 0;
   color: var(--brick);
   letter-spacing: 0.02em;
 }
-
 header .topic { color: var(--muted); font-size: 14px; }
 header .closed { color: var(--brick); font-weight: 600; font-size: 13px; }
-
 main {
   display: grid;
   grid-template-columns: 1fr 340px;
   gap: 0;
   height: calc(100vh - 62px);
 }
-
 @media (max-width: 720px) {
   main { grid-template-columns: 1fr; height: auto; }
   #drafts { border-left: none; border-top: 1px solid var(--hair); }
 }
-
 #conversation {
   display: flex;
   flex-direction: column;
   min-height: 0;
   padding: 0 16px;
 }
-
 #messages {
   flex: 1;
   overflow-y: auto;
   padding: 16px 8px;
   min-height: 240px;
 }
-
 .msg { margin-bottom: 14px; max-width: 680px; }
 .msg .who { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 .msg .who b { color: var(--ink); }
@@ -74,7 +64,6 @@ main {
   white-space: pre-wrap;
 }
 .msg.agent .body { background: var(--soft); }
-
 #composer {
   border-top: 1px solid var(--hair);
   padding: 12px 8px;
@@ -82,12 +71,10 @@ main {
   gap: 8px;
   align-items: center;
 }
-
 input, textarea, button {
   font-family: inherit;
   font-size: 14px;
 }
-
 #text {
   flex: 1;
   padding: 10px 12px;
@@ -97,7 +84,6 @@ input, textarea, button {
   color: var(--ink);
   resize: none;
 }
-
 button {
   background: var(--brick);
   color: var(--cream);
@@ -112,14 +98,12 @@ button:disabled { opacity: 0.5; cursor: default; }
 @keyframes pulse { 50% { opacity: 0.6; } }
 .voiceState { align-self: center; font: 500 12px var(--mono, monospace); color: var(--brick); animation: pulse 1s infinite; }
 .notice { margin: 0 16px 8px; padding: 8px 12px; font-size: 13px; color: var(--brick); background: #fff; border: 1px solid var(--brick); border-radius: 8px; }
-
 #drafts {
   border-left: 1px solid var(--hair);
   padding: 16px;
   overflow-y: auto;
 }
 #drafts h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-
 .check {
   border: 1px solid var(--hair);
   border-radius: 10px;
@@ -140,8 +124,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .check .rationale { font-size: 13px; color: var(--muted); margin-top: 4px; }
 .check button { margin-top: 8px; padding: 6px 10px; font-size: 13px; }
 .badge { font-size: 11px; color: var(--muted); }
-
-#join {
+#startOverlay {
   position: fixed;
   inset: 0;
   background: rgba(43, 38, 34, 0.4);
@@ -149,21 +132,21 @@ button:disabled { opacity: 0.5; cursor: default; }
   align-items: center;
   justify-content: center;
 }
-#join .card {
+#startOverlay .card {
   background: var(--cream);
   border: 1px solid var(--hair);
   border-radius: 12px;
-  padding: 24px;
+  padding: 28px;
   width: 320px;
+  text-align: center;
 }
-#join input { width: 100%; margin: 12px 0; padding: 10px 12px; border: 1px solid var(--hair); border-radius: 8px; }
-#join button { width: 100%; }
+#startOverlay strong { display: block; font-size: 16px; margin-bottom: 16px; color: var(--ink); }
+#startBtn { width: 100%; font-size: 18px; padding: 14px; }
+.startHint { margin: 14px 0 0; font-size: 13px; color: var(--muted); }
 .hidden { display: none !important; }
 
 /* ---- single-page review app (body.app) ---- */
-
 body.app { display: block; }
-
 #nav {
   display: flex;
   align-items: baseline;
@@ -180,7 +163,6 @@ body.app { display: block; }
 #nav a { color: var(--muted); text-decoration: none; font-size: 14px; }
 #nav a:hover { color: var(--ink); }
 #nav a.active { color: var(--brick); font-weight: 600; border-bottom: 2px solid var(--brick); }
-
 body.app main {
   display: block;
   height: auto;
@@ -196,19 +178,16 @@ body.app h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em
 .error { color: var(--brick); border: 1px solid var(--brick); border-radius: 8px; padding: 12px; background: #fff; }
 .crumb { margin-bottom: 8px; }
 .crumb a, body.app a { color: var(--brick); }
-
 .tiles { display: flex; flex-wrap: wrap; gap: 12px; }
 .tile { background: #fff; border: 1px solid var(--hair); border-radius: 10px; padding: 14px 18px; min-width: 110px; }
 .tile .num { font-size: 26px; font-weight: 600; color: var(--ink); }
 .tile .lbl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-
 .outcome-bar { display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid var(--hair); }
 .outcome-bar .seg { color: var(--cream); font-size: 11px; padding: 4px 6px; white-space: nowrap; overflow: hidden; }
 .outcome-bar .seg:nth-child(odd) { background: var(--brick); }
 .outcome-bar .seg:nth-child(even) { background: #a8573f; }
 .hint { margin-top: 18px; padding: 12px 14px; background: #fff; border: 1px solid var(--hair); border-left: 3px solid var(--brick); border-radius: 8px; }
 .hint code { font-family: "JetBrains Mono", monospace; font-size: 13px; background: var(--soft); padding: 1px 4px; border-radius: 4px; }
-
 table { border-collapse: collapse; width: 100%; background: #fff; border: 1px solid var(--hair); border-radius: 8px; overflow: hidden; }
 th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--hair); font-size: 14px; vertical-align: top; }
 th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); background: var(--soft); }
@@ -220,12 +199,10 @@ td .crule { font-size: 14px; margin-top: 2px; max-width: 420px; }
 td .cmeta { font-size: 12px; color: var(--muted); margin-top: 4px; font-family: "JetBrains Mono", monospace; }
 .check-block { position: relative; margin-bottom: 10px; }
 .check-block button { position: absolute; top: 10px; right: 10px; padding: 4px 10px; font-size: 12px; }
-
 .badge { display: inline-block; font-size: 11px; color: var(--muted); background: var(--soft); border: 1px solid var(--hair); border-radius: 10px; padding: 1px 8px; }
 .badge.outcome { color: var(--brick); border-color: var(--brick); }
 .badge.hard { color: var(--brick); }
 .badge.src { text-transform: uppercase; letter-spacing: 0.04em; }
-
 .panel { background: #fff; border: 1px solid var(--hair); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
 .panel summary { cursor: pointer; color: var(--brick); font-weight: 600; }
 .form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 10px; }
@@ -237,13 +214,11 @@ td .cmeta { font-size: 12px; color: var(--muted); margin-top: 4px; font-family: 
 }
 .form textarea { font-family: "JetBrains Mono", monospace; font-size: 13px; resize: vertical; width: 100%; }
 .msg-inline { color: var(--brick); font-size: 13px; }
-
 .runform { display: flex; gap: 6px; }
 .runform input[name="model"] { width: 160px; }
 .runform input[name="conc"] { width: 56px; }
 .runform input, .runform button { padding: 6px 8px; font-size: 13px; border-radius: 6px; }
 .runform input { border: 1px solid var(--hair); }
-
 .chat { display: flex; flex-direction: column; gap: 10px; }
 .chat .msg { max-width: 720px; }
 .chat .msg .who { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 3px; }
@@ -258,13 +233,11 @@ body.app pre { background: #fff; border: 1px solid var(--hair); border-radius: 8
 .check { background: #fff; border: 1px solid var(--hair); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
 
 /* ---- review room (two columns: the trial, then the conversation) ---- */
-
 main.review { grid-template-columns: minmax(0, 1fr) minmax(340px, 460px); }
 @media (max-width: 820px) {
   main.review { grid-template-columns: 1fr; height: auto; }
   main.review #trial { border-right: none; border-bottom: 1px solid var(--hair); }
 }
-
 #trial {
   border-right: 1px solid var(--hair);
   padding: 16px 20px;
@@ -275,7 +248,6 @@ main.review { grid-template-columns: minmax(0, 1fr) minmax(340px, 460px); }
 #trial h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 18px 0 6px; }
 #trial .reward { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--muted); }
 #trial .instruction { background: #fff; border: 1px solid var(--hair); border-radius: 8px; padding: 10px 12px; margin: 0; }
-
 .trajectory .step {
   font-size: 13px;
   border-left: 2px solid var(--hair);
@@ -285,7 +257,6 @@ main.review { grid-template-columns: minmax(0, 1fr) minmax(340px, 460px); }
   word-break: break-word;
 }
 .trajectory .step:nth-child(odd) { border-left-color: var(--brick); }
-
 .criteria { list-style: none; padding: 0; margin: 0; }
 .criteria .crit {
   display: flex; gap: 8px; align-items: baseline;
@@ -298,10 +269,8 @@ main.review { grid-template-columns: minmax(0, 1fr) minmax(340px, 460px); }
 .criteria .crit .mark { font-family: "JetBrains Mono", monospace; font-size: 12px; white-space: nowrap; }
 .criteria .crit.pass .mark { color: #3f7a2f; }
 .criteria .crit.fail .mark { color: var(--brick); }
-
 .proposed { margin-top: 18px; padding: 12px 14px; background: var(--soft); border: 1px solid var(--brick); border-radius: 8px; font-size: 14px; }
 .proposed .hint { margin-top: 6px; padding: 0; background: none; border: none; font-size: 12px; color: var(--muted); }
-
 .reviewbar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 12px 8px 8px; border-bottom: 1px solid var(--hair);
@@ -316,7 +285,6 @@ main.review { grid-template-columns: minmax(0, 1fr) minmax(340px, 460px); }
 .reviewbar #next { padding: 4px 10px; font-size: 12px; }
 
 /* ---- five-page shell content (body.app main) ---- */
-
 .lede { font-size: 22px; line-height: 1.35; color: var(--ink); margin: 8px 0 14px; max-width: 720px; }
 .cta {
   display: inline-block; background: var(--brick); color: var(--cream);
@@ -324,21 +292,17 @@ main.review { grid-template-columns: minmax(0, 1fr) minmax(340px, 460px); }
 }
 .cta:hover { opacity: 0.92; }
 .map { color: var(--muted); max-width: 720px; margin: 16px 0 4px; }
-
 body.app .instruction {
   background: #fff; border: 1px solid var(--hair); border-radius: 8px;
   padding: 10px 12px; margin: 0; white-space: pre-wrap; max-width: 720px;
 }
 body.app .reward { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--muted); margin: 4px 0 12px; }
-
 ul.mini { margin: 0; padding-left: 18px; }
 ul.mini li { font-size: 13px; margin-bottom: 2px; }
 td ul.mini { padding-left: 16px; }
-
 .dimblock { margin-bottom: 12px; }
 .dimhead { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
 .dimhead code { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--brick); }
-
 .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin: 4px 0 12px; cursor: pointer; }
 .toggle input { accent-color: var(--brick); }
 .legend { font-size: 13px; color: var(--muted); max-width: 760px; margin: 10px 0 4px; line-height: 1.5; }
