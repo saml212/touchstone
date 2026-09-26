@@ -51,6 +51,20 @@ def test_add_and_remove_a_criteria_line(tmp_path):
     assert lines[-1] == "rk.trajectory_tool_not_used('escalate')"
 
 
+def test_applying_the_same_add_twice_writes_the_line_once(tmp_path):
+    task = _task(tmp_path)
+    add = {"op": "add", "file": "tests/correctness/trajectory.py",
+           "description": "the agent looked up the order",
+           "params": {"fn": "trajectory_tool_used", "args": ["order_status"]}}
+    changes.apply(task, add)
+    changes.apply(task, add)  # a double-apply must be idempotent, not a doubled criterion
+    lines = _lines(task / "tests" / "correctness" / "trajectory.py")
+    assert lines.count("rk.trajectory_tool_used('order_status')") == 1
+    # the description stays a single entry too, not two rows for the same line
+    descs = tomllib.loads((task / "tests" / "descriptions.toml").read_text())
+    assert sum(1 for k in descs if k.startswith("tests/correctness/trajectory.py:")) == 1
+
+
 def test_reward_weight_edit(tmp_path):
     task = _task(tmp_path)
     changes.apply(task, {"op": "edit", "file": "tests/reward.toml",

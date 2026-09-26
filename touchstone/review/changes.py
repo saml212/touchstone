@@ -177,11 +177,19 @@ def _guard_call(path: Path, params: dict) -> None:
                      params.get("args", []))
 
 
+def _apply_add(path: Path, params: dict | None, calls: list[str]) -> None:
+    """Append the rendered call, unless that exact line is already present — so applying the same
+    change twice never writes the criterion twice (an idempotent apply)."""
+    _guard_call(path, params or {})
+    rendered = _render_call(params or {})
+    if rendered not in calls:
+        calls.append(rendered)
+
+
 def _apply_py(path: Path, op: str, criterion, params: dict | None, rel: str) -> None:
     calls = _read_or_create(path, op, rel)
     if op == "add":
-        _guard_call(path, params or {})
-        calls.append(_render_call(params or {}))
+        _apply_add(path, params, calls)
     elif op == "edit":
         i = _index(criterion, len(calls))
         params = params or {}
