@@ -229,3 +229,95 @@ def test_run_with_no_tools_module_still_writes_a_trajectory(tmp_path, monkeypatc
     _, _, logs = _run(tmp_path, monkeypatch, provider)
     traj = json.loads((logs / "trajectory.json").read_text())
     assert [s["source"] for s in traj["steps"]] == ["system", "user", "agent"]
+
+
+class _AcpEnv:
+    """A sandbox env for acp_install: exec returns nonzero for the import verify when `has_deps`
+    is False, so the missing-dependency path is exercised; upload_dir is a nop."""
+
+    def __init__(self, has_deps):
+        self.has_deps = has_deps
+        self.uploads = []
+
+    async def exec(self, command, **kwargs):
+        if "import acp" in command and not self.has_deps:
+            return SimpleNamespace(stdout="", stderr="ModuleNotFoundError: No module named 'acp'",
+                                   return_code=1)
+        return SimpleNamespace(stdout="", stderr="", return_code=0)
+
+    async def upload_dir(self, source_dir, target_dir):
+        self.uploads.append((str(source_dir), target_dir))
+
+
+def test_acp_install_raises_when_deps_missing_after_install(tmp_path, monkeypatch):
+    import pytest
+
+    _agent_dir(tmp_path)
+    monkeypatch.setenv("TOUCHSTONE_AGENT_DIR", str(tmp_path / "agent"))
+    ta = TouchstoneAgent(tmp_path / "logs", model_name="openai/gpt-4o-mini")
+    with pytest.raises(RuntimeError, match="No module named 'acp'"):
+        asyncio.run(ta.acp_install(_AcpEnv(has_deps=False)))
+
+
+def test_acp_install_uploads_when_deps_present(tmp_path, monkeypatch):
+    _agent_dir(tmp_path)
+    monkeypatch.setenv("TOUCHSTONE_AGENT_DIR", str(tmp_path / "agent"))
+    ta = TouchstoneAgent(tmp_path / "logs", model_name="openai/gpt-4o-mini")
+    env = _AcpEnv(has_deps=True)
+    asyncio.run(ta.acp_install(env))
+    assert env.uploads  # verify passed -> the agent dir + touchstone overlay were uploaded
+
+
+def _fake_harbor(monkeypatch):
+    """Inject a minimal fake `harbor` package exposing the four symbols the agent module imports,
+    so reloading it takes the harbor-present branch (`_BASES` includes ACPAgentMixin)."""
+    import sys
+    import types
+    from abc import ABC, abstractmethod
+
+    class ACPAgentMixin(ABC):
+        @abstractmethod
+        def acp_command(self): ...
+
+    class _BaseAgent:
+        def __init__(self, logs_dir, model_name=None, **kw): ...
+
+    class _BridgeKind:
+        ACP = "acp"
+
+    def _mod(name, **attrs):
+        m = types.ModuleType(name)
+        for k, v in attrs.items():
+            setattr(m, k, v)
+        return m
+
+    mods = {
+        "harbor": _mod("harbor"),
+        "harbor.agents": _mod("harbor.agents"),
+        "harbor.agents.base": _mod("harbor.agents.base", BaseAgent=_BaseAgent),
+        "harbor.agents.capabilities": _mod("harbor.agents.capabilities",
+                                           AgentCapabilities=lambda **kw: object()),
+        "harbor.agents.protocols": _mod("harbor.agents.protocols", ACPAgentMixin=ACPAgentMixin),
+        "harbor.models": _mod("harbor.models"),
+        "harbor.models.bridge": _mod("harbor.models.bridge", BridgeKind=_BridgeKind),
+    }
+    for name, mod in mods.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+    return ACPAgentMixin, list(mods)
+
+
+def test_touchstone_agent_subclasses_acp_mixin_when_harbor_present(tmp_path, monkeypatch):
+    # Harbor's ACP bridge does `isinstance(agent, ACPAgentMixin)`; the agent must subclass it when
+    # harbor is importable so a newer bridge accepts it.
+    import importlib
+    import sys
+
+    mixin, names = _fake_harbor(monkeypatch)
+    reloaded = importlib.reload(agent_mod)
+    try:
+        assert reloaded.ACPAgentMixin is mixin
+        assert isinstance(reloaded.TouchstoneAgent(tmp_path / "logs"), mixin)
+    finally:
+        for name in names:
+            monkeypatch.delitem(sys.modules, name, raising=False)
+        importlib.reload(agent_mod)  # restore the harbor-less module for the rest of the suite
