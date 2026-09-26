@@ -19,6 +19,9 @@ from __future__ import annotations
 
 import ast
 import re
+import shutil
+import sqlite3
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -132,6 +135,78 @@ def check_call(task_dir: Path, fn: str, args: list) -> None:
     check_placeholders(args)
     if fn == "sqlite_query_equals":
         _check_sqlite(task_dir, args)
+
+
+# ---- sqlite_query_equals: the query must run against the real schema --------
+
+_TABLE_RE = re.compile(r"\bFROM\s+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
+
+
+def _sim_db_file(task_dir: Path, db: str) -> Path | None:
+    """The on-disk simulator ``state.db`` a check queries — the dataset's shared file at
+    ``<dataset>/simulators/…``, not a per-task copy — or None when it has not been materialised."""
+    path = task_dir.parent.parent / _normalise_db(db)
+    return path if path.is_file() else None
+
+
+def _schema_reason(conn: sqlite3.Connection, query: str, exc: sqlite3.Error) -> str:
+    """A rejection that names the real columns, so a wrong column (``refunded_amount`` for
+    ``refunded``) is fixed against the actual schema rather than silently failing every regrade."""
+    match = _TABLE_RE.search(query)
+    if match:
+        cols = [str(r[1]) for r in conn.execute(f"PRAGMA table_info({match.group(1)})")]
+        if cols:
+            return (f"that query does not run against the data ({exc}); the {match.group(1)} table "
+                    f"has columns {', '.join(cols)} — use one of those.")
+    return f"that query does not run against the data ({exc})."
+
+
+def _run_select(db_file: Path, query: str) -> None:
+    """Run the SELECT against a fresh read-only copy of the state.db; reject a query the schema does
+    not support (with the real columns) or one that matches no row (a wrong id or value)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = Path(tmp) / "state.db"
+        shutil.copy2(db_file, copy)
+        conn = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+        try:
+            _execute_select(conn, query)
+        finally:
+            conn.close()
+
+
+def _execute_select(conn: sqlite3.Connection, query: str) -> None:
+    try:
+        rows = conn.execute(query).fetchall()
+    except sqlite3.Error as exc:
+        raise ChangeError(_schema_reason(conn, query, exc)) from exc
+    if not rows:
+        raise ChangeError(f"that query matched no row ({query!r}) — check the id and column "
+                          "against the order data before it can grade anything.")
+
+
+def _as_change_list(change) -> list:
+    if isinstance(change, dict):
+        return [change]
+    return [c for c in change if isinstance(c, dict)] if isinstance(change, list) else []
+
+
+def check_queries(task_dir: Path, change) -> None:
+    """Run every ``sqlite_query_equals`` SELECT in a change against the real materialised state.db,
+    so a wrong column or an id that matches no row is refused before the change is read back."""
+    for c in _as_change_list(change):
+        _check_one_query(task_dir, c)
+
+
+def _check_one_query(task_dir: Path, change: dict) -> None:
+    params = change.get("params") or {}
+    if (params.get("fn") or "").removeprefix("rk.") != "sqlite_query_equals":
+        return
+    args = params.get("args") or []
+    if len(args) < 2 or not isinstance(args[0], str) or not isinstance(args[1], str):
+        return
+    db_file = _sim_db_file(task_dir, args[0])
+    if db_file is not None:
+        _run_select(db_file, args[1])
 
 
 # ---- intent -> criterion kind ----------------------------------------------

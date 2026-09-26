@@ -305,6 +305,7 @@ def validate(task_dir: str | Path, change, intent: str = "") -> None:
     if not task_dir.is_dir():
         raise ChangeError(f"there is no task {task_dir.name!r} to change.")
     _check_intent(change, intent)
+    guard.check_queries(task_dir, change)  # run the SELECT against the real state.db schema
     with tempfile.TemporaryDirectory() as tmp:
         clone = Path(tmp) / "task"
         shutil.copytree(task_dir, clone)

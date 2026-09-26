@@ -4,6 +4,8 @@ person's words — each with a plain sentence the reviewer can retry from or rel
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from touchstone.harbor import rewardkit
@@ -76,6 +78,60 @@ def test_sqlite_accepts_a_db_path_from_a_sibling_check(tmp_path):
 
 def test_valid_db_paths_normalises_and_dedupes(tmp_path):
     assert guard.valid_db_paths(_task(tmp_path)) == ["simulators/orders_api/state.db"]
+
+
+# ---- sqlite: the query must run against the real schema --------------------
+
+
+def _with_state_db(tmp_path, rows=(("B1614", "processing", 44.07, 0.0),)):
+    """A task whose simulator state.db really exists, so a SELECT can be run against it."""
+    task = _task(tmp_path)
+    db = tmp_path / "simulators" / "orders_api" / "state.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE orders "
+                 "(id TEXT PRIMARY KEY, status TEXT, total REAL, refunded REAL)")
+    conn.executemany("INSERT INTO orders VALUES (?, ?, ?, ?)", rows)
+    conn.commit()
+    conn.close()
+    return task
+
+
+def _sqlite_change(query):
+    return {"op": "add", "file": "tests/correctness/state.py",
+            "params": {"fn": "sqlite_query_equals",
+                       "args": ["simulators/orders_api/state.db", query, 0.0]}}
+
+
+def test_query_with_a_real_column_passes(tmp_path):
+    task = _with_state_db(tmp_path)
+    guard.check_queries(task, _sqlite_change("SELECT refunded FROM orders WHERE id='B1614'"))
+
+
+def test_query_with_a_wrong_column_is_rejected_with_the_real_columns(tmp_path):
+    task = _with_state_db(tmp_path)
+    with pytest.raises(ChangeError, match="refunded") as exc:
+        guard.check_queries(task, _sqlite_change(
+            "SELECT refunded_amount FROM orders WHERE id='B1614'"))
+    assert "refunded_amount" not in str(exc.value).split("columns")[1]  # not in the columns list
+
+
+def test_query_matching_no_row_is_rejected(tmp_path):
+    task = _with_state_db(tmp_path)
+    with pytest.raises(ChangeError, match="matched no row"):
+        guard.check_queries(task, _sqlite_change("SELECT refunded FROM orders WHERE id='NOPE'"))
+
+
+def test_query_check_is_skipped_when_the_db_is_not_materialised(tmp_path):
+    task = _task(tmp_path)  # no simulators/ dir on disk -> nothing to run, no false reject
+    guard.check_queries(task, _sqlite_change("SELECT anything FROM orders"))
+
+
+def test_validate_rejects_the_live_wrong_column_regression(tmp_path):
+    task = _with_state_db(tmp_path)
+    with pytest.raises(changes.ChangeError, match="orders table has columns"):
+        changes.validate(task, _sqlite_change(
+            "SELECT refunded_amount FROM orders WHERE id='B1614'"))
 
 
 # ---- intent -> kind --------------------------------------------------------
