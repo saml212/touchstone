@@ -291,9 +291,21 @@ def _retry(provider, repo, service, tools, examples, sim_dir, calls, ctx, settin
     return prev
 
 
+def _service_calls(service: dict, tools: list[dict], events: list[ToolEvent],
+                   calls: list[ToolEvent] | None) -> list[ToolEvent]:
+    """The recorded calls this service served. `calls` is the attributed list when the caller
+    resolved shared tool names; otherwise fall back to filtering `events` by this service's tool
+    names (correct whenever no other crossing service shares a name)."""
+    if calls is not None:
+        return calls
+    names = {t["name"] for t in tools}
+    return [e for e in events if e.tool in names]
+
+
 def generate_simulator(repo: Path, provider: SurveyProvider, service: dict, tools: list[dict],
                        events: list[ToolEvent], sim_root: Path, scrub: Scrubber,
-                       settings: Settings, force: bool = False) -> dict:
+                       settings: Settings, force: bool = False,
+                       calls: list[ToolEvent] | None = None) -> dict:
     """Write simulators/<service>/ and return its fidelity result. Reuses files unless force."""
     from . import db_service
 
@@ -301,13 +313,12 @@ def generate_simulator(repo: Path, provider: SurveyProvider, service: dict, tool
         from .db_sim import generate_db_simulator
 
         return generate_db_simulator(repo, provider, service, tools, events, sim_root, scrub,
-                                     settings, force)
+                                     settings, force, calls)
     sim_dir = sim_root / service["name"]
     ctx = _replay_ctx(service, tools)
-    names = {t["name"] for t in tools}
     # `events` is in recorded order (tool_events), so a create-then-use pair replays in that order
     # within its episode and the minted id is resolvable when the dependent call runs.
-    calls = [e for e in events if e.tool in names]
+    calls = _service_calls(service, tools, events, calls)
     if (sim_dir / "app.py").exists() and not force:
         return _measure(sim_dir, repo, calls, ctx, settings, scrub)
     examples = _examples(calls, scrub)

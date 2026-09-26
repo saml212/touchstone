@@ -18,6 +18,7 @@ from .. import store
 from ..config import Settings, load_settings
 from ..harbor.dataset import Dataset
 from . import db_sim, fidelity
+from .attribute import effective_crossing_services, service_calls
 from .baseline import run_baseline
 from .environment import build_environment
 from .gate import run_gate
@@ -44,18 +45,42 @@ def _open_db(repo: Path):
     return store.connect(db) if db.exists() else None
 
 
+def _prune_stale_sims(sim_root: Path, keep: set[str]) -> None:
+    """simulators/ holds exactly one directory per crossing service: drop dirs from earlier runs
+    (renamed services, dropped duplicates) so the tree matches the current map."""
+    import shutil
+
+    if not sim_root.is_dir():
+        return
+    for child in sim_root.iterdir():
+        if child.is_dir() and child.name not in keep:
+            shutil.rmtree(child)
+
+
 def _simulate_all(repo, provider, map_data, events, out, scrub, settings, force) -> dict:
     fidelity_path = out / "fidelity.json"
     if fidelity_path.exists() and not force:
         return json.loads(fidelity_path.read_text(encoding="utf-8"))
     sim_root = out / "simulators"
+    services = effective_crossing_services(map_data, events)
+    _prune_stale_sims(sim_root, {s["name"] for s in services})
     results: dict = {}
-    for service in crossing_services(map_data):
+    for service in services:
         tools = service_tools(map_data, service)
-        _log(f"simulate: {service['name']} ({len(tools)} tool(s))")
+        calls = service_calls(map_data, events, service["name"])
+        _log(f"simulate: {service['name']} ({len(tools)} tool(s), {len(calls)} call(s))")
         results[service["name"]] = generate_simulator(
-            repo, provider, service, tools, events, sim_root, scrub, settings, force)
+            repo, provider, service, tools, events, sim_root, scrub, settings, force, calls)
     return results
+
+
+def _drop_uncalled_crossing(map_data: dict, events) -> None:
+    """Drop a crossing service with zero attributed calls (a duplicate whose shared-name calls all
+    belong to another service). Its tools stay in the map; it is simply not simulated."""
+    keep = {s["name"] for s in effective_crossing_services(map_data, events)}
+    crossing = {s["name"] for s in crossing_services(map_data)}
+    map_data["services"] = [s for s in map_data.get("services", [])
+                            if s.get("name") not in crossing or s.get("name") in keep]
 
 
 def _map_and_fidelity(repo, prov, out, events, scrub, settings, force):
@@ -63,6 +88,7 @@ def _map_and_fidelity(repo, prov, out, events, scrub, settings, force):
     map_data = build_map(repo, prov, out, force)
     _log("sort: classifying tools by network boundary")
     map_data["sort"] = sort_tools(map_data, events)
+    _drop_uncalled_crossing(map_data, events)
     atomic_write_json(out / "map.json", map_data)
     fidelity_data = _simulate_all(repo, prov, map_data, events, out, scrub, settings, force)
     atomic_write_json(out / "fidelity.json", fidelity_data)
@@ -93,14 +119,14 @@ def _remeasure(repo, prov, map_data, events, out, scrub, settings, invoke, fidel
             continue
         tools = service_tools(map_data, service)
         ctx = _replay_ctx(service, tools)
-        calls = [e for e in events if e.tool in {t["name"] for t in tools}]
+        calls = service_calls(map_data, events, name)
         _log(f"invoke: re-measuring {name} through invoke.py")
         result = fidelity.measure_service(
             out / "simulators" / name, repo, calls, ctx, settings, scrub, invoke)
         if db_service.is_db(service) and result["score"] < threshold:
             _log(f"invoke: regenerating db simulator {name} with failure examples")
             result = db_sim.regenerate(repo, prov, service, tools, events, out / "simulators",
-                                       scrub, settings, invoke, result)
+                                       scrub, settings, invoke, result, calls)
         fidelity_data[name] = result
 
 

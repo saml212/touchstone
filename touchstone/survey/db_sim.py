@@ -265,14 +265,14 @@ def _generate_or_unsupported(provider, repo, service, sim_dir, tool_source, exam
 
 
 def generate_db_simulator(repo, provider, service: dict, tools: list[dict], events, sim_root: Path,
-                          scrub, settings, force: bool = False) -> dict:
+                          scrub, settings, force: bool = False, calls=None) -> dict:
     """Write simulators/<name>/ for a db service; low-score regen is deferred to regenerate()."""
     from . import fidelity
-    from .simulate import _examples, _replay_ctx, _tool_source
+    from .simulate import _examples, _replay_ctx, _service_calls, _tool_source
 
     sim_dir = sim_root / service["name"]
     ctx = _replay_ctx(service, tools)
-    calls = [e for e in events if e.tool in {t["name"] for t in tools}]
+    calls = _service_calls(service, tools, events, calls)
     if _has_files(sim_dir) and not force:
         return fidelity.measure_service(sim_dir, repo, calls, ctx, settings, scrub)
     tool_source = _tool_source(repo, tools)
@@ -282,16 +282,16 @@ def generate_db_simulator(repo, provider, service: dict, tools: list[dict], even
 
 
 def regenerate(repo, provider, service: dict, tools: list[dict], events, sim_root: Path, scrub,
-               settings, invoke, prev: dict) -> dict:
+               settings, invoke, prev: dict, calls=None) -> dict:
     """Regenerate a below-threshold db sim with the invoke-driven failures as a hint; keeps best."""
     from . import fidelity
-    from .simulate import _examples, _replay_ctx, _tool_source
+    from .simulate import _examples, _replay_ctx, _service_calls, _tool_source
 
     sim_dir = sim_root / service["name"]
     if unsupported(sim_dir):
         return prev
     ctx = _replay_ctx(service, tools)
-    calls = [e for e in events if e.tool in {t["name"] for t in tools}]
+    calls = _service_calls(service, tools, events, calls)
     examples = _examples(calls, scrub)
     snapshot = _snapshot(sim_dir)
     if not _generate_or_unsupported(provider, repo, service, sim_dir, _tool_source(repo, tools),
