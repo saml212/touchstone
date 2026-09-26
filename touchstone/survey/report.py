@@ -100,6 +100,31 @@ def _is_gated(name: str, gate: dict | None) -> bool:
     return bool(gate) and name in gate.get("gated", [])
 
 
+def _fmt_rate(value) -> str:
+    return f"{value:.2f}" if isinstance(value, (int, float)) else "—"
+
+
+def _gate_rows(gate: dict) -> list[list[str]]:
+    rates = gate.get("rates", {})
+    rows = [[name, _fmt_rate(rates.get(name, {}).get("oracle")),
+             _fmt_rate(rates.get(name, {}).get("nop")), "✓"] for name in gate.get("gated", [])]
+    rows += [[r["name"], _fmt_rate(r.get("oracle")), _fmt_rate(r.get("nop")), "—"]
+             for r in gate.get("needs_review", [])]
+    return rows
+
+
+def gate_section(gate: dict | None) -> str:
+    """Why the gate was skipped, or the per-task oracle/nop table — never a silent '0 gated'."""
+    if not gate:
+        return "## Gate\n\n_not run_"
+    if gate.get("skipped_gate"):
+        return "## Gate\n\nSkipped: " + gate["skipped_gate"]
+    rows = _gate_rows(gate)
+    if not rows:
+        return "## Gate\n\n_no tasks_"
+    return "## Gate\n\n" + _table(["task", "oracle", "nop", "kept"], rows)
+
+
 def needs_review_section(gate: dict | None) -> str:
     if not gate:
         return "## Needs review\n\n_gate not run_"
@@ -166,6 +191,7 @@ def render_report(map_data: dict, fidelity: dict, tasks: dict | None = None,
         simulators_section(fidelity),
         agent_section(package),
         tasks_section(tasks, gate),
+        gate_section(gate),
         needs_review_section(gate),
         baseline_section(baseline),
         no_job_section(groups),
@@ -188,6 +214,8 @@ def _task_clause(stats: dict) -> str:
     head = f" Built {_plural(tasks, 'task')} from {_plural(convos, 'conversation')}"
     if stats.get("skipped_reason"):
         return head + f". Gate and baseline skipped: {stats['skipped_reason']}"
+    if stats.get("gate_skip_reason"):
+        return head + f", gate skipped ({stats['gate_skip_reason']})."
     if stats.get("gate_skipped"):
         return head + " (gate skipped)."
     return head + f" ({stats.get('gated', 0)} gated, {stats.get('needs_review', 0)} needs review)."

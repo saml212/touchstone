@@ -80,9 +80,10 @@ def _failed_side(oracle: float | None, nop: float | None) -> str:
 
 
 def _apply_gate(pending: list[str], out: Path, oracle: dict, nop: dict) -> dict:
-    gated, needs_review = [], []
+    gated, needs_review, rates = [], [], {}
     for name in pending:
         o, n = _rate_for(oracle, name), _rate_for(nop, name)
+        rates[name] = {"oracle": o, "nop": n}
         if _passed(o, n):
             _record_gate(out / "tasks" / name, o, n)
             gated.append(name)
@@ -90,7 +91,8 @@ def _apply_gate(pending: list[str], out: Path, oracle: dict, nop: dict) -> dict:
             info = {"failed_side": _failed_side(o, n), "oracle": o, "nop": n}
             _move_needs_review(out, name, info)
             needs_review.append({"name": name, **info})
-    return {"gated": sorted(gated), "needs_review": needs_review, "skipped_gate": None}
+    return {"gated": sorted(gated), "needs_review": needs_review, "skipped_gate": None,
+            "rates": rates}
 
 
 def _fail_all(pending: list[str], out: Path, exc: Exception) -> dict:
@@ -114,7 +116,15 @@ def _existing_summary(out: Path, dirs: list[Path]) -> dict:
         for d in sorted(review_root.iterdir()):
             if (d / "gate.json").is_file():
                 reviews.append({"name": d.name, **_read_gate(d)})
-    return {"gated": [d.name for d in dirs], "needs_review": reviews, "skipped_gate": None}
+    rates = {d.name: _gated_rate(d) for d in dirs}
+    rates.update({r["name"]: {"oracle": r.get("oracle"), "nop": r.get("nop")} for r in reviews})
+    return {"gated": [d.name for d in dirs], "needs_review": reviews, "skipped_gate": None,
+            "rates": rates}
+
+
+def _gated_rate(task_dir: Path) -> dict:
+    ts = _read_toml(task_dir).get("metadata", {}).get("touchstone", {})
+    return {"oracle": ts.get("oracle"), "nop": ts.get("nop")}
 
 
 def run_gate(repo: Path, env_result: dict, settings, force: bool = False) -> dict:

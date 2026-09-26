@@ -50,6 +50,9 @@ def test_gate_pass_fail_and_move(tmp_path, monkeypatch):
 
     assert seen["jobs_dir"] == out / "jobs"  # job dirs under the dataset root, not cwd
     assert result["gated"] == ["good"]
+    # per-task oracle/nop rates are carried for the report's Gate table
+    assert result["rates"]["good"] == {"oracle": 1.0, "nop": 0.0}
+    assert result["rates"]["weak-oracle"]["oracle"] == 0.5
     # passing task stays and records its gate result
     doc = tomllib.loads((out / "tasks" / "good" / "task.toml").read_text())
     assert doc["metadata"]["touchstone"]["oracle"] == 1.0

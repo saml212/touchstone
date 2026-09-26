@@ -64,6 +64,32 @@ def test_summary_gate_skipped_clause():
     assert line.endswith("Built 1 task from 3 conversations (gate skipped).")
 
 
+def test_summary_names_why_gate_was_skipped_for_deps():
+    # deps unresolved -> gate returned skipped_gate; the summary must name the reason, not
+    # "0 gated, 0 needs review" (the tau-bench false-green class).
+    stats = {"tasks": 6, "conversations": 16,
+             "gate_skip_reason": "dependencies unresolved (no setup.py deps)"}
+    line = summary(MAP, FIDELITY, stats)
+    assert line.endswith("gate skipped (dependencies unresolved (no setup.py deps)).")
+
+
+def test_gate_section_shows_skip_reason():
+    from touchstone.survey.report import gate_section
+    assert gate_section(None) == "## Gate\n\n_not run_"
+    md = gate_section({"skipped_gate": "dependencies unresolved (no setup.py deps)"})
+    assert md == "## Gate\n\nSkipped: dependencies unresolved (no setup.py deps)"
+
+
+def test_gate_section_shows_per_task_oracle_nop_table():
+    from touchstone.survey.report import gate_section
+    gate = {"gated": ["a-1"], "needs_review": [{"name": "a-2", "oracle": 0.5, "nop": 0.0}],
+            "rates": {"a-1": {"oracle": 1.0, "nop": 0.0}}, "skipped_gate": None}
+    md = gate_section(gate)
+    assert "## Gate" in md and "oracle" in md and "nop" in md
+    assert "1.00" in md and "0.50" in md  # per-task rates rendered
+    assert "a-1" in md and "a-2" in md
+
+
 def test_summary_names_why_gate_and_baseline_were_skipped():
     # A Docker-daemon failure moved every task to needs-review; the summary must say so, not just
     # "0 gated, 7 needs review" (the stranger's false-green class).

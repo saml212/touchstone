@@ -163,6 +163,8 @@ def _gate_and_baseline(repo, env_result, settings, force, skip_gate, skip_baseli
         return None, None
     _log("gate: running oracle and nop over the tasks")
     gate = run_gate(repo, env_result, settings, force)
+    if gate.get("skipped_gate"):
+        _log(f"gate: skipped — {gate['skipped_gate']}")
     if not (gate or {}).get("gated"):
         # Nothing passed the gate, so there is nothing to baseline; skip it rather than run harbor
         # over `-p .` (an empty/ungated dataset), which is not a valid target.
@@ -190,6 +192,7 @@ def _stats(conn, tasks, gate, skip_gate) -> dict:
             "gated": len((gate or {}).get("gated", [])),
             "needs_review": len((gate or {}).get("needs_review", [])),
             "skipped_reason": _gate_infra_note(gate),
+            "gate_skip_reason": (gate or {}).get("skipped_gate"),
             "gate_skipped": skip_gate or (gate is None and bool(built))}
 
 
